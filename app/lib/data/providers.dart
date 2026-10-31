@@ -161,13 +161,21 @@ final backendForProvider = Provider<StorageBackend Function(ConnectionId)>((
   });
 });
 
+/// TMDB token compiled in with `--dart-define-from-file=tmdb.local.json`
+/// (see tool/build_macos.sh); empty in source builds without that file.
+final builtInTmdbTokenProvider = Provider<String>(
+  (ref) => const String.fromEnvironment('TMDB_TOKEN'),
+);
+
 final metadataProvider = Provider<MetadataProvider>((ref) {
   if (ref.watch(bootstrapProvider).demo) return FakeMetadataProvider();
   final s = ref.watch(settingsProvider);
-  if (s.tmdbApiKey.trim().isEmpty) return const _MissingKeyMetadata();
-  return TmdbProvider(
-    TmdbConfig(apiKey: s.tmdbApiKey.trim(), baseUrl: s.tmdbBaseUrl.trim()),
-  );
+  // The user's own key wins over the built-in one.
+  final key = s.tmdbApiKey.trim().isNotEmpty
+      ? s.tmdbApiKey.trim()
+      : ref.watch(builtInTmdbTokenProvider);
+  if (key.isEmpty) return const _MissingKeyMetadata();
+  return TmdbProvider(TmdbConfig(apiKey: key, baseUrl: s.tmdbBaseUrl.trim()));
 });
 
 final historyProvider = Provider<HistoryStore>(

@@ -32,9 +32,15 @@ flutter run -d macos
 
 Checks for both packages: `tool/check.sh`.
 
+Packaged build: `tool/build_macos.sh`. To ship a default TMDB key, copy
+`app/tmdb.local.json.example` to `app/tmdb.local.json` (gitignored) and put your TMDB
+API Read Access Token in it; the script compiles it in. Without it, users enter their own
+key in Settings. A key entered in Settings always takes precedence.
+
 ## TMDB
 
-Users enter their own TMDB API key in Settings. Requests go directly from the app to TMDB
+Release builds include a default read-only TMDB key; users can enter their own in
+Settings instead. Requests go directly from the app to TMDB
 (or to a proxy URL the user configures); no data is sent anywhere else.
 
 This product uses the TMDB API but is not endorsed or certified by TMDB.

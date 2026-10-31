@@ -37,7 +37,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   Future<void> _testConnection() async {
     final messenger = ScaffoldMessenger.of(context);
     String msg;
-    if (_key.text.trim().isEmpty) {
+    if (_key.text.trim().isEmpty &&
+        ref.read(builtInTmdbTokenProvider).isEmpty) {
       msg = '请先填写 TMDB API Key';
     } else {
       try {
@@ -70,9 +71,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   TextField(
                     controller: _key,
                     obscureText: true,
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       labelText: 'API Key / Read Token',
-                      helperText: '支持 v3 key 和 v4 read token',
+                      helperText: ref.watch(builtInTmdbTokenProvider).isEmpty
+                          ? '支持 v3 key 和 v4 read token'
+                          : '已内置默认 key，可以留空；填了就优先用你的',
                       border: OutlineInputBorder(),
                     ),
                     onChanged: (v) => _set((o) => o.copyWith(tmdbApiKey: v)),

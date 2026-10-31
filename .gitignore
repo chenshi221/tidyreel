@@ -5,3 +5,6 @@ build/
 .vscode/
 *.iml
 .claude/worktrees/
+
+# Local secrets compiled into release builds (see tool/build_macos.sh)
+app/tmdb.local.json
