@@ -1,0 +1,10 @@
+{
+  "page": 1,
+  "results": [
+    {"id": 800001, "origin_country": ["CN"], "original_name": "老友鬼鬼", "first_air_date": "2003-01-01", "name": "Old Friend Ghost", "vote_average": 6.0},
+    {"id": 1668, "origin_country": ["US"], "original_name": "Friends", "first_air_date": "1994-09-22", "name": "Friends", "vote_average": 8.4},
+    {"id": 800002, "origin_country": ["HK"], "original_name": "老友記之老友", "first_air_date": "1998-05-01", "name": "Old Friends", "vote_average": 5.5}
+  ],
+  "total_pages": 1,
+  "total_results": 3
+}

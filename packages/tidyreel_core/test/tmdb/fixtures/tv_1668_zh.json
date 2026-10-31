@@ -1,0 +1,15 @@
+{
+  "id": 1668,
+  "name": "老友记",
+  "original_name": "Friends",
+  "first_air_date": "1994-09-22",
+  "origin_country": ["US"],
+  "poster_path": "/f496cm9enuEsZkSPzCwnTESEK5s.jpg",
+  "vote_average": 8.4,
+  "number_of_seasons": 10,
+  "seasons": [
+    {"air_date": "1993-01-01", "episode_count": 3, "id": 1, "name": "特别篇", "poster_path": null, "season_number": 0},
+    {"air_date": "1994-09-22", "episode_count": 24, "id": 2, "name": "第 1 季", "poster_path": "/s1.jpg", "season_number": 1},
+    {"air_date": "1995-09-21", "episode_count": 24, "id": 3, "name": "第 2 季", "poster_path": "/s2.jpg", "season_number": 2}
+  ]
+}
