@@ -36,18 +36,25 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
     ref.read(browserDirProvider.notifier).set(path);
   }
 
-  Future<void> _submit() async {
-    final paths = ref.read(browserSelectionProvider).toList()..sort();
+  /// Submits [only] (one row's 整理 button) or the current selection.
+  Future<void> _submit([String? only]) async {
+    final paths = only != null
+        ? [only]
+        : (ref.read(browserSelectionProvider).toList()..sort());
     final id = await ref
         .read(taskManagerProvider)
         .submit(widget.connection.id, paths, ref.read(browserModeProvider));
     if (!mounted) return;
-    ref.read(browserSelectionProvider.notifier).clear();
-    ref.read(selectModeProvider.notifier).set(false);
+    if (only == null) ref.read(browserSelectionProvider.notifier).clear();
     final router = GoRouter.of(context);
-    ScaffoldMessenger.of(context).showSnackBar(
+    final messenger = ScaffoldMessenger.of(context)..hideCurrentSnackBar();
+    messenger.showSnackBar(
       SnackBar(
         content: Text('已提交任务 ${id.value}'),
+        // With an action Flutter keeps the bar until dismissed; don't.
+        persist: false,
+        duration: const Duration(seconds: 4),
+        showCloseIcon: true,
         action: SnackBarAction(
           label: '查看',
           onPressed: () => router.go('/tasks'),
@@ -61,7 +68,6 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
     final c = widget.connection;
     final p = Palette.of(context);
     final dir = ref.watch(browserDirProvider);
-    final selectMode = ref.watch(selectModeProvider);
     final selection = ref.watch(browserSelectionProvider);
     final entries = ref.watch(browserEntriesProvider);
     // Re-read favorites from the editor so the star reflects edits.
@@ -70,11 +76,6 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
         .firstWhere((e) => e.id == c.id, orElse: () => c)
         .favorites
         .contains(dir);
-
-    void toggleSelectMode(bool v) {
-      ref.read(selectModeProvider.notifier).set(v);
-      if (!v) ref.read(browserSelectionProvider.notifier).clear();
-    }
 
     void selectAll() {
       final all = entries.asData?.value ?? const [];
@@ -147,16 +148,17 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
                   selected: ref.watch(onlyUnorganizedProvider),
                   onSelected: ref.read(onlyUnorganizedProvider.notifier).set,
                 ),
-                FilterChip(
-                  avatar: selectMode
-                      ? null
-                      : const Icon(CupertinoIcons.checkmark_square, size: 14),
-                  label: const Text('多选'),
-                  selected: selectMode,
-                  onSelected: toggleSelectMode,
+                TextButton(
+                  onPressed: selectAll,
+                  child: Text(
+                    (entries.asData?.value ?? const []).isNotEmpty &&
+                            selection.containsAll(
+                              entries.asData!.value.map((e) => e.path),
+                            )
+                        ? '取消全选'
+                        : '全选',
+                  ),
                 ),
-                if (selectMode)
-                  TextButton(onPressed: selectAll, child: const Text('全选')),
               ],
             ),
           ),
@@ -190,7 +192,7 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
                                   6,
                                   6,
                                   6,
-                                  selectMode ? 96 : 6,
+                                  selection.isNotEmpty ? 96 : 6,
                                 ),
                                 itemCount: list.length,
                                 separatorBuilder: (_, _) =>
@@ -199,12 +201,13 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
                                   final e = list[i];
                                   return _EntryTile(
                                     entry: e,
-                                    selectMode: selectMode,
+                                    anySelected: selection.isNotEmpty,
                                     selected: selection.contains(e.path),
                                     onToggle: () => ref
                                         .read(browserSelectionProvider.notifier)
                                         .toggle(e.path),
                                     onOpen: () => _goto(e.path),
+                                    onOrganize: () => _submit(e.path),
                                   );
                                 },
                               ),
@@ -212,7 +215,7 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
                     ),
                   ),
                 ),
-                if (selectMode)
+                if (selection.isNotEmpty)
                   Positioned(
                     left: 0,
                     right: 0,
@@ -222,8 +225,10 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
                         count: selection.length,
                         mode: ref.watch(browserModeProvider),
                         onMode: ref.read(browserModeProvider.notifier).set,
-                        onCancel: () => toggleSelectMode(false),
-                        onSubmit: selection.isEmpty ? null : _submit,
+                        onCancel: ref
+                            .read(browserSelectionProvider.notifier)
+                            .clear,
+                        onSubmit: _submit,
                       ),
                     ),
                   ),
@@ -242,7 +247,7 @@ class _SelectionBar extends StatelessWidget {
   final OrganizeMode mode;
   final void Function(OrganizeMode) onMode;
   final VoidCallback onCancel;
-  final VoidCallback? onSubmit;
+  final VoidCallback onSubmit;
 
   const _SelectionBar({
     required this.count,
@@ -403,19 +408,23 @@ IconData _entryIcon(RemoteEntry e) {
   return CupertinoIcons.doc;
 }
 
+/// Finder-style row: click a folder to open it, click a file (or the
+/// checkbox) to select; 整理 on hover submits just this item.
 class _EntryTile extends StatelessWidget {
   final RemoteEntry entry;
-  final bool selectMode;
+  final bool anySelected;
   final bool selected;
   final VoidCallback onToggle;
   final VoidCallback onOpen;
+  final VoidCallback onOrganize;
 
   const _EntryTile({
     required this.entry,
-    required this.selectMode,
+    required this.anySelected,
     required this.selected,
     required this.onToggle,
     required this.onOpen,
+    required this.onOrganize,
   });
 
   @override
@@ -426,38 +435,87 @@ class _EntryTile extends StatelessWidget {
       fmtSize(e.size),
       fmtDate(e.modified),
     ].where((s) => s.isNotEmpty).join('  ·  ');
-    return HoverRow(
-      selected: selected,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-      borderRadius: BorderRadius.circular(Radii.md),
-      leading: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (selectMode) ...[
+    return Hoverable(
+      onTap: e.isDir ? onOpen : onToggle,
+      builder: (context, hover) => AnimatedContainer(
+        key: ValueKey('entry ${e.name}'),
+        duration: const Duration(milliseconds: 100),
+        padding: const EdgeInsets.fromLTRB(4, 7, 8, 7),
+        decoration: BoxDecoration(
+          color: selected
+              ? p.accent.withValues(alpha: 0.10)
+              : (hover ? p.hover : Colors.transparent),
+          borderRadius: BorderRadius.circular(Radii.md),
+        ),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 30,
+              child: AnimatedOpacity(
+                duration: const Duration(milliseconds: 100),
+                opacity: selected || hover || anySelected ? 1 : 0,
+                child: Checkbox(
+                  key: ValueKey('check ${e.name}'),
+                  value: selected,
+                  onChanged: (_) => onToggle(),
+                ),
+              ),
+            ),
+            const SizedBox(width: 4),
+            Icon(
+              _entryIcon(e),
+              size: 20,
+              color: e.isDir ? p.accent.withValues(alpha: 0.85) : p.textMuted,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    e.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  if (meta.isNotEmpty)
+                    Text(
+                      meta,
+                      style: TextStyle(fontSize: 11.5, color: p.textMuted),
+                    ),
+                ],
+              ),
+            ),
+            AnimatedOpacity(
+              duration: const Duration(milliseconds: 100),
+              opacity: hover ? 1 : 0,
+              child: IgnorePointer(
+                ignoring: !hover,
+                child: TextButton.icon(
+                  key: ValueKey('organize ${e.name}'),
+                  onPressed: onOrganize,
+                  icon: const Icon(CupertinoIcons.wand_stars, size: 13),
+                  label: const Text('整理'),
+                ),
+              ),
+            ),
             SizedBox(
               width: 24,
-              child: Checkbox(value: selected, onChanged: (_) => onToggle()),
+              child: e.isDir
+                  ? Icon(
+                      CupertinoIcons.chevron_right,
+                      size: 12,
+                      color: p.textFaint,
+                    )
+                  : null,
             ),
-            const SizedBox(width: 8),
           ],
-          Icon(
-            _entryIcon(e),
-            size: 20,
-            color: e.isDir ? p.accent.withValues(alpha: 0.85) : p.textMuted,
-          ),
-        ],
+        ),
       ),
-      title: Text(e.name),
-      subtitle: meta.isEmpty ? null : Text(meta),
-      hoverTrailing: e.isDir
-          ? IconButton(
-              tooltip: '进入文件夹',
-              iconSize: 18,
-              icon: const Icon(CupertinoIcons.chevron_right),
-              onPressed: onOpen,
-            )
-          : null,
-      onTap: selectMode ? onToggle : (e.isDir ? onOpen : null),
     );
   }
 }

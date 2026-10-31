@@ -153,4 +153,58 @@ void main() {
     await tester.pumpAndSettle();
     expect(c.read(connectionsProvider), hasLength(1));
   });
+
+  testWidgets('pasted /dav/PC URL becomes WebDAV /dav + 打开目录 /PC', (
+    tester,
+  ) async {
+    final (_, c) = await pumpPage(tester, const SourcesPage());
+    await tester.tap(find.text('添加连接'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const ValueKey('field-名称')), 'PC');
+    await tester.enterText(
+      find.byKey(const ValueKey('field-主机')),
+      'http://127.0.0.1:5244/dav/PC',
+    );
+    await tester.pump();
+    String field(String k) => tester
+        .widget<TextField>(find.byKey(ValueKey('field-$k')))
+        .controller!
+        .text;
+    expect(field('主机'), '127.0.0.1');
+    expect(field('路径'), '/dav');
+    expect(field('打开目录'), '/PC');
+    await tester.tap(find.text('保存'));
+    await tester.pumpAndSettle();
+    final saved = c.read(connectionsProvider).last;
+    expect(saved.type, ConnectionType.webdav);
+    expect(saved.endpoint, 'http://127.0.0.1:5244/dav');
+    expect(saved.startDir, '/PC');
+  });
+
+  testWidgets('Alist keeps a pasted path as 打开目录 and opens there', (
+    tester,
+  ) async {
+    final (_, c) = await pumpPage(tester, const SourcesPage());
+    await tester.tap(find.byTooltip('更多').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('编辑'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('field-主机')),
+      'http://nas.local:5244/下载',
+    );
+    await tester.pump();
+    await tester.tap(find.text('保存'));
+    await tester.pumpAndSettle();
+    final saved = c
+        .read(connectionsProvider)
+        .firstWhere((e) => e.id == const ConnectionId('demo-alist'));
+    expect(saved.type, ConnectionType.alist);
+    expect(saved.endpoint, 'http://nas.local:5244');
+    expect(saved.startDir, '/下载');
+
+    await tester.tap(find.byKey(const ValueKey('conn demo-alist')));
+    await tester.pumpAndSettle();
+    expect(find.text('完成'), findsWidgets); // the only child of /下载
+  });
 }

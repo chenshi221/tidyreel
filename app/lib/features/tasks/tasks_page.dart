@@ -129,9 +129,12 @@ class TaskCard extends ConsumerWidget {
         '根目录';
     final title = works.isEmpty
         ? (t.paths.length > 1 ? '$folder 等 ${t.paths.length} 项' : folder)
-        : works.length <= 2
-        ? works.map((w) => w.title).join('、')
-        : '${works.take(2).map((w) => w.title).join('、')} 等 ${works.length} 部';
+        : works.length == 1
+        ? works.single.title
+        : '${works.first.title} 等 ${works.length} 部';
+    final where = t.paths.length == 1
+        ? t.paths.single
+        : '${t.paths.length} 个文件夹';
     final (statusColor, statusIcon) = switch (t.stage) {
       TaskStage.awaitingReview => (p.accent, CupertinoIcons.eye),
       TaskStage.done => (p.success, CupertinoIcons.checkmark_circle_fill),
@@ -226,15 +229,26 @@ class TaskCard extends ConsumerWidget {
                     Tag(t.mode == OrganizeMode.inPlace ? '原地整理' : '移动到媒体库'),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: Text(
-                        '${connName ?? t.connection.value} · ${t.paths.join('，')}',
-                        style: theme.textTheme.bodySmall,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                      child: Tooltip(
+                        message: t.paths.join('\n'),
+                        child: Text(
+                          '${connName ?? t.connection.value} · $where',
+                          style: theme.textTheme.bodySmall,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
                     ),
                   ],
                 ),
+                if (works.length > 1) ...[
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [for (final w in works) _WorkChip(work: w)],
+                  ),
+                ],
                 const SizedBox(height: 12),
                 _Stepper(stage: t.stage, progress: t.progress),
                 const SizedBox(height: 10),
@@ -454,6 +468,50 @@ class _Stepper extends StatelessWidget {
           ),
         ],
       ],
+    );
+  }
+}
+
+/// Small poster + title, one per recognized work on multi-work tasks.
+class _WorkChip extends StatelessWidget {
+  final Candidate work;
+
+  const _WorkChip({required this.work});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 280),
+      padding: const EdgeInsets.fromLTRB(3, 3, 9, 3),
+      decoration: BoxDecoration(
+        color: p.sidebar,
+        borderRadius: BorderRadius.circular(Radii.md),
+        border: Border.all(color: p.line, width: hairline),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Poster(
+            posterPath: work.posterPath,
+            width: 16,
+            height: 24,
+            radius: 3,
+            icon: work.kind == MediaKind.movie
+                ? CupertinoIcons.film
+                : CupertinoIcons.tv,
+          ),
+          const SizedBox(width: 7),
+          Flexible(
+            child: Text(
+              [work.title, if (work.year != null) '${work.year}'].join(' · '),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 12, color: p.text),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

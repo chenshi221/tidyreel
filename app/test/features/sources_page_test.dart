@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tidyreel/features/sources/sources_page.dart';
@@ -46,9 +47,9 @@ void main() {
     await tester.enterText(find.byType(TextField).first, '');
     await tester.pumpAndSettle();
 
-    await tester.tap(find.widgetWithText(FilterChip, '多选'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('异兽魔都 2020 1080p'));
+    // No mode switch: ticking a checkbox selects and brings up the bar.
+    expect(find.text('提交为任务'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('check 异兽魔都 2020 1080p')));
     await tester.pumpAndSettle();
     expect(find.text('已选 1 项'), findsOneWidget);
     await tester.tap(find.text('全选'));
@@ -72,5 +73,44 @@ void main() {
     await tester.tap(find.text('查看'));
     await tester.pumpAndSettle();
     expect(find.text('ROUTE /tasks'), findsOneWidget);
+  });
+
+  testWidgets('hover 整理 submits one item; the toast goes away by itself', (
+    tester,
+  ) async {
+    final (tm, _) = await pumpPage(tester, const SourcesPage());
+    await tester.tap(find.byKey(const ValueKey('fav demo-alist /下载/完成')));
+    await tester.pumpAndSettle();
+
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: Offset.zero);
+    addTearDown(mouse.removePointer);
+    await mouse.moveTo(
+      tester.getCenter(find.text('Inception.2010.2160p.BluRay.x265.mkv')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(
+        const ValueKey('organize Inception.2010.2160p.BluRay.x265.mkv'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final tasks = await tm.watchAll().first;
+    expect(tasks.single.paths, ['/下载/完成/Inception.2010.2160p.BluRay.x265.mkv']);
+    expect(find.textContaining('已提交任务'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('已提交任务'), findsNothing);
+  });
+
+  testWidgets('clicking a folder opens it', (tester) async {
+    await pumpPage(tester, const SourcesPage());
+    await tester.tap(find.byKey(const ValueKey('fav demo-alist /下载/完成')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('异兽魔都 2020 1080p'));
+    await tester.pumpAndSettle();
+    expect(find.text('[Sub] Dorohedoro S01E01 [1080p].mkv'), findsOneWidget);
+    expect(find.text('已选 1 项'), findsNothing);
   });
 }

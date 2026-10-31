@@ -162,4 +162,12 @@ void main() {
     expect(find.byKey(const ValueKey('missing-1-1')), findsOneWidget);
     expect(find.text('本地缺失'), findsOneWidget);
   });
+
+  testWidgets('作品操作 pane can be hidden', (tester) async {
+    await open(tester);
+    expect(find.byKey(const ValueKey('strategy-asParsed')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('toggle-actions')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('strategy-asParsed')), findsNothing);
+  });
 }

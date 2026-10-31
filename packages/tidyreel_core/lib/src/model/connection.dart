@@ -16,6 +16,10 @@ class ConnectionConfig {
   final String? libraryRoot;
   final List<String> favorites;
 
+  /// Folder the file browser opens at, e.g. "/PC". Only a starting point:
+  /// paths (and history) stay relative to the connection root.
+  final String startDir;
+
   const ConnectionConfig({
     required this.id,
     required this.name,
@@ -24,7 +28,33 @@ class ConnectionConfig {
     this.username,
     this.libraryRoot,
     this.favorites = const [],
+    this.startDir = '/',
   });
+
+  ConnectionConfig copyWith({
+    String? name,
+    ConnectionType? type,
+    String? endpoint,
+    String? Function()? username,
+    String? Function()? libraryRoot,
+    List<String>? favorites,
+    String? startDir,
+  }) => ConnectionConfig(
+    id: id,
+    name: name ?? this.name,
+    type: type ?? this.type,
+    endpoint: endpoint ?? this.endpoint,
+    username: username != null ? username() : this.username,
+    libraryRoot: libraryRoot != null ? libraryRoot() : this.libraryRoot,
+    favorites: favorites ?? this.favorites,
+    startDir: startDir ?? this.startDir,
+  );
+}
+
+/// "/a//b/" -> "/a/b"; empty -> "/".
+String normalizeDir(String path) {
+  final segs = path.split('/').where((s) => s.trim().isNotEmpty);
+  return segs.isEmpty ? '/' : '/${segs.join('/')}';
 }
 
 /// Secrets kept in secure storage, handed to the backend at creation time.

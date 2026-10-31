@@ -80,13 +80,7 @@ class ConnectionsNotifier extends Notifier<List<ConnectionConfig>> {
   void toggleFavorite(ConnectionId id, String path) {
     final c = state.firstWhere((e) => e.id == id);
     upsert(
-      ConnectionConfig(
-        id: c.id,
-        name: c.name,
-        type: c.type,
-        endpoint: c.endpoint,
-        username: c.username,
-        libraryRoot: c.libraryRoot,
+      c.copyWith(
         favorites: c.favorites.contains(path)
             ? [
                 for (final f in c.favorites)

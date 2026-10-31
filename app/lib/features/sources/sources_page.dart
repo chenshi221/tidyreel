@@ -89,12 +89,12 @@ class SourcesPage extends ConsumerWidget {
   }
 }
 
-void openBrowser(WidgetRef ref, ConnectionConfig c, [String path = '/']) {
+/// Opens [c] at [path], or at its 默认打开目录 when none is given.
+void openBrowser(WidgetRef ref, ConnectionConfig c, [String? path]) {
   ref.read(openConnectionProvider.notifier).set(c);
-  ref.read(browserDirProvider.notifier).set(path);
+  ref.read(browserDirProvider.notifier).set(path ?? normalizeDir(c.startDir));
   ref.read(browserSearchProvider.notifier).set('');
   ref.read(browserSelectionProvider.notifier).clear();
-  ref.read(selectModeProvider.notifier).set(false);
 }
 
 Future<void> _edit(

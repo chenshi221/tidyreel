@@ -110,8 +110,6 @@ final onlyUnorganizedProvider = NotifierProvider<Val<bool>, bool>(
 final browserRefreshProvider = NotifierProvider<Val<int>, int>(() => Val(0));
 var _seenRefresh = 0;
 
-final selectModeProvider = NotifierProvider<Val<bool>, bool>(() => Val(false));
-
 class BrowserSelection extends Notifier<Set<String>> {
   @override
   Set<String> build() => {};

@@ -14,6 +14,7 @@ Map<String, Object?> connectionToJson(ConnectionConfig c) => {
   'username': c.username,
   'libraryRoot': c.libraryRoot,
   'favorites': c.favorites,
+  'startDir': c.startDir,
 };
 
 ConnectionConfig connectionFromJson(Map<String, Object?> j) => ConnectionConfig(
@@ -24,6 +25,7 @@ ConnectionConfig connectionFromJson(Map<String, Object?> j) => ConnectionConfig(
   username: j['username'] as String?,
   libraryRoot: j['libraryRoot'] as String?,
   favorites: [...?(j['favorites'] as List?)?.cast<String>()],
+  startDir: j['startDir'] as String? ?? '/',
 );
 
 Map<String, Object?> namingOptionsToJson(NamingOptions o) => {

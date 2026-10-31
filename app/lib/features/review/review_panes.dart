@@ -237,13 +237,12 @@ Future<Candidate?> showTmdbSearchDialog(
 
 class _Rating extends StatelessWidget {
   final double value;
-  final Color? color;
 
-  const _Rating(this.value, {this.color});
+  const _Rating(this.value);
 
   @override
   Widget build(BuildContext context) {
-    final c = color ?? const Color(0xFFD9A21B);
+    const c = Color(0xFFD9A21B);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -254,7 +253,7 @@ class _Rating extends StatelessWidget {
           style: TextStyle(
             fontSize: 12,
             fontWeight: FontWeight.w600,
-            color: color ?? Palette.of(context).text,
+            color: Palette.of(context).text,
           ),
         ),
       ],
@@ -376,7 +375,7 @@ class _GroupCard extends StatelessWidget {
                         style: theme.textTheme.bodyMedium?.copyWith(
                           fontWeight: FontWeight.w600,
                         ),
-                        maxLines: 1,
+                        maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                       ),
                       if (orig != null && orig != title)
@@ -608,10 +607,9 @@ class WorkHeader extends StatelessWidget {
     final isTv = g.kind == MediaKind.episode;
     final comp = completeness(g, decision);
     final onImage = backdrop != null;
-    final fg = onImage ? Colors.white : p.text;
-    final fgMuted = onImage
-        ? Colors.white.withValues(alpha: 0.78)
-        : p.textMuted;
+    // Artwork is only an ambient tint under a frosted panel; text stays dark.
+    final fg = p.text;
+    final fgMuted = p.textMuted;
 
     final meta = [
       if (m?.year != null) '${m!.year}',
@@ -639,12 +637,12 @@ class WorkHeader extends StatelessWidget {
           if (onImage) ...[
             Positioned.fill(
               child: ImageFiltered(
-                imageFilter: ImageFilter.blur(sigmaX: 2, sigmaY: 2),
+                imageFilter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
                 child: Image.network(
                   tmdbImage(backdrop, 'w780'),
                   fit: BoxFit.cover,
                   alignment: Alignment.topCenter,
-                  errorBuilder: (_, _, _) => ColoredBox(color: p.text),
+                  errorBuilder: (_, _, _) => ColoredBox(color: p.accentSoft),
                 ),
               ),
             ),
@@ -655,9 +653,9 @@ class WorkHeader extends StatelessWidget {
                     begin: Alignment.centerLeft,
                     end: Alignment.centerRight,
                     colors: [
-                      Colors.black.withValues(alpha: 0.82),
-                      Colors.black.withValues(alpha: 0.55),
-                      Colors.black.withValues(alpha: 0.25),
+                      p.panel.withValues(alpha: 0.93),
+                      p.panel.withValues(alpha: 0.82),
+                      p.panel.withValues(alpha: 0.62),
                     ],
                   ),
                 ),
@@ -691,17 +689,14 @@ class WorkHeader extends StatelessWidget {
                               style: theme.textTheme.headlineSmall?.copyWith(
                                 color: fg,
                               ),
-                              maxLines: 1,
+                              maxLines: 2,
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
                           if (m?.voteAverage != null &&
                               m!.voteAverage! > 0) ...[
                             const SizedBox(width: 10),
-                            _Rating(
-                              m.voteAverage!,
-                              color: onImage ? Colors.white : null,
-                            ),
+                            _Rating(m.voteAverage!),
                           ],
                         ],
                       ),
@@ -731,25 +726,19 @@ class WorkHeader extends StatelessWidget {
                                 vertical: 2,
                               ),
                               decoration: BoxDecoration(
-                                color: onImage
-                                    ? Colors.white.withValues(alpha: 0.16)
-                                    : p.panel.withValues(alpha: 0.7),
+                                color: p.panel.withValues(alpha: 0.7),
                                 borderRadius: BorderRadius.circular(5),
-                                border: onImage
-                                    ? null
-                                    : Border.all(
-                                        color: p.line,
-                                        width: hairline,
-                                      ),
+                                border: Border.all(
+                                  color: p.line,
+                                  width: hairline,
+                                ),
                               ),
                               child: Text(
                                 t,
                                 style: TextStyle(
                                   fontSize: 11.5,
                                   color: t == comp.label && comp.incomplete
-                                      ? (onImage
-                                            ? const Color(0xFFFFD27A)
-                                            : p.warning)
+                                      ? p.warning
                                       : fg,
                                 ),
                               ),
@@ -1131,20 +1120,31 @@ class _EpisodeRow extends ConsumerWidget {
                         ],
                       ],
                     ),
-                  Text(
-                    newName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: tmdbId != null ? 12.5 : 13,
-                      color: r.ignored
-                          ? p.textFaint
-                          : (tmdbId != null ? p.textMuted : p.text),
-                      fontWeight: tmdbId != null ? null : FontWeight.w500,
-                      decoration: r.ignored ? TextDecoration.lineThrough : null,
+                  Tooltip(
+                    message: [
+                      if (r.op != null && r.op!.dst.isNotEmpty)
+                        '新：${r.op!.dst}',
+                      '原：${r.file.path}',
+                    ].join('\n'),
+                    waitDuration: const Duration(milliseconds: 700),
+                    child: Text(
+                      newName,
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: tmdbId != null ? 12.5 : 13,
+                        color: r.ignored
+                            ? p.textFaint
+                            : (tmdbId != null ? p.textMuted : p.text),
+                        fontWeight: tmdbId != null ? null : FontWeight.w500,
+                        decoration: r.ignored
+                            ? TextDecoration.lineThrough
+                            : null,
+                      ),
                     ),
                   ),
                   Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Icon(
                         CupertinoIcons.arrow_turn_down_right,
@@ -1155,7 +1155,7 @@ class _EpisodeRow extends ConsumerWidget {
                       Flexible(
                         child: Text(
                           r.file.name,
-                          maxLines: 1,
+                          maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(fontSize: 11, color: p.textFaint),
                         ),

@@ -127,10 +127,10 @@ void main() {
     await tester.pumpAndSettle();
     await _shot(tester, '02-browser');
 
-    await tester.tap(find.text('多选'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('异兽魔都 2020 1080p'));
-    await tester.tap(find.text('Inception.2010.2160p.BluRay.x265.mkv'));
+    await tester.tap(find.byKey(const ValueKey('check 异兽魔都 2020 1080p')));
+    await tester.tap(
+      find.byKey(const ValueKey('check Inception.2010.2160p.BluRay.x265.mkv')),
+    );
     await _shot(tester, '03-browser-select');
 
     await tester.tap(find.byKey(const ValueKey('nav-来源')));

@@ -247,7 +247,7 @@ ThemeData buildTheme(Brightness brightness) {
       selectionColor: p.accent.withValues(alpha: 0.25),
     ),
     dialogTheme: DialogThemeData(
-      backgroundColor: p.canvas,
+      backgroundColor: p.panel,
       surfaceTintColor: Colors.transparent,
       // Shadow is drawn by the dialog content (see MacSheet): Material's
       // elevation shadow is too hard-edged for a macOS sheet.
@@ -255,7 +255,7 @@ ThemeData buildTheme(Brightness brightness) {
       shape: rounded(Radii.xl, line),
       titleTextStyle: text.titleMedium,
       contentTextStyle: text.bodyMedium,
-      barrierColor: Colors.black.withValues(alpha: 0.18),
+      barrierColor: Colors.black.withValues(alpha: 0.08),
     ),
     popupMenuTheme: PopupMenuThemeData(
       color: p.panel,

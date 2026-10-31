@@ -25,6 +25,9 @@ class ReviewPage extends ConsumerStatefulWidget {
 class _ReviewPageState extends ConsumerState<ReviewPage> {
   /// 0 = 可整理, 1 = 待手动识别.
   var _tab = 0;
+
+  /// Right pane (作品操作) can be hidden to give file names more room.
+  var _showActions = true;
   final _searchFocus = FocusNode();
   final _search = TextEditingController();
   TaskReview? _review;
@@ -219,8 +222,26 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
       title: '识别结果',
       subtitle: [
         widget.taskId,
-        if (paths != null && paths.isNotEmpty) paths.join('，'),
+        if (paths != null && paths.length == 1) paths.single,
+        if (paths != null && paths.length > 1) '${paths.length} 个文件夹',
       ].join('  ·  '),
+      actions: [
+        if (paths != null && paths.length > 1)
+          Tooltip(
+            message: paths.join('\n'),
+            child: Icon(
+              CupertinoIcons.folder,
+              size: 16,
+              color: Palette.of(context).textMuted,
+            ),
+          ),
+        IconButton(
+          key: const ValueKey('toggle-actions'),
+          tooltip: _showActions ? '隐藏作品操作' : '显示作品操作',
+          icon: const Icon(CupertinoIcons.sidebar_right),
+          onPressed: () => setState(() => _showActions = !_showActions),
+        ),
+      ],
       leading: IconButton(
         tooltip: '返回任务',
         icon: const Icon(CupertinoIcons.chevron_left),
@@ -336,20 +357,21 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                     ),
                   ),
           ),
-          Container(
-            width: 284,
-            decoration: BoxDecoration(border: Border(left: hairlineSide)),
-            padding: const EdgeInsets.only(bottom: 64),
-            child: g == null
-                ? const SizedBox.shrink()
-                : ActionPane(
-                    key: ValueKey(g.id),
-                    group: g,
-                    decision: _decisionOf(g.id),
-                    onChange: (d) => _update(g.id, d),
-                    onCorrect: () => _correct(g),
-                  ),
-          ),
+          if (_showActions)
+            Container(
+              width: 284,
+              decoration: BoxDecoration(border: Border(left: hairlineSide)),
+              padding: const EdgeInsets.only(bottom: 64),
+              child: g == null
+                  ? const SizedBox.shrink()
+                  : ActionPane(
+                      key: ValueKey(g.id),
+                      group: g,
+                      decision: _decisionOf(g.id),
+                      onChange: (d) => _update(g.id, d),
+                      onCorrect: () => _correct(g),
+                    ),
+            ),
         ],
       ),
     );

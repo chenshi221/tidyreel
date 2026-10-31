@@ -519,20 +519,30 @@ class Tag extends StatelessWidget {
   }
 }
 
-/// Dialog with a soft macOS sheet shadow.
+/// Dialog with a soft macOS sheet shadow. The sheet paints its own panel
+/// colour so the shadow sits *under* it (a BoxShadow on an unfilled box would
+/// tint the dialog grey).
 class MacSheet extends StatelessWidget {
   final Widget child;
 
   const MacSheet({super.key, required this.child});
 
   @override
-  Widget build(BuildContext context) => Dialog(
-    child: DecoratedBox(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(Radii.xl),
-        boxShadow: floatShadow(1.6),
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      shape: const RoundedRectangleBorder(),
+      child: Container(
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: p.panel,
+          borderRadius: BorderRadius.circular(Radii.xl),
+          border: Border.all(color: p.line, width: hairline),
+          boxShadow: floatShadow(1.2),
+        ),
+        child: child,
       ),
-      child: child,
-    ),
-  );
+    );
+  }
 }

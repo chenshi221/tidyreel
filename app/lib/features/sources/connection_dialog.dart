@@ -127,6 +127,9 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
   );
   late final _password = TextEditingController(text: widget.initialPassword);
   late final _root = TextEditingController(text: widget.existing?.libraryRoot);
+  late final _start = TextEditingController(
+    text: widget.existing?.startDir == '/' ? '' : widget.existing?.startDir,
+  );
   var _showErrors = false;
   var _showPassword = false;
   var _testing = false;
@@ -153,6 +156,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
       _user,
       _password,
       _root,
+      _start,
     ]) {
       c.dispose();
     }
@@ -180,10 +184,21 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
       _scheme = p.scheme;
       _host.text = p.host;
       if (p.port.isNotEmpty) _port.text = p.port;
-      if (p.path.isNotEmpty) _path.text = p.path;
-      if (p.path.isNotEmpty && _type == ConnectionType.alist) {
-        // An address with a path is a WebDAV mount (e.g. Alist's /dav).
-        _type = p.path.endsWith(_davPath) ? ConnectionType.webdav : _type;
+      final segs = p.path.split('/').where((s) => s.isNotEmpty).toList();
+      final dav = segs.indexOf('dav');
+      if (dav >= 0) {
+        // Alist / OpenList WebDAV: mount up to /dav, the rest is where to open.
+        _type = ConnectionType.webdav;
+        _path.text = '/${segs.take(dav + 1).join('/')}';
+        final rest = segs.skip(dav + 1).join('/');
+        if (rest.isNotEmpty) _start.text = '/$rest';
+      } else if (segs.isNotEmpty) {
+        // Alist's API has no URL path: treat it as the folder to open.
+        if (_type == ConnectionType.webdav) {
+          _path.text = p.path;
+        } else {
+          _start.text = p.path;
+        }
       }
     });
   }
@@ -222,6 +237,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
       username: _local ? null : opt(_user),
       libraryRoot: opt(_root),
       favorites: widget.existing?.favorites ?? const [],
+      startDir: normalizeDir(_start.text),
     );
   }
 
@@ -484,6 +500,11 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                     const Padding(
                       padding: EdgeInsets.symmetric(vertical: 8),
                       child: Divider(),
+                    ),
+                    FormRow(
+                      label: '打开目录',
+                      help: '点进这个连接时先打开这里，比如 /PC（可选）',
+                      child: field('打开目录', _start, hint: '/'),
                     ),
                     FormRow(
                       label: '媒体库',
