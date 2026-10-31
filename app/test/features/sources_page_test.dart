@@ -8,10 +8,11 @@ import 'helpers.dart';
 void main() {
   testWidgets('shows connections with status and favorites', (tester) async {
     await pumpPage(tester, const SourcesPage());
-    expect(find.text('演示 Alist'), findsOneWidget);
+    expect(find.text('演示 Alist'), findsWidgets); // row + favorite
     expect(find.text('演示本地'), findsOneWidget);
     expect(find.text('已连接'), findsNWidgets(2));
-    expect(find.text('演示 Alist · /下载/完成'), findsOneWidget);
+    // favorite row: path + connection name
+    expect(find.byKey(const ValueKey('fav demo-alist /下载/完成')), findsOneWidget);
   });
 
   testWidgets('add connection dialog creates a card', (tester) async {
@@ -20,13 +21,12 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('保存'));
     await tester.pumpAndSettle();
-    expect(find.text('必填'), findsNWidgets(2)); // validation first
+    expect(find.text('必填'), findsNWidgets(2)); // name + host
 
     await tester.enterText(find.widgetWithText(TextField, '名称'), '公司 NAS');
-    await tester.enterText(
-      find.widgetWithText(TextField, '服务器地址'),
-      'http://nas:5244',
-    );
+    await tester.enterText(find.widgetWithText(TextField, '主机 / IP'), 'nas');
+    await tester.pump();
+    expect(find.text('http://nas:5244'), findsOneWidget); // live preview
     await tester.tap(find.text('保存'));
     await tester.pumpAndSettle();
     expect(find.text('公司 NAS'), findsOneWidget);
@@ -34,7 +34,7 @@ void main() {
 
   testWidgets('browse, multi-select and submit creates a task', (tester) async {
     final (tm, _) = await pumpPage(tester, const SourcesPage());
-    await tester.tap(find.text('演示 Alist · /下载/完成'));
+    await tester.tap(find.byKey(const ValueKey('fav demo-alist /下载/完成')));
     await tester.pumpAndSettle();
     expect(find.text('异兽魔都 2020 1080p'), findsOneWidget);
     expect(find.text('Inception.2010.2160p.BluRay.x265.mkv'), findsOneWidget);

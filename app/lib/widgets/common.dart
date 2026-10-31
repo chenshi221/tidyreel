@@ -29,48 +29,79 @@ String fmtDate(DateTime? d) => d == null
     ? ''
     : '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
-/// Page frame: title bar + body. Switches to standard visual density so every
-/// tap target is at least 40px (the app theme is compact).
+/// Page frame: serif title (+ optional subtitle and actions) over the body.
+/// Switches to standard visual density so every tap target is at least 40px
+/// (the app theme is compact). With [maxWidth] the whole page is centered.
 class PageScaffold extends StatelessWidget {
   final String title;
+  final String? subtitle;
   final Widget? leading;
   final List<Widget> actions;
   final Widget child;
+  final double? maxWidth;
 
   const PageScaffold({
     super.key,
     required this.title,
+    this.subtitle,
     this.leading,
     this.actions = const [],
+    this.maxWidth,
     required this.child,
   });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    Widget page = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(32, 24, 32, 12),
+          child: Row(
+            children: [
+              if (leading != null) ...[leading!, const SizedBox(width: 8)],
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      title,
+                      key: const ValueKey('page-title'),
+                      style: theme.textTheme.headlineSmall,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    if (subtitle != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitle!,
+                        style: theme.textTheme.bodySmall,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              for (final a in actions) ...[const SizedBox(width: 8), a],
+            ],
+          ),
+        ),
+        Expanded(child: child),
+      ],
+    );
+    if (maxWidth != null) {
+      page = Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: maxWidth!),
+          child: page,
+        ),
+      );
+    }
     return Theme(
       data: theme.copyWith(visualDensity: VisualDensity.standard),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(24, 12, 24, 8),
-            child: Row(
-              children: [
-                if (leading != null) ...[leading!, const SizedBox(width: 8)],
-                Text(
-                  title,
-                  key: const ValueKey('page-title'),
-                  style: theme.textTheme.headlineSmall,
-                ),
-                const Spacer(),
-                ...actions,
-              ],
-            ),
-          ),
-          Expanded(child: child),
-        ],
-      ),
+      child: page,
     );
   }
 }
@@ -121,6 +152,7 @@ Future<bool> confirmDialog(
   required String title,
   required Widget content,
   String confirmLabel = '确定',
+  bool destructive = false,
 }) async =>
     await showDialog<bool>(
       context: context,
@@ -133,6 +165,11 @@ Future<bool> confirmDialog(
             child: const Text('取消'),
           ),
           FilledButton(
+            style: destructive
+                ? FilledButton.styleFrom(
+                    backgroundColor: Theme.of(ctx).colorScheme.error,
+                  )
+                : null,
             onPressed: () => Navigator.pop(ctx, true),
             child: Text(confirmLabel),
           ),

@@ -18,7 +18,7 @@ class AppSettings {
     this.tmdbBaseUrl = 'https://api.themoviedb.org/3',
     this.defaultMode = OrganizeMode.inPlace,
     this.autoDeleteJunk = false,
-    this.themeMode = ThemeMode.system,
+    this.themeMode = ThemeMode.light,
   });
 
   AppSettings copyWith({

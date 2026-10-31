@@ -6,7 +6,7 @@ import 'package:tidyreel/data/providers.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
 void main() {
-  testWidgets('rail navigates between the four pages', (tester) async {
+  testWidgets('sidebar navigates between the four pages', (tester) async {
     tester.view.physicalSize = const Size(1280, 800);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
@@ -16,18 +16,38 @@ void main() {
     expect(find.text('来源'), findsWidgets);
 
     for (final label in ['任务', '命名规则', '设置', '来源']) {
-      await tester.tap(
-        find.descendant(
-          of: find.byType(NavigationRail),
-          matching: find.text(label),
-        ),
-      );
+      await tester.tap(find.byKey(ValueKey('nav-$label')));
       await tester.pumpAndSettle();
       expect(
         tester.widget<Text>(find.byKey(const ValueKey('page-title'))).data,
         label,
       );
     }
+  });
+
+  testWidgets('sidebar collapses to icons and lists background tasks', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(const ProviderScope(child: TidyreelApp()));
+    await tester.pumpAndSettle();
+    final c = ProviderScope.containerOf(tester.element(find.byType(AppShell)));
+    await c.read(taskManagerProvider).submit(const ConnectionId('demo-alist'), [
+      '/下载/完成',
+    ], OrganizeMode.inPlace);
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.text('后台任务'), findsOneWidget);
+    expect(find.text('完成'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('收起侧栏'));
+    await tester.pumpAndSettle();
+    expect(find.text('后台任务'), findsNothing);
+    expect(find.byTooltip('展开侧栏'), findsOneWidget);
+    // Let the fake task finish so no timers are left pending.
+    await tester.pumpAndSettle(const Duration(seconds: 1));
   });
 
   test('providers wire the fake engine', () async {

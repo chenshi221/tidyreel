@@ -28,7 +28,9 @@ class AlistBackend implements StorageBackend {
         ),
       );
 
-  bool get _canLogin => _username != null && _password != null;
+  /// Empty fields mean "browse as guest" rather than a login with blanks.
+  bool get _canLogin =>
+      (_username ?? '').isNotEmpty && (_password ?? '').isNotEmpty;
 
   Future<Map<String, dynamic>> _post(
     String api,

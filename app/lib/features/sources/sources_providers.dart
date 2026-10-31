@@ -13,38 +13,64 @@ final connectionsEditorProvider = connectionsProvider;
 
 enum ConnStatus { connected, authFailed, offline }
 
-/// Status plus the backend's error text, so the card can say *why* it failed.
-final connectionStatusProvider =
-    FutureProvider.family<({ConnStatus status, String? detail}), ConnectionId>((
+typedef ConnCheck = ({ConnStatus status, String? detail});
+
+/// Turns a ping failure into a status plus a hint the user can act on.
+ConnCheck describeConnectionError(ConnectionConfig? c, Object e) {
+  if (e is StorageException) {
+    if (e.code == StorageErrorCode.unauthorized) {
+      return (
+        status: ConnStatus.authFailed,
+        detail: '用户名或密码错误（区分大小写）：${e.message}',
+      );
+    }
+    final noDav =
+        c?.type == ConnectionType.webdav &&
+        !c!.endpoint.replaceAll(RegExp(r'/+$'), '').endsWith('/dav');
+    return (
+      status: ConnStatus.offline,
+      detail: noDav
+          ? '${e.message}\n提示：Alist/OpenList 的 WebDAV 地址要以 /dav 结尾，或把类型改成 Alist'
+          : e.message,
+    );
+  }
+  return (status: ConnStatus.offline, detail: '$e');
+}
+
+/// Status plus the backend's error text, so the row can say *why* it failed.
+/// `ref.invalidate(connectionStatusProvider(id))` re-checks.
+final connectionStatusProvider = FutureProvider.family<ConnCheck, ConnectionId>(
+  (ref, id) async {
+    try {
+      await ref.watch(backendForProvider)(id).ping();
+      return (status: ConnStatus.connected, detail: null);
+    } catch (e) {
+      final c = ref
+          .watch(connectionsProvider)
+          .where((c) => c.id == id)
+          .firstOrNull;
+      return describeConnectionError(c, e);
+    }
+  },
+);
+
+/// Pings an unsaved connection from the dialog (测试连接).
+final connectionTesterProvider =
+    Provider<Future<ConnCheck> Function(ConnectionConfig, String password)>((
       ref,
-      id,
-    ) async {
-      try {
-        await ref.watch(backendForProvider)(id).ping();
-        return (status: ConnStatus.connected, detail: null);
-      } on StorageException catch (e) {
-        if (e.code == StorageErrorCode.unauthorized) {
-          return (
-            status: ConnStatus.authFailed,
-            detail: '用户名或密码错误（区分大小写）：${e.message}',
-          );
+    ) {
+      final demo = ref.watch(bootstrapProvider).demo;
+      return (c, password) async {
+        try {
+          final backend = demo
+              ? ref.read(demoBackendProvider)
+              : createBackend(c, Credentials(password: password));
+          await backend.ping();
+          return (status: ConnStatus.connected, detail: null);
+        } catch (e) {
+          return describeConnectionError(c, e);
         }
-        final c = ref
-            .watch(connectionsProvider)
-            .where((c) => c.id == id)
-            .firstOrNull;
-        final noDav =
-            c?.type == ConnectionType.webdav &&
-            !c!.endpoint.replaceAll(RegExp(r'/+$'), '').endsWith('/dav');
-        return (
-          status: ConnStatus.offline,
-          detail: noDav
-              ? '${e.message}\n提示：Alist/OpenList 的 WebDAV 地址要以 /dav 结尾，或把类型改成 Alist'
-              : e.message,
-        );
-      } catch (e) {
-        return (status: ConnStatus.offline, detail: '$e');
-      }
+      };
     });
 
 // ---- file browser state ----
@@ -68,6 +94,11 @@ final browserSortProvider = NotifierProvider<Val<BrowserSort>, BrowserSort>(
 final onlyUnorganizedProvider = NotifierProvider<Val<bool>, bool>(
   () => Val(false),
 );
+
+/// Bumped by the 刷新 button; the next listing bypasses server caches.
+final browserRefreshProvider = NotifierProvider<Val<int>, int>(() => Val(0));
+var _seenRefresh = 0;
+
 final selectModeProvider = NotifierProvider<Val<bool>, bool>(() => Val(false));
 
 class BrowserSelection extends Notifier<Set<String>> {
@@ -116,8 +147,13 @@ final browserEntriesProvider = FutureProvider.autoDispose<List<RemoteEntry>>((
   final sort = ref.watch(browserSortProvider);
   final onlyNew = ref.watch(onlyUnorganizedProvider);
   final conn = ref.watch(openConnectionProvider);
+  final tick = ref.watch(browserRefreshProvider);
+  final refresh = tick != _seenRefresh;
+  _seenRefresh = tick;
   if (conn == null) return const [];
-  var list = await ref.watch(backendForProvider)(conn.id).list(dir);
+  var list = await ref
+      .watch(backendForProvider)(conn.id)
+      .list(dir, refresh: refresh);
   if (q.isNotEmpty) {
     list = list.where((e) => e.name.toLowerCase().contains(q)).toList();
   }
