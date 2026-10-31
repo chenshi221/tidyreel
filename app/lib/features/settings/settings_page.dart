@@ -1,8 +1,11 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
 import '../../data/providers.dart';
+import '../../ui/tokens.dart';
+import '../../ui/widgets.dart';
 import '../../widgets/common.dart';
 import 'settings_providers.dart';
 
@@ -23,6 +26,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   late final _url = TextEditingController(
     text: ref.read(settingsProvider).tmdbBaseUrl,
   );
+  var _showKey = false;
 
   @override
   void dispose() {
@@ -54,137 +58,196 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   @override
   Widget build(BuildContext context) {
     final s = ref.watch(settingsProvider);
-    final theme = Theme.of(context);
+    final p = Palette.of(context);
+    final builtIn = ref.watch(builtInTmdbTokenProvider).isNotEmpty;
     return PageScaffold(
       title: '设置',
+      maxWidth: 760,
       child: ListView(
-        padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+        padding: const EdgeInsets.fromLTRB(28, 0, 28, 28),
         children: [
-          Align(
-            alignment: Alignment.topLeft,
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 640),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _title(theme, 'TMDB'),
-                  TextField(
+          const SectionLabel('TMDB 元数据'),
+          Panel(
+            padding: const EdgeInsets.fromLTRB(8, 8, 14, 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                FormRow(
+                  label: 'API Key',
+                  labelWidth: 110,
+                  help: builtIn
+                      ? '已内置默认 key，可以留空；填了就优先用你的'
+                      : '支持 v3 key 和 v4 Read Access Token',
+                  child: TextField(
+                    key: const ValueKey('tmdb-key'),
                     controller: _key,
-                    obscureText: true,
+                    obscureText: !_showKey,
+                    style: const TextStyle(fontSize: 13),
                     decoration: InputDecoration(
-                      labelText: 'API Key / Read Token',
-                      helperText: ref.watch(builtInTmdbTokenProvider).isEmpty
-                          ? '支持 v3 key 和 v4 read token'
-                          : '已内置默认 key，可以留空；填了就优先用你的',
-                      border: OutlineInputBorder(),
+                      hintText: builtIn
+                          ? '使用内置 key'
+                          : '粘贴 API Key 或 Read Token',
+                      suffixIcon: IconButton(
+                        tooltip: _showKey ? '隐藏' : '显示',
+                        iconSize: 15,
+                        icon: Icon(
+                          _showKey
+                              ? CupertinoIcons.eye_slash
+                              : CupertinoIcons.eye,
+                        ),
+                        onPressed: () => setState(() => _showKey = !_showKey),
+                      ),
                     ),
                     onChanged: (v) => _set((o) => o.copyWith(tmdbApiKey: v)),
                   ),
-                  const SizedBox(height: 12),
-                  TextField(
+                ),
+                FormRow(
+                  label: 'Base URL',
+                  labelWidth: 110,
+                  help: '访问不了 TMDB 时，填一个反向代理地址',
+                  child: TextField(
+                    key: const ValueKey('tmdb-url'),
                     controller: _url,
-                    decoration: const InputDecoration(
-                      labelText: 'Base URL（代理地址）',
-                      border: OutlineInputBorder(),
-                    ),
+                    style: const TextStyle(fontSize: 13),
                     onChanged: (v) => _set((o) => o.copyWith(tmdbBaseUrl: v)),
                   ),
-                  const SizedBox(height: 12),
-                  OutlinedButton.icon(
-                    onPressed: _testConnection,
-                    icon: const Icon(Icons.wifi_tethering),
-                    label: const Text('测试连接'),
-                  ),
-                  const SizedBox(height: 24),
-                  _title(theme, '整理'),
-                  const Text('默认整理模式'),
-                  const SizedBox(height: 8),
-                  SegmentedButton<OrganizeMode>(
-                    segments: const [
-                      ButtonSegment(
-                        value: OrganizeMode.inPlace,
-                        label: Text('原地整理'),
+                ),
+                FormRow(
+                  label: '',
+                  labelWidth: 110,
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: OutlinedButton.icon(
+                      onPressed: _testConnection,
+                      icon: const Icon(
+                        CupertinoIcons.bolt_horizontal,
+                        size: 14,
                       ),
-                      ButtonSegment(
-                        value: OrganizeMode.moveToLibrary,
-                        label: Text('移动到媒体库'),
-                      ),
-                    ],
-                    selected: {s.defaultMode},
-                    onSelectionChanged: (v) =>
-                        _set((o) => o.copyWith(defaultMode: v.first)),
+                      label: const Text('测试连接'),
+                    ),
                   ),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('自动删除垃圾文件'),
-                    subtitle: const Text('默认关闭；开启后垃圾文件的删除操作默认勾选，执行前仍需确认'),
+                ),
+              ],
+            ),
+          ),
+          const SectionLabel('整理'),
+          Panel(
+            child: Rows(
+              children: [
+                SettingRow(
+                  title: '默认整理模式',
+                  caption: '提交任务时的默认选项，确认时还能改',
+                  control: Segmented<OrganizeMode>(
+                    options: const {
+                      OrganizeMode.inPlace: '原地整理',
+                      OrganizeMode.moveToLibrary: '移动到媒体库',
+                    },
+                    value: s.defaultMode,
+                    onChanged: (v) => _set((o) => o.copyWith(defaultMode: v)),
+                  ),
+                ),
+                SettingRow(
+                  title: '自动删除垃圾文件',
+                  caption: '开启后垃圾文件的删除默认勾选，执行前仍需确认',
+                  control: MacSwitch(
+                    key: const ValueKey('auto-junk'),
                     value: s.autoDeleteJunk,
                     onChanged: (v) =>
                         _set((o) => o.copyWith(autoDeleteJunk: v)),
                   ),
-                  const SizedBox(height: 16),
-                  _title(theme, '外观'),
-                  SegmentedButton<ThemeMode>(
-                    segments: const [
-                      ButtonSegment(
-                        value: ThemeMode.system,
-                        icon: Icon(Icons.brightness_auto),
-                        label: Text('跟随系统'),
-                      ),
-                      ButtonSegment(
-                        value: ThemeMode.light,
-                        icon: Icon(Icons.light_mode),
-                        label: Text('浅色'),
-                      ),
-                      ButtonSegment(
-                        value: ThemeMode.dark,
-                        icon: Icon(Icons.dark_mode),
-                        label: Text('深色'),
-                      ),
-                    ],
-                    selected: {s.themeMode},
-                    onSelectionChanged: (v) =>
-                        _set((o) => o.copyWith(themeMode: v.first)),
-                  ),
-                  const SizedBox(height: 24),
-                  _title(theme, '关于'),
-                  const Text('理片 Tidyreel  v$appVersion'),
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      const Text('基于 mnamer (MIT) 的思路'),
-                      TextButton(
-                        onPressed: () => showDialog<void>(
-                          context: context,
-                          builder: (ctx) => AlertDialog(
-                            title: const Text('开源许可'),
-                            content: const SelectableText(
-                              '命名与解析思路参考 mnamer（MIT License）。\n'
-                              '原版权声明见项目 LICENSES/mnamer-MIT.txt。',
-                            ),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(ctx),
-                                child: const Text('关闭'),
-                              ),
-                            ],
-                          ),
-                        ),
-                        child: const Text('查看 LICENSES'),
-                      ),
-                    ],
-                  ),
-                ],
+                ),
+              ],
+            ),
+          ),
+          const SectionLabel('外观'),
+          Panel(
+            child: SettingRow(
+              title: '主题',
+              control: Segmented<ThemeMode>(
+                options: const {
+                  ThemeMode.light: '浅色',
+                  ThemeMode.dark: '深色',
+                  ThemeMode.system: '跟随系统',
+                },
+                value: s.themeMode,
+                onChanged: (v) => _set((o) => o.copyWith(themeMode: v)),
               ),
+            ),
+          ),
+          const SectionLabel('关于'),
+          Panel(
+            child: Rows(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: p.accent,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Icon(
+                          CupertinoIcons.film_fill,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              '理片 Tidyreel',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            Text(
+                              '版本 $appVersion',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: p.textMuted,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                SettingRow(
+                  title: '基于 mnamer (MIT) 的思路',
+                  caption: '影视元数据来自 TMDB，本产品使用 TMDB API 但未获得其认可或认证',
+                  control: TextButton(
+                    onPressed: () => showDialog<void>(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        title: const Text('开源许可'),
+                        content: const SelectableText(
+                          '命名与解析思路参考 mnamer（MIT License）。\n'
+                          '原版权声明见项目 LICENSES/mnamer-MIT.txt。',
+                        ),
+                        actions: [
+                          OutlinedButton(
+                            onPressed: () => Navigator.pop(ctx),
+                            child: const Text('关闭'),
+                          ),
+                        ],
+                      ),
+                    ),
+                    child: const Text('查看许可'),
+                  ),
+                ),
+              ],
             ),
           ),
         ],
       ),
     );
   }
-
-  Widget _title(ThemeData theme, String text) => Padding(
-    padding: const EdgeInsets.only(bottom: 12),
-    child: Text(text, style: theme.textTheme.titleMedium),
-  );
 }

@@ -158,9 +158,13 @@ void main() {
         .read(settingsProvider.notifier)
         .update((s) => s.copyWith(themeMode: ThemeMode.light));
     await tester.tap(find.byKey(const ValueKey('nav-任务')));
-    await _shot(tester, '07-tasks-current');
+    await _shot(tester, '07-tasks');
     await tester.tap(find.byKey(const ValueKey('nav-设置')));
-    await _shot(tester, '08-settings-current');
+    await _shot(tester, '08-settings');
+    await tester.tap(find.byKey(const ValueKey('nav-命名规则')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('剧集'));
+    await _shot(tester, '11-naming-tv');
 
     final router = GoRouter.of(tester.element(find.byType(Sidebar)));
     router.go('/tasks/${taskId!.value}/review');

@@ -63,16 +63,13 @@ void main() {
 
   testWidgets('settings fields bind to the settings provider', (tester) async {
     final (_, c) = await pumpPage(tester, const SettingsPage());
+    await tester.enterText(find.byKey(const ValueKey('tmdb-key')), 'abc123');
     await tester.enterText(
-      find.widgetWithText(TextField, 'API Key / Read Token'),
-      'abc123',
-    );
-    await tester.enterText(
-      find.widgetWithText(TextField, 'Base URL（代理地址）'),
+      find.byKey(const ValueKey('tmdb-url')),
       'https://tmdb.example.com/3',
     );
     await tester.tap(find.text('移动到媒体库'));
-    await tester.tap(find.byType(Switch));
+    await tester.tap(find.byKey(const ValueKey('auto-junk')));
     await tester.tap(find.text('深色'));
     await tester.pumpAndSettle();
     final s = c.read(settingsProvider);

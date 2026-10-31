@@ -1,8 +1,11 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
 import '../../data/providers.dart';
+import '../../ui/tokens.dart';
+import '../../ui/widgets.dart';
 import '../../widgets/common.dart';
 import 'naming_preview.dart';
 
@@ -29,7 +32,7 @@ const _fieldNames = {
   NameField.extraInfo: '附加信息',
 };
 
-/// 命名规则页（PLAN §3.2）.
+/// 命名规则页（PLAN §3.2）: options on the left, a pinned live preview right.
 class NamingPage extends ConsumerStatefulWidget {
   const NamingPage({super.key});
 
@@ -37,66 +40,103 @@ class NamingPage extends ConsumerStatefulWidget {
   ConsumerState<NamingPage> createState() => _NamingPageState();
 }
 
-class _NamingPageState extends ConsumerState<NamingPage>
-    with SingleTickerProviderStateMixin {
-  late final _tabs = TabController(length: 2, vsync: this);
-
-  @override
-  void dispose() {
-    _tabs.dispose();
-    super.dispose();
-  }
+class _NamingPageState extends ConsumerState<NamingPage> {
+  var _tv = false;
 
   @override
   Widget build(BuildContext context) {
     final profile = ref.watch(namingProfileProvider);
     return PageScaffold(
       title: '命名规则',
+      subtitle: '电影和剧集分开设置，每一项改动都会实时显示在右侧示例里',
       actions: [
-        const Text('目标播放器  '),
-        DropdownButton<TargetPlayer>(
-          key: const ValueKey('player'),
+        Segmented<bool>(
+          options: const {false: '电影', true: '剧集'},
+          value: _tv,
+          onChanged: (v) => setState(() => _tv = v),
+        ),
+        const SizedBox(width: 6),
+        _PlayerMenu(
           value: profile.player,
-          underline: const SizedBox.shrink(),
-          items: [
-            for (final p in TargetPlayer.values)
-              DropdownMenuItem(value: p, child: Text(_playerNames[p]!)),
-          ],
           // Switching preset resets both option sets to that player's defaults.
           onChanged: (p) => ref
               .read(namingProfileProvider.notifier)
               .set(
                 p == TargetPlayer.vidhub
                     ? NamingProfile.vidhub
-                    : NamingProfile(player: p!),
+                    : NamingProfile(player: p),
               ),
         ),
       ],
-      child: Column(
-        children: [
-          TabBar(
-            controller: _tabs,
-            isScrollable: true,
-            tabAlignment: TabAlignment.start,
-            tabs: const [
-              Tab(text: '电影'),
-              Tab(text: '剧集'),
-            ],
-          ),
-          AnimatedBuilder(
-            animation: _tabs,
-            builder: (_, _) => _ExampleCard(isTv: _tabs.index == 1),
-          ),
-          Expanded(
-            child: TabBarView(
-              controller: _tabs,
-              children: const [
-                _OptionsPanel(isTv: false),
-                _OptionsPanel(isTv: true),
-              ],
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(28, 0, 28, 0),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              flex: 11,
+              child: _OptionsPanel(key: ValueKey(_tv), isTv: _tv),
             ),
-          ),
-        ],
+            const SizedBox(width: 24),
+            Expanded(
+              flex: 9,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 22),
+                child: _Preview(isTv: _tv),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PlayerMenu extends StatelessWidget {
+  final TargetPlayer value;
+  final ValueChanged<TargetPlayer> onChanged;
+
+  const _PlayerMenu({required this.value, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    return PopupMenuButton<TargetPlayer>(
+      key: const ValueKey('player'),
+      tooltip: '目标播放器',
+      initialValue: value,
+      position: PopupMenuPosition.under,
+      onSelected: onChanged,
+      itemBuilder: (_) => [
+        for (final t in TargetPlayer.values)
+          PopupMenuItem(value: t, height: 30, child: Text(_playerNames[t]!)),
+      ],
+      child: Container(
+        height: 28,
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        decoration: BoxDecoration(
+          color: p.panel,
+          borderRadius: BorderRadius.circular(Radii.md),
+          border: Border.all(color: p.lineStrong, width: hairline),
+          boxShadow: panelShadow(),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(CupertinoIcons.play_rectangle, size: 14, color: p.textMuted),
+            const SizedBox(width: 6),
+            Text(
+              _playerNames[value]!,
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+            ),
+            const SizedBox(width: 4),
+            Icon(
+              CupertinoIcons.chevron_up_chevron_down,
+              size: 11,
+              color: p.textMuted,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -104,69 +144,107 @@ class _NamingPageState extends ConsumerState<NamingPage>
 
 NamingOptions _optionsOf(NamingProfile p, bool tv) => tv ? p.tv : p.movie;
 
-class _ExampleCard extends ConsumerWidget {
+/// Before → after, plus the library path drawn as a small tree.
+class _Preview extends ConsumerWidget {
   final bool isTv;
 
-  const _ExampleCard({required this.isTv});
+  const _Preview({required this.isTv});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final o = _optionsOf(ref.watch(namingProfileProvider), isTv);
+    final p = Palette.of(context);
+    final theme = Theme.of(context);
+    final profile = ref.watch(namingProfileProvider);
+    final o = _optionsOf(profile, isTv);
     final sample = isTv ? NamingSample.tv : NamingSample.movie;
     final kind = isTv ? MediaKind.episode : MediaKind.movie;
     final name = renderNaming(o, kind, sample);
     final folder = renderFolder(o.folderTemplate, sample);
     final season = isTv ? renderFolder(o.seasonFolderTemplate, sample) : null;
-    final scheme = Theme.of(context).colorScheme;
-    final dir = ref.watch(namingProfileProvider);
-    final path = name.text == null || folder.text == null
-        ? null
-        : '${isTv ? dir.tvDir : dir.movieDir}/${folder.text}/'
-              '${season?.text != null ? '${season!.text}/' : ''}${name.text}';
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 8, 24, 8),
-      child: Card(
-        color: scheme.primaryContainer,
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('示例', style: TextStyle(color: scheme.onPrimaryContainer)),
-              const SizedBox(height: 4),
-              Wrap(
-                crossAxisAlignment: WrapCrossAlignment.center,
-                spacing: 8,
-                children: [
-                  Text(
-                    sample.original,
-                    style: TextStyle(
-                      color: scheme.onPrimaryContainer.withAlpha(180),
-                    ),
-                  ),
-                  Icon(
-                    Icons.arrow_forward,
-                    size: 18,
-                    color: scheme.onPrimaryContainer,
-                  ),
-                  SelectableText(
-                    name.display,
-                    key: const ValueKey('example-name'),
-                    style: Theme.of(context).textTheme.titleMedium
-                        ?.copyWith(color: scheme.onPrimaryContainer),
-                  ),
-                ],
-              ),
-              if (path != null)
-                Text(
-                  '移动到媒体库：$path',
-                  style: TextStyle(
-                    color: scheme.onPrimaryContainer.withAlpha(180),
-                  ),
-                ),
-            ],
+    final tree = [
+      isTv ? profile.tvDir : profile.movieDir,
+      if (folder.text != null) folder.text!,
+      if (season?.text != null) season!.text!,
+    ];
+    final mono = TextStyle(
+      fontFamily: monoFamily,
+      fontFamilyFallback: [...monoFallback, ...sansFallback],
+      fontSize: 12.5,
+      height: 1.5,
+    );
+
+    Widget fileLine(IconData icon, String text, Color color, {Key? key}) => Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Icon(icon, size: 14, color: color),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: SelectableText(
+            text,
+            key: key,
+            style: mono.copyWith(color: color),
           ),
         ),
+      ],
+    );
+
+    return Panel(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text('实时示例', style: theme.textTheme.titleSmall),
+              const Spacer(),
+              Tag(_playerNames[profile.player]!, color: p.accent),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Text('原文件名', style: theme.textTheme.labelSmall),
+          const SizedBox(height: 4),
+          fileLine(CupertinoIcons.doc, sample.original, p.textFaint),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Icon(CupertinoIcons.arrow_down, size: 14, color: p.accent),
+          ),
+          Text('整理后', style: theme.textTheme.labelSmall),
+          const SizedBox(height: 4),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: p.accent.withValues(alpha: 0.07),
+              borderRadius: BorderRadius.circular(Radii.md),
+              border: Border.all(
+                color: p.accent.withValues(alpha: 0.25),
+                width: hairline,
+              ),
+            ),
+            child: fileLine(
+              CupertinoIcons.film,
+              name.display,
+              name.text == null ? p.danger : p.text,
+              key: const ValueKey('example-name'),
+            ),
+          ),
+          const SizedBox(height: 18),
+          Text('移动到媒体库时', style: theme.textTheme.labelSmall),
+          const SizedBox(height: 6),
+          for (var i = 0; i < tree.length; i++)
+            Padding(
+              padding: EdgeInsets.only(left: 16.0 * i, bottom: 2),
+              child: fileLine(CupertinoIcons.folder_fill, tree[i], p.textMuted),
+            ),
+          if (name.text != null)
+            Padding(
+              padding: EdgeInsets.only(left: 16.0 * tree.length),
+              child: fileLine(CupertinoIcons.film, name.text!, p.text),
+            ),
+        ],
       ),
     );
   }
@@ -175,7 +253,7 @@ class _ExampleCard extends ConsumerWidget {
 class _OptionsPanel extends ConsumerWidget {
   final bool isTv;
 
-  const _OptionsPanel({required this.isTv});
+  const _OptionsPanel({super.key, required this.isTv});
 
   void _edit(WidgetRef ref, NamingOptions Function(NamingOptions) f) {
     final p = ref.read(namingProfileProvider);
@@ -186,358 +264,297 @@ class _OptionsPanel extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final p = Palette.of(context);
     final o = _optionsOf(ref.watch(namingProfileProvider), isTv);
     final kind = isTv ? MediaKind.episode : MediaKind.movie;
     final advanced = o.customTemplate != null;
+    final suffix = isTv ? 'tv' : 'movie';
     final order = [
       for (final f in o.order)
         if (isTv || (f != NameField.episode && f != NameField.episodeTitle)) f,
     ];
 
-    Widget row(String label, Widget child, {String? hint}) => Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 150,
-            child: Padding(
-              padding: const EdgeInsets.only(top: 10),
-              child: Text(label),
+    Widget sw(String key, bool v, ValueChanged<bool> f) =>
+        MacSwitch(key: ValueKey('$key-$suffix'), value: v, onChanged: f);
+
+    final options = <Widget>[
+      const SectionLabel('标题'),
+      Panel(
+        child: Rows(
+          children: [
+            SettingRow(
+              title: '标题语言',
+              control: Segmented<TitleLanguage>(
+                options: const {
+                  TitleLanguage.chineseFirst: '中文优先',
+                  TitleLanguage.englishFirst: '英文（原名）优先',
+                },
+                value: o.titleLanguage,
+                onChanged: (v) =>
+                    _edit(ref, (o) => o.copyWith(titleLanguage: v)),
+              ),
             ),
-          ),
-          Expanded(
-            child: Align(alignment: Alignment.centerLeft, child: child),
-          ),
-        ],
-      ),
-    );
-
-    Widget sw(String key, bool v, ValueChanged<bool> f) => Switch(
-      key: ValueKey('$key-${isTv ? 'tv' : 'movie'}'),
-      value: v,
-      onChanged: f,
-    );
-
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-      children: [
-        Align(
-          alignment: Alignment.topLeft,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 760),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Advanced editor: when on, the option controls below go read-only.
-                row(
-                  '高级：直接编辑模板',
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      sw(
-                        'advanced',
-                        advanced,
-                        (v) => _edit(
-                          ref,
-                          (o) => o.copyWith(
-                            customTemplate: () =>
-                                v ? compiledOrDefault(o, kind) : null,
-                          ),
-                        ),
-                      ),
-                      if (advanced)
-                        SizedBox(
-                          width: 520,
-                          child: _TextOption(
-                            key: ValueKey('custom-${isTv ? 'tv' : 'movie'}'),
-                            value: o.customTemplate!,
-                            label: '文件名模板（不含扩展名）',
-                            onChanged: (v) => _edit(
-                              ref,
-                              (o) => o.copyWith(customTemplate: () => v),
-                            ),
-                          ),
-                        ),
-                    ],
+            SettingRow(
+              title: '同时用两种语言',
+              caption: '如：老友记.Friends',
+              control: sw(
+                'bilingual',
+                o.bilingual,
+                (v) => _edit(ref, (o) => o.copyWith(bilingual: v)),
+              ),
+            ),
+            SettingRow(
+              title: '年份',
+              control: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (o.includeYear) ...[
+                    Segmented<bool>(
+                      options: const {false: '1999', true: '(1999)'},
+                      value: o.yearInParens,
+                      onChanged: (v) =>
+                          _edit(ref, (o) => o.copyWith(yearInParens: v)),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                  sw(
+                    'year',
+                    o.includeYear,
+                    (v) => _edit(ref, (o) => o.copyWith(includeYear: v)),
                   ),
+                ],
+              ),
+            ),
+            if (isTv)
+              SettingRow(
+                title: '剧集年份取哪个',
+                control: Segmented<ShowYearSource>(
+                  options: const {
+                    ShowYearSource.firstSeason: '首季年份',
+                    ShowYearSource.seasonAir: '当季首播年份',
+                  },
+                  value: o.showYear,
+                  onChanged: (v) => _edit(ref, (o) => o.copyWith(showYear: v)),
                 ),
-                const Divider(),
-                Opacity(
-                  opacity: advanced ? 0.45 : 1,
-                  child: AbsorbPointer(
-                    absorbing: advanced,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+              ),
+          ],
+        ),
+      ),
+      if (isTv) ...[
+        const SectionLabel('季集'),
+        Panel(
+          child: Rows(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+                child: Row(
+                  children: [
+                    const Expanded(child: Text('季集格式')),
+                    Wrap(
+                      spacing: 4,
                       children: [
-                        row(
-                          '标题语言',
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              SegmentedButton<TitleLanguage>(
-                                segments: const [
-                                  ButtonSegment(
-                                    value: TitleLanguage.chineseFirst,
-                                    label: Text('中文优先'),
-                                  ),
-                                  ButtonSegment(
-                                    value: TitleLanguage.englishFirst,
-                                    label: Text('英文（原名）优先'),
-                                  ),
-                                ],
-                                selected: {o.titleLanguage},
-                                onSelectionChanged: (v) => _edit(
-                                  ref,
-                                  (o) => o.copyWith(titleLanguage: v.first),
-                                ),
-                              ),
-                              CheckboxListTile(
-                                key: ValueKey(
-                                  'bilingual-${isTv ? 'tv' : 'movie'}',
-                                ),
-                                contentPadding: EdgeInsets.zero,
-                                controlAffinity:
-                                    ListTileControlAffinity.leading,
-                                title: const Text('同时用两种语言'),
-                                value: o.bilingual,
-                                onChanged: (v) =>
-                                    _edit(ref, (o) => o.copyWith(bilingual: v)),
-                              ),
-                            ],
-                          ),
-                        ),
-                        row(
-                          '年份',
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              sw(
-                                'year',
-                                o.includeYear,
-                                (v) => _edit(
-                                  ref,
-                                  (o) => o.copyWith(includeYear: v),
-                                ),
-                              ),
-                              const SizedBox(width: 16),
-                              SegmentedButton<bool>(
-                                segments: const [
-                                  ButtonSegment(
-                                    value: false,
-                                    label: Text('1999'),
-                                  ),
-                                  ButtonSegment(
-                                    value: true,
-                                    label: Text('(1999)'),
-                                  ),
-                                ],
-                                selected: {o.yearInParens},
-                                onSelectionChanged: o.includeYear
-                                    ? (v) => _edit(
-                                        ref,
-                                        (o) =>
-                                            o.copyWith(yearInParens: v.first),
-                                      )
-                                    : null,
-                              ),
-                            ],
-                          ),
-                        ),
-                        if (isTv) ...[
-                          row(
-                            '剧集年份取哪个',
-                            SegmentedButton<ShowYearSource>(
-                              segments: const [
-                                ButtonSegment(
-                                  value: ShowYearSource.firstSeason,
-                                  label: Text('首季年份'),
-                                ),
-                                ButtonSegment(
-                                  value: ShowYearSource.seasonAir,
-                                  label: Text('当季首播年份'),
-                                ),
-                              ],
-                              selected: {o.showYear},
-                              onSelectionChanged: (v) => _edit(
-                                ref,
-                                (o) => o.copyWith(showYear: v.first),
-                              ),
-                            ),
-                          ),
-                          row(
-                            '季集格式',
-                            SizedBox(
-                              width: 260,
-                              child: RadioGroup<EpisodeStyle>(
-                                groupValue: o.episodeStyle,
-                                onChanged: (v) => _edit(
-                                  ref,
-                                  (o) => o.copyWith(episodeStyle: v),
-                                ),
-                                child: Column(
-                                  children: [
-                                    for (final s in EpisodeStyle.values)
-                                      RadioListTile<EpisodeStyle>(
-                                        key: ValueKey('style-${s.name}'),
-                                        contentPadding: EdgeInsets.zero,
-                                        title: Text(_episodeStyleExamples[s]!),
-                                        value: s,
-                                      ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                          row(
-                            '分集标题',
-                            sw(
-                              'episode-title',
-                              o.episodeTitle,
-                              (v) => _edit(
-                                ref,
-                                (o) => o.copyWith(episodeTitle: v),
-                              ),
-                            ),
-                          ),
-                        ],
-                        row(
-                          '附加信息',
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              sw(
-                                'extra',
-                                o.extraInfo,
-                                (v) =>
-                                    _edit(ref, (o) => o.copyWith(extraInfo: v)),
-                              ),
-                              const SizedBox(width: 12),
-                              const Text('保留分辨率、HDR、音轨，如 2160p.DV'),
-                            ],
-                          ),
-                        ),
-                        row(
-                          '分隔符',
-                          SegmentedButton<String>(
-                            segments: const [
-                              ButtonSegment(value: '.', label: Text('.')),
-                              ButtonSegment(value: '_', label: Text('_')),
-                              ButtonSegment(value: ' ', label: Text('空格')),
-                              ButtonSegment(value: '-', label: Text('-')),
-                            ],
-                            selected: {o.separator},
-                            onSelectionChanged: (v) => _edit(
-                              ref,
-                              (o) => o.copyWith(separator: v.first),
-                            ),
-                          ),
-                        ),
-                        row(
-                          '发布组',
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              sw(
-                                'group',
-                                o.releaseGroup,
-                                (v) => _edit(
-                                  ref,
-                                  (o) => o.copyWith(releaseGroup: v),
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              const Text('在末尾加 -GRP'),
-                            ],
-                          ),
-                        ),
-                        row(
-                          'TMDB ID 标签',
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              sw(
-                                'tmdbid',
-                                o.tmdbIdTag,
-                                (v) =>
-                                    _edit(ref, (o) => o.copyWith(tmdbIdTag: v)),
-                              ),
-                              const SizedBox(width: 12),
-                              const Text('{tmdb-12345}'),
-                            ],
-                          ),
-                        ),
-                        row(
-                          '字段顺序',
-                          SizedBox(
-                            width: 260,
-                            child: ReorderableListView(
-                              key: ValueKey('order-${isTv ? 'tv' : 'movie'}'),
-                              shrinkWrap: true,
-                              physics: const NeverScrollableScrollPhysics(),
-                              onReorderItem: (from, to) {
-                                final next = [...order];
-                                next.insert(to, next.removeAt(from));
-                                // Fields that don't apply here keep their relative place at the end.
-                                _edit(
-                                  ref,
-                                  (o) => o.copyWith(
-                                    order: [
-                                      ...next,
-                                      for (final f in o.order)
-                                        if (!next.contains(f)) f,
-                                    ],
-                                  ),
-                                );
-                              },
-                              children: [
-                                for (final f in order)
-                                  ListTile(
-                                    key: ValueKey(f),
-                                    dense: false,
-                                    title: Text(_fieldNames[f]!),
-                                    leading: const Icon(Icons.drag_indicator),
-                                  ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        row(
-                          '文件夹命名',
-                          SizedBox(
-                            width: 360,
-                            child: _TextOption(
-                              key: ValueKey('folder-${isTv ? 'tv' : 'movie'}'),
-                              value: o.folderTemplate,
-                              label: '作品文件夹',
-                              onChanged: (v) => _edit(
-                                ref,
-                                (o) => o.copyWith(folderTemplate: v),
-                              ),
-                            ),
-                          ),
-                        ),
-                        if (isTv)
-                          row(
-                            '季文件夹',
-                            SizedBox(
-                              width: 360,
-                              child: _TextOption(
-                                key: const ValueKey('season-folder'),
-                                value: o.seasonFolderTemplate,
-                                label: '季文件夹',
-                                onChanged: (v) => _edit(
-                                  ref,
-                                  (o) => o.copyWith(seasonFolderTemplate: v),
-                                ),
-                              ),
-                            ),
+                        for (final s in EpisodeStyle.values)
+                          _StyleChip(
+                            key: ValueKey('style-${s.name}'),
+                            label: _episodeStyleExamples[s]!,
+                            selected: o.episodeStyle == s,
+                            onTap: () =>
+                                _edit(ref, (o) => o.copyWith(episodeStyle: s)),
                           ),
                       ],
                     ),
+                  ],
+                ),
+              ),
+              SettingRow(
+                title: '分集标题',
+                caption: '从 TMDB 取每集的名字加在文件名里',
+                control: sw(
+                  'episode-title',
+                  o.episodeTitle,
+                  (v) => _edit(ref, (o) => o.copyWith(episodeTitle: v)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+      const SectionLabel('附加内容'),
+      Panel(
+        child: Rows(
+          children: [
+            SettingRow(
+              title: '附加信息',
+              caption: '保留分辨率、HDR、音轨，如 2160p.DV',
+              control: sw(
+                'extra',
+                o.extraInfo,
+                (v) => _edit(ref, (o) => o.copyWith(extraInfo: v)),
+              ),
+            ),
+            SettingRow(
+              title: '发布组',
+              caption: '在末尾加 -GRP',
+              control: sw(
+                'group',
+                o.releaseGroup,
+                (v) => _edit(ref, (o) => o.copyWith(releaseGroup: v)),
+              ),
+            ),
+            SettingRow(
+              title: 'TMDB ID 标签',
+              caption: '{tmdb-12345}',
+              control: sw(
+                'tmdbid',
+                o.tmdbIdTag,
+                (v) => _edit(ref, (o) => o.copyWith(tmdbIdTag: v)),
+              ),
+            ),
+            SettingRow(
+              title: '分隔符',
+              control: Segmented<String>(
+                options: const {'.': ' . ', '_': ' _ ', ' ': '空格', '-': ' - '},
+                value: o.separator,
+                onChanged: (v) => _edit(ref, (o) => o.copyWith(separator: v)),
+              ),
+            ),
+          ],
+        ),
+      ),
+      const SectionLabel('字段顺序'),
+      Panel(
+        child: ReorderableListView(
+          key: ValueKey('order-$suffix'),
+          shrinkWrap: true,
+          buildDefaultDragHandles: false,
+          physics: const NeverScrollableScrollPhysics(),
+          onReorderItem: (from, to) {
+            final next = [...order];
+            next.insert(to, next.removeAt(from));
+            // Fields that don't apply here keep their relative place at the end.
+            _edit(
+              ref,
+              (o) => o.copyWith(
+                order: [
+                  ...next,
+                  for (final f in o.order)
+                    if (!next.contains(f)) f,
+                ],
+              ),
+            );
+          },
+          children: [
+            for (var i = 0; i < order.length; i++)
+              ReorderableDragStartListener(
+                key: ValueKey(order[i]),
+                index: i,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: p.panel,
+                    border: i == 0
+                        ? null
+                        : Border(
+                            top: BorderSide(color: p.line, width: hairline),
+                          ),
+                  ),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 9,
+                  ),
+                  child: Row(
+                    children: [
+                      Text(
+                        '${i + 1}',
+                        style: TextStyle(fontSize: 12, color: p.textFaint),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(child: Text(_fieldNames[order[i]]!)),
+                      Icon(
+                        CupertinoIcons.line_horizontal_3,
+                        size: 14,
+                        color: p.textFaint,
+                      ),
+                    ],
                   ),
                 ),
-              ],
+              ),
+          ],
+        ),
+      ),
+      const SectionLabel('文件夹'),
+      Panel(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        child: Column(
+          children: [
+            FormRow(
+              label: '作品文件夹',
+              child: _TextOption(
+                key: ValueKey('folder-$suffix'),
+                value: o.folderTemplate,
+                onChanged: (v) =>
+                    _edit(ref, (o) => o.copyWith(folderTemplate: v)),
+              ),
+            ),
+            if (isTv)
+              FormRow(
+                label: '季文件夹',
+                child: _TextOption(
+                  key: const ValueKey('season-folder'),
+                  value: o.seasonFolderTemplate,
+                  onChanged: (v) =>
+                      _edit(ref, (o) => o.copyWith(seasonFolderTemplate: v)),
+                ),
+              ),
+          ],
+        ),
+      ),
+    ];
+
+    return ListView(
+      padding: const EdgeInsets.only(bottom: 28),
+      children: [
+        const SectionLabel('高级'),
+        Panel(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SettingRow(
+                title: '直接编辑模板',
+                caption: '开启后下面的选项变为只读',
+                control: sw(
+                  'advanced',
+                  advanced,
+                  (v) => _edit(
+                    ref,
+                    (o) => o.copyWith(
+                      customTemplate: () =>
+                          v ? compiledOrDefault(o, kind) : null,
+                    ),
+                  ),
+                ),
+              ),
+              if (advanced)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+                  child: _TextOption(
+                    key: ValueKey('custom-$suffix'),
+                    value: o.customTemplate!,
+                    mono: true,
+                    onChanged: (v) =>
+                        _edit(ref, (o) => o.copyWith(customTemplate: () => v)),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        AnimatedOpacity(
+          duration: const Duration(milliseconds: 150),
+          opacity: advanced ? 0.45 : 1,
+          child: AbsorbPointer(
+            absorbing: advanced,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: options,
             ),
           ),
         ),
@@ -546,17 +563,58 @@ class _OptionsPanel extends ConsumerWidget {
   }
 }
 
+class _StyleChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _StyleChip({
+    super.key,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    return Hoverable(
+      onTap: onTap,
+      builder: (context, hover) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: selected ? p.text : (hover ? p.hover : p.panel),
+          borderRadius: BorderRadius.circular(Radii.sm),
+          border: Border.all(
+            color: selected ? p.text : p.lineStrong,
+            width: hairline,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontFamily: monoFamily,
+            fontFamilyFallback: monoFallback,
+            fontSize: 12,
+            color: selected ? p.canvas : p.text,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Text field that edits a provider-backed string.
 class _TextOption extends StatefulWidget {
   final String value;
-  final String label;
   final ValueChanged<String> onChanged;
+  final bool mono;
 
   const _TextOption({
     super.key,
     required this.value,
-    required this.label,
     required this.onChanged,
+    this.mono = false,
   });
 
   @override
@@ -575,10 +633,13 @@ class _TextOptionState extends State<_TextOption> {
   @override
   Widget build(BuildContext context) => TextField(
     controller: _c,
-    decoration: InputDecoration(
-      labelText: widget.label,
-      border: const OutlineInputBorder(),
-    ),
+    style: widget.mono
+        ? const TextStyle(
+            fontFamily: monoFamily,
+            fontFamilyFallback: [...monoFallback, ...sansFallback],
+            fontSize: 12.5,
+          )
+        : const TextStyle(fontSize: 13),
     onChanged: widget.onChanged,
   );
 }
