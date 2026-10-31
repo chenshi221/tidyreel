@@ -15,6 +15,20 @@ enum ConnStatus { connected, authFailed, offline }
 
 typedef ConnCheck = ({ConnStatus status, String? detail});
 
+/// Alist serves its web UI (not WebDAV) outside /dav, answering 404/405 there.
+/// Only then is "use /dav" worth suggesting; other servers mount anywhere.
+bool _looksLikeAlistWithoutDav(ConnectionConfig? c, StorageException e) {
+  if (c?.type != ConnectionType.webdav) return false;
+  final uri = Uri.tryParse(c!.endpoint);
+  if (uri == null) return false;
+  final path = uri.path.replaceAll(RegExp(r'/+$'), '');
+  if (path.endsWith('/dav')) return false;
+  // Network errors (no HTTP status) mean unreachable: /dav won't help.
+  final status = RegExp(r'HTTP (\d+)').firstMatch(e.message)?.group(1);
+  if (status == null) return false;
+  return status == '405' || status == '404' || uri.port == 5244;
+}
+
 /// Turns a ping failure into a status plus a hint the user can act on.
 ConnCheck describeConnectionError(ConnectionConfig? c, Object e) {
   if (e is StorageException) {
@@ -24,13 +38,10 @@ ConnCheck describeConnectionError(ConnectionConfig? c, Object e) {
         detail: '用户名或密码错误（区分大小写）：${e.message}',
       );
     }
-    final noDav =
-        c?.type == ConnectionType.webdav &&
-        !c!.endpoint.replaceAll(RegExp(r'/+$'), '').endsWith('/dav');
     return (
       status: ConnStatus.offline,
-      detail: noDav
-          ? '${e.message}\n提示：Alist/OpenList 的 WebDAV 地址要以 /dav 结尾，或把类型改成 Alist'
+      detail: _looksLikeAlistWithoutDav(c, e)
+          ? '${e.message}\n提示：这看起来是 Alist / OpenList，它的 WebDAV 路径是 /dav；也可以把类型改成 Alist'
           : e.message,
     );
   }

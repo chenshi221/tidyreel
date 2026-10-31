@@ -57,15 +57,22 @@ void main() {
   });
 
   // Non-/dav mounts: server root, a nested path, Chinese + space, full-URL hrefs.
-  for (final (label, mount, endpointPath, absolute) in [
-    ('root', '', '', false),
-    ('root, trailing slash', '', '/', false),
-    ('nested', '/remote.php/webdav', '/remote.php/webdav', false),
-    ('unicode', '/网盘 1', '/网盘 1/', true),
+  // `redirect`: Apache-style 301 for collections without a trailing slash.
+  for (final (label, mount, endpointPath, absolute, redirect) in [
+    ('root', '', '', false, false),
+    ('root, trailing slash', '', '/', false, false),
+    ('nested', '/remote.php/webdav', '/remote.php/webdav', false, false),
+    ('unicode', '/网盘 1', '/网盘 1/', true, false),
+    ('apache-style redirects', '/webdav', '/webdav', false, true),
   ]) {
     storageContract('WebDAV mount $label', (files) async {
       final server = await MockServer.start(
-        MockWebDav(files, mount: mount, absoluteHrefs: absolute).handle,
+        MockWebDav(
+          files,
+          mount: mount,
+          absoluteHrefs: absolute,
+          redirectCollections: redirect,
+        ).handle,
       );
       addTearDown(server.close);
       return createBackend(

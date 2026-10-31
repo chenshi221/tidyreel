@@ -177,10 +177,15 @@ class MockWebDav {
   final String mount;
   final bool absoluteHrefs;
 
+  /// Like Apache / nginx: collections addressed without a trailing slash get
+  /// a 301 to the slashed URL.
+  final bool redirectCollections;
+
   MockWebDav(
     Map<String, int> files, {
     this.mount = '/dav',
     this.absoluteHrefs = false,
+    this.redirectCollections = false,
   }) : tree = MockTree(files);
 
   Uri? _origin;
@@ -228,6 +233,12 @@ class MockWebDav {
     _origin = req.requestedUri;
     final path = _local(req.requestedUri);
     if (path == null) return Response.notFound('');
+    if (redirectCollections &&
+        req.method == 'PROPFIND' &&
+        tree.isDir(path) &&
+        !req.requestedUri.path.endsWith('/')) {
+      return Response(301, headers: {'location': '${req.requestedUri.path}/'});
+    }
     switch (req.method) {
       case 'PROPFIND':
         if (!tree.nodes.containsKey(path)) return Response.notFound('');
