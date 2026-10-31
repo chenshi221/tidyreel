@@ -23,7 +23,10 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.widgetWithText(Center, label), findsOneWidget);
+      expect(
+        tester.widget<Text>(find.byKey(const ValueKey('page-title'))).data,
+        label,
+      );
     }
   });
 
