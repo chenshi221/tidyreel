@@ -5,66 +5,18 @@ import '../../data/providers.dart';
 import '../../widgets/common.dart';
 import '../settings/settings_providers.dart';
 
-/// Editable copy of [connectionsProvider] (add / edit / delete / favorites).
-/// TODO(integration): persist in the app database.
-class ConnectionsEditor extends Notifier<List<ConnectionConfig>> {
-  @override
-  List<ConnectionConfig> build() => ref.read(connectionsProvider);
+export '../../data/providers.dart'
+    show connectionsProvider, connectionPasswordsProvider;
 
-  void upsert(ConnectionConfig c) {
-    final i = state.indexWhere((e) => e.id == c.id);
-    state = i < 0
-        ? [...state, c]
-        : [for (final e in state) e.id == c.id ? c : e];
-  }
-
-  void remove(ConnectionId id) => state = [
-    for (final e in state)
-      if (e.id != id) e,
-  ];
-
-  void toggleFavorite(ConnectionId id, String path) {
-    final c = state.firstWhere((e) => e.id == id);
-    final favs = c.favorites.contains(path)
-        ? [
-            for (final f in c.favorites)
-              if (f != path) f,
-          ]
-        : [...c.favorites, path];
-    upsert(
-      ConnectionConfig(
-        id: c.id,
-        name: c.name,
-        type: c.type,
-        endpoint: c.endpoint,
-        username: c.username,
-        libraryRoot: c.libraryRoot,
-        favorites: favs,
-      ),
-    );
-  }
-}
-
-final connectionsEditorProvider =
-    NotifierProvider<ConnectionsEditor, List<ConnectionConfig>>(
-      ConnectionsEditor.new,
-    );
-
-/// Passwords live in memory only.
-/// TODO(integration): move to flutter_secure_storage.
-final connectionPasswordsProvider =
-    NotifierProvider<Val<Map<ConnectionId, String>>, Map<ConnectionId, String>>(
-      () => Val(const {}),
-    );
+/// Single source of truth lives in the data layer (persisted).
+final connectionsEditorProvider = connectionsProvider;
 
 enum ConnStatus { connected, authFailed, offline }
 
-/// TODO(integration): build the backend from the connection's own config.
-/// For now every connection pings the shared demo backend.
 final connectionStatusProvider =
     FutureProvider.family<ConnStatus, ConnectionId>((ref, id) async {
       try {
-        await ref.watch(demoBackendProvider).ping();
+        await ref.watch(backendForProvider)(id).ping();
         return ConnStatus.connected;
       } on StorageException catch (e) {
         return e.code == StorageErrorCode.unauthorized
@@ -125,13 +77,15 @@ final browserModeProvider = NotifierProvider<_ModeNotifier, OrganizeMode>(
   _ModeNotifier.new,
 );
 
-/// Hook for the 只看未整理的 filter. TODO(integration): call
-/// `HistoryStore.isOrganized(connection, path)` (and the "name already matches
-/// the naming rules" check). Until then nothing counts as organized.
-final isOrganizedProvider = Provider<Future<bool> Function(String path)>(
-  (ref) =>
-      (path) async => false,
-);
+/// 只看未整理的: a path counts as organized once a done op produced it.
+/// shortcut: doesn't yet check "name already matches the naming rules"; add when
+/// users report already-tidy folders showing up.
+final isOrganizedProvider = Provider<Future<bool> Function(String path)>((ref) {
+  final conn = ref.watch(openConnectionProvider);
+  final history = ref.watch(historyProvider);
+  return (path) async =>
+      conn != null && await history.isOrganized(conn.id, path);
+});
 
 /// Entries of the current folder after search / filter / sort.
 final browserEntriesProvider = FutureProvider.autoDispose<List<RemoteEntry>>((
@@ -141,7 +95,9 @@ final browserEntriesProvider = FutureProvider.autoDispose<List<RemoteEntry>>((
   final q = ref.watch(browserSearchProvider).trim().toLowerCase();
   final sort = ref.watch(browserSortProvider);
   final onlyNew = ref.watch(onlyUnorganizedProvider);
-  var list = await ref.watch(demoBackendProvider).list(dir);
+  final conn = ref.watch(openConnectionProvider);
+  if (conn == null) return const [];
+  var list = await ref.watch(backendForProvider)(conn.id).list(dir);
   if (q.isNotEmpty) {
     list = list.where((e) => e.name.toLowerCase().contains(q)).toList();
   }

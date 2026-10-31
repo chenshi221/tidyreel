@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'app.dart';
+import 'data/bootstrap.dart';
+import 'data/providers.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -19,5 +21,11 @@ Future<void> main() async {
       await windowManager.focus();
     },
   );
-  runApp(const ProviderScope(child: TidyreelApp()));
+  final boot = await Bootstrap.open();
+  runApp(
+    ProviderScope(
+      overrides: [bootstrapProvider.overrideWithValue(boot)],
+      child: const TidyreelApp(),
+    ),
+  );
 }

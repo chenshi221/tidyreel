@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
+import '../../data/providers.dart';
 import '../../widgets/common.dart';
 import 'settings_providers.dart';
 
@@ -33,11 +34,20 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   void _set(AppSettings Function(AppSettings) f) =>
       ref.read(settingsProvider.notifier).update(f);
 
-  void _testConnection() {
-    final msg = _key.text.trim().isEmpty
-        ? '请先填写 TMDB API Key'
-        : '连接测试尚未接入（等待 TMDB 模块集成）';
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  Future<void> _testConnection() async {
+    final messenger = ScaffoldMessenger.of(context);
+    String msg;
+    if (_key.text.trim().isEmpty) {
+      msg = '请先填写 TMDB API Key';
+    } else {
+      try {
+        final hits = await ref.read(metadataProvider).search('Inception');
+        msg = hits.isEmpty ? '已连接，但没有搜到结果' : '连接成功：找到「${hits.first.title}」';
+      } catch (e) {
+        msg = '连接失败：$e';
+      }
+    }
+    messenger.showSnackBar(SnackBar(content: Text(msg)));
   }
 
   @override

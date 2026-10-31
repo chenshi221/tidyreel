@@ -83,8 +83,8 @@ void main() {
     expect(c.read(themeModeProvider), ThemeMode.dark);
 
     await tester.tap(find.text('测试连接'));
-    await tester.pump();
-    expect(find.textContaining('连接测试尚未接入'), findsOneWidget);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('连接成功：找到「盗梦空间」'), findsOneWidget);
     expect(find.textContaining('基于 mnamer (MIT)'), findsOneWidget);
   });
 }

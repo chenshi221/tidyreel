@@ -130,8 +130,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                   controller: _user,
                   decoration: const InputDecoration(labelText: '用户名'),
                 ),
-                // TODO(integration): hand this to flutter_secure_storage; it is
-                // only kept in memory (connectionPasswordsProvider) for now.
+                // Saved to the keychain via connectionPasswordsProvider.
                 TextField(
                   controller: _password,
                   obscureText: true,
