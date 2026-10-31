@@ -2,6 +2,9 @@ import '../model/ids.dart';
 import '../model/plan.dart';
 import '../model/task.dart';
 
+export 'default_task_manager.dart';
+export 'task_store.dart';
+
 /// Owner: Agent E. Orchestrates list -> recognize -> review -> plan -> execute
 /// for several concurrent tasks (PLAN §1). The UI talks only to this.
 abstract interface class TaskManager {
