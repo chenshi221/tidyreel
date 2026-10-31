@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tidyreel/features/review/review_page.dart';
+import 'package:tidyreel/ui/widgets.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
 import 'helpers.dart';
@@ -29,7 +30,10 @@ void main() {
     expect(find.text('可整理 (2)'), findsOneWidget);
     expect(find.text('待手动识别 (1)'), findsOneWidget);
     expect(find.text('异兽魔都'), findsWidgets);
-    expect(find.text('本地 2 季 23 集 / TMDB 2 季 23 集'), findsOneWidget);
+    expect(
+      find.text('本地 2 季 23 集 / TMDB 2 季 23 集'),
+      findsWidgets,
+    ); // list card + header
     expect(find.text('第 1 季 (12/12)'), findsOneWidget);
     expect(find.text('第 2 季 (11/11)'), findsOneWidget);
     // new name on top, original below
@@ -128,5 +132,34 @@ void main() {
     await tester.tap(find.text('执行'));
     await tester.pumpAndSettle();
     expect(find.text('ROUTE /tasks'), findsOneWidget);
+  });
+
+  testWidgets('header, TMDB episode titles and missing-episode rows', (
+    tester,
+  ) async {
+    final (tm, id) = await open(tester);
+    expect(find.byKey(const ValueKey('work-header')), findsOneWidget);
+    expect(find.textContaining('开曼'), findsOneWidget); // synopsis
+    expect(find.text('8.1'), findsWidgets); // rating
+    expect(find.text('第 1 话'), findsOneWidget); // episode title from TMDB
+    expect(find.byKey(const ValueKey('missing-1-1')), findsNothing);
+
+    // Unticking E01 leaves a hole TMDB knows about.
+    final row = find.ancestor(
+      of: find.text('[Sub] Dorohedoro S01E01 [1080p].mkv'),
+      matching: find.byType(Hoverable),
+    );
+    await tester.tap(
+      find.descendant(of: row.first, matching: find.byType(Checkbox)).first,
+    );
+    await tester.pumpAndSettle();
+    expect(
+      (await tm.review(
+        id,
+      ) as TaskReview).decisions[_g1]!.overrides[_file]!.ignore,
+      isTrue,
+    );
+    expect(find.byKey(const ValueKey('missing-1-1')), findsOneWidget);
+    expect(find.text('本地缺失'), findsOneWidget);
   });
 }

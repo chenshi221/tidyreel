@@ -44,7 +44,13 @@ class FakeMetadataProvider implements MetadataProvider {
         .episodeCount;
     return [
       for (var e = 1; e <= count; e++)
-        Episode(season: season, number: e, title: '第 $e 集'),
+        Episode(
+          season: season,
+          number: e,
+          title: Demo.episodeTitle(tmdbId, season, e),
+          airDate: DateTime(2020, 1, 12).add(Duration(days: 7 * (e - 1))),
+          runtimeMinutes: 24,
+        ),
     ];
   }
 

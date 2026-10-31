@@ -11,7 +11,9 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:tidyreel/app.dart';
+import 'package:tidyreel/shell/sidebar.dart';
 import 'package:tidyreel/data/providers.dart';
 import 'package:tidyreel/data/settings.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
@@ -111,7 +113,7 @@ void main() {
   testWidgets('screens', skip: _out == null, (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
     final c = await _pumpApp(tester);
-    await tester.runAsync(
+    final taskId = await tester.runAsync(
       () => c.read(taskManagerProvider).submit(
         const ConnectionId('demo-alist'),
         ['/下载/完成'],
@@ -159,6 +161,14 @@ void main() {
     await _shot(tester, '07-tasks-current');
     await tester.tap(find.byKey(const ValueKey('nav-设置')));
     await _shot(tester, '08-settings-current');
+
+    final router = GoRouter.of(tester.element(find.byType(Sidebar)));
+    router.go('/tasks/${taskId!.value}/review');
+    await _settleTasks(tester);
+    await _shot(tester, '09-review');
+    await tester.tap(find.text('异兽魔都').first);
+    await _settleTasks(tester);
+    await _shot(tester, '10-review-show');
     debugDefaultTargetPlatformOverride = null;
   });
 }

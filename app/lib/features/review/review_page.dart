@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -5,6 +6,8 @@ import 'package:go_router/go_router.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
 import '../../data/providers.dart';
+import '../../ui/tokens.dart';
+import '../../ui/widgets.dart';
 import '../../widgets/common.dart';
 import 'review_logic.dart';
 import 'review_panes.dart';
@@ -19,9 +22,9 @@ class ReviewPage extends ConsumerStatefulWidget {
   ConsumerState<ReviewPage> createState() => _ReviewPageState();
 }
 
-class _ReviewPageState extends ConsumerState<ReviewPage>
-    with SingleTickerProviderStateMixin {
-  late final _tabs = TabController(length: 2, vsync: this);
+class _ReviewPageState extends ConsumerState<ReviewPage> {
+  /// 0 = 可整理, 1 = 待手动识别.
+  var _tab = 0;
   final _searchFocus = FocusNode();
   final _search = TextEditingController();
   TaskReview? _review;
@@ -36,13 +39,11 @@ class _ReviewPageState extends ConsumerState<ReviewPage>
   @override
   void initState() {
     super.initState();
-    _tabs.addListener(() => setState(() => _selectFirstVisible()));
     _load();
   }
 
   @override
   void dispose() {
-    _tabs.dispose();
     _searchFocus.dispose();
     _search.dispose();
     super.dispose();
@@ -80,7 +81,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage>
     ];
   }
 
-  List<MediaGroup> get _visible => _groups(matched: _tabs.index == 0);
+  List<MediaGroup> get _visible => _groups(matched: _tab == 0);
 
   void _selectFirstVisible() {
     final v = _visible;
@@ -207,25 +208,44 @@ class _ReviewPageState extends ConsumerState<ReviewPage>
   @override
   Widget build(BuildContext context) {
     final r = _review;
+    final paths = ref
+        .watch(tasksProvider)
+        .asData
+        ?.value
+        .where((t) => t.id == _id)
+        .firstOrNull
+        ?.paths;
     return PageScaffold(
-      title: '识别结果 · ${widget.taskId}',
+      title: '识别结果',
+      subtitle: [
+        widget.taskId,
+        if (paths != null && paths.isNotEmpty) paths.join('，'),
+      ].join('  ·  '),
       leading: IconButton(
         tooltip: '返回任务',
-        icon: const Icon(Icons.arrow_back),
+        icon: const Icon(CupertinoIcons.chevron_left),
         onPressed: () => context.go('/tasks'),
       ),
       child: _error != null
-          ? Center(child: Text('无法读取识别结果：$_error'))
+          ? EmptyState(
+              icon: CupertinoIcons.exclamationmark_triangle,
+              title: '无法读取识别结果',
+              message: '$_error',
+            )
           : r == null
           ? const Center(child: CircularProgressIndicator())
           : Focus(
               autofocus: true,
               onKeyEvent: _onKey,
-              child: Column(
+              child: Stack(
                 children: [
-                  const Divider(height: 1),
-                  Expanded(child: _body(r)),
-                  _bottomBar(r),
+                  Positioned.fill(child: _body(r)),
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 18,
+                    child: Center(child: _bottomBar(r)),
+                  ),
                 ],
               ),
             ),
@@ -234,85 +254,109 @@ class _ReviewPageState extends ConsumerState<ReviewPage>
 
   Widget _body(TaskReview r) {
     final g = _selectedGroup;
-    return Row(
-      children: [
-        SizedBox(
-          width: 360,
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
-                child: TextField(
-                  key: const ValueKey('review-search'),
-                  controller: _search,
-                  focusNode: _searchFocus,
-                  decoration: const InputDecoration(
-                    isDense: true,
-                    prefixIcon: Icon(Icons.search),
-                    hintText: '搜索作品 (⌘F)',
-                    border: OutlineInputBorder(),
+    final p = Palette.of(context);
+    final hairlineSide = BorderSide(color: p.line, width: hairline);
+    return DecoratedBox(
+      decoration: BoxDecoration(border: Border(top: hairlineSide)),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            width: 312,
+            decoration: BoxDecoration(
+              color: p.sidebar.withValues(alpha: 0.5),
+              border: Border(right: hairlineSide),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+                  child: TextField(
+                    key: const ValueKey('review-search'),
+                    controller: _search,
+                    focusNode: _searchFocus,
+                    style: const TextStyle(fontSize: 13),
+                    decoration: const InputDecoration(
+                      prefixIcon: Icon(CupertinoIcons.search, size: 14),
+                      hintText: '搜索作品  ⌘F',
+                    ),
+                    onChanged: (_) => setState(_selectFirstVisible),
                   ),
-                  onChanged: (_) => setState(_selectFirstVisible),
                 ),
-              ),
-              TabBar(
-                controller: _tabs,
-                tabs: [
-                  Tab(text: '可整理 (${_groups(matched: true).length})'),
-                  Tab(text: '待手动识别 (${_groups(matched: false).length})'),
-                ],
-              ),
-              Expanded(
-                child: GroupList(
-                  groups: _visible,
-                  review: r,
-                  selected: _selected,
-                  onSelect: (id) => setState(() {
-                    _selected = id;
-                    _detailTab = folderTab - 1;
-                  }),
-                  onCheck: (id, v) =>
-                      _update(id, _decisionOf(id).copyWith(selected: v)),
-                  onPick: (grp, c) =>
-                      _update(grp.id, _decisionOf(grp.id).copyWith(match: c)),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                  child: Segmented<int>(
+                    options: {
+                      0: '可整理 (${_groups(matched: true).length})',
+                      1: '待手动识别 (${_groups(matched: false).length})',
+                    },
+                    value: _tab,
+                    onChanged: (v) => setState(() {
+                      _tab = v;
+                      _selectFirstVisible();
+                    }),
+                  ),
                 ),
-              ),
-            ],
+                Expanded(
+                  child: GroupList(
+                    groups: _visible,
+                    review: r,
+                    selected: _selected,
+                    onSelect: (id) => setState(() {
+                      _selected = id;
+                      _detailTab = folderTab - 1;
+                    }),
+                    onCheck: (id, v) =>
+                        _update(id, _decisionOf(id).copyWith(selected: v)),
+                    onPick: (grp, c) =>
+                        _update(grp.id, _decisionOf(grp.id).copyWith(match: c)),
+                  ),
+                ),
+                const SizedBox(height: 64),
+              ],
+            ),
           ),
-        ),
-        const VerticalDivider(width: 1),
-        Expanded(
-          child: g == null
-              ? const Center(child: Text('选择左侧的作品查看明细'))
-              : DetailPane(
-                  group: g,
-                  decision: r.decisions[g.id],
-                  review: r,
-                  tab: _detailTab,
-                  onTab: (t) => setState(() => _detailTab = t),
-                  onEdit: (row) => _editRow(g, row),
-                  onCheck: (row, v) => _checkRow(g, row, v),
-                ),
-        ),
-        const VerticalDivider(width: 1),
-        SizedBox(
-          width: 300,
-          child: g == null
-              ? const SizedBox.shrink()
-              : ActionPane(
-                  key: ValueKey(g.id),
-                  group: g,
-                  decision: _decisionOf(g.id),
-                  onChange: (d) => _update(g.id, d),
-                  onCorrect: () => _correct(g),
-                ),
-        ),
-      ],
+          Expanded(
+            child: g == null
+                ? const EmptyState(
+                    icon: CupertinoIcons.rectangle_stack,
+                    title: '选择左侧的作品查看明细',
+                  )
+                : Padding(
+                    padding: const EdgeInsets.only(top: 12, bottom: 64),
+                    child: DetailPane(
+                      group: g,
+                      decision: r.decisions[g.id],
+                      review: r,
+                      tab: _detailTab,
+                      onTab: (t) => setState(() => _detailTab = t),
+                      onEdit: (row) => _editRow(g, row),
+                      onCheck: (row, v) => _checkRow(g, row, v),
+                    ),
+                  ),
+          ),
+          Container(
+            width: 284,
+            decoration: BoxDecoration(border: Border(left: hairlineSide)),
+            padding: const EdgeInsets.only(bottom: 64),
+            child: g == null
+                ? const SizedBox.shrink()
+                : ActionPane(
+                    key: ValueKey(g.id),
+                    group: g,
+                    decision: _decisionOf(g.id),
+                    onChange: (d) => _update(g.id, d),
+                    onCorrect: () => _correct(g),
+                  ),
+          ),
+        ],
+      ),
     );
   }
 
   Widget _bottomBar(TaskReview r) {
-    final scheme = Theme.of(context).colorScheme;
+    final p = Palette.of(context);
     final conflicts = r.preview.conflicts.length;
     final mode = ref
         .watch(tasksProvider)
@@ -321,44 +365,60 @@ class _ReviewPageState extends ConsumerState<ReviewPage>
         .where((t) => t.id == _id)
         .map((t) => t.mode)
         .firstOrNull;
-    return Material(
-      elevation: 3,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-        child: Row(
-          children: [
-            SegmentedButton<OrganizeMode>(
-              segments: const [
-                ButtonSegment(value: OrganizeMode.inPlace, label: Text('原地整理')),
-                ButtonSegment(
-                  value: OrganizeMode.moveToLibrary,
-                  label: Text('移动到媒体库'),
-                ),
-              ],
-              selected: {mode ?? OrganizeMode.inPlace},
-              onSelectionChanged: (v) async {
-                final nr = await _tm.setMode(_id, v.first);
-                if (mounted) setState(() => _review = nr);
-              },
+    final ops = r.preview.ops.where((o) => o.selected).length;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
+      decoration: BoxDecoration(
+        color: p.panel,
+        borderRadius: BorderRadius.circular(Radii.xl),
+        border: Border.all(color: p.line, width: hairline),
+        boxShadow: floatShadow(),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Segmented<OrganizeMode>(
+            options: const {
+              OrganizeMode.inPlace: '原地整理',
+              OrganizeMode.moveToLibrary: '移动到媒体库',
+            },
+            value: mode ?? OrganizeMode.inPlace,
+            onChanged: (v) async {
+              final nr = await _tm.setMode(_id, v);
+              if (mounted) setState(() => _review = nr);
+            },
+          ),
+          const SizedBox(width: 16),
+          Icon(
+            conflicts == 0
+                ? CupertinoIcons.checkmark_seal_fill
+                : CupertinoIcons.exclamationmark_triangle_fill,
+            size: 14,
+            color: conflicts == 0 ? p.success : p.danger,
+          ),
+          const SizedBox(width: 6),
+          Text(
+            conflicts == 0 ? '没有冲突' : '$conflicts 处冲突，需处理后才能执行',
+            key: const ValueKey('conflict-count'),
+            style: TextStyle(
+              fontSize: 12.5,
+              color: conflicts == 0 ? p.textMuted : p.danger,
+              fontWeight: conflicts == 0 ? null : FontWeight.w600,
             ),
-            const SizedBox(width: 24),
-            Text(
-              conflicts == 0 ? '没有冲突' : '$conflicts 处冲突，需处理后才能执行',
-              key: const ValueKey('conflict-count'),
-              style: TextStyle(
-                color: conflicts == 0 ? scheme.onSurfaceVariant : scheme.error,
-                fontWeight: conflicts == 0 ? null : FontWeight.bold,
-              ),
-            ),
-            const Spacer(),
-            FilledButton.icon(
-              key: const ValueKey('execute-button'),
-              onPressed: conflicts == 0 ? _execute : null,
-              icon: const Icon(Icons.play_arrow),
-              label: const Text('执行任务 (⌘↩)'),
-            ),
-          ],
-        ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            '· $ops 项操作',
+            style: TextStyle(fontSize: 12.5, color: p.textFaint),
+          ),
+          const SizedBox(width: 18),
+          FilledButton.icon(
+            key: const ValueKey('execute-button'),
+            onPressed: conflicts == 0 ? _execute : null,
+            icon: const Icon(CupertinoIcons.play_fill, size: 12),
+            label: const Text('执行任务  ⌘↩'),
+          ),
+        ],
       ),
     );
   }

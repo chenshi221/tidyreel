@@ -118,3 +118,49 @@ String seasonCountLabel(MediaGroup g, List<ReviewRow> rows, int season) {
   final tmdb = g.show?.seasons.where((s) => s.number == season).firstOrNull;
   return tmdb == null ? '$local' : '$local/${tmdb.episodeCount}';
 }
+
+const _parser = RuleBasedParser();
+
+/// Season/episode the file ends up as: parsed back from the planned new name
+/// (so strategies and offsets are reflected), falling back to the source.
+EpisodeRef? targetRef(ReviewRow r) {
+  final name = r.newName;
+  if (name != null) {
+    final p = _parser.parse(name);
+    final e = p.episodes.firstOrNull;
+    if (p.season != null && e != null) return EpisodeRef(p.season!, e);
+  }
+  final e = episodeOf(r.file, r.override);
+  if (r.season == noSeason || e == null) return null;
+  return EpisodeRef(r.season, e);
+}
+
+/// TMDB episode numbers of [season] with no local video, when local numbering
+/// maps 1:1 onto TMDB (default strategy, no offset); empty otherwise.
+List<int> missingEpisodes(
+  MediaGroup g,
+  GroupDecision? d,
+  List<ReviewRow> rows,
+  int season,
+) {
+  if (d != null &&
+      (d.strategy != SeasonStrategy.asParsed ||
+          d.episodeOffset != 0 ||
+          d.episodeGroupId != null)) {
+    return const [];
+  }
+  final total = g.show?.seasons
+      .where((s) => s.number == season)
+      .firstOrNull
+      ?.episodeCount;
+  if (total == null || season == noSeason) return const [];
+  final have = {
+    for (final r in rows)
+      if (r.season == season && r.file.role == FileRole.video && !r.ignored)
+        ?episodeOf(r.file, r.override),
+  };
+  return [
+    for (var e = 1; e <= total; e++)
+      if (!have.contains(e)) e,
+  ];
+}

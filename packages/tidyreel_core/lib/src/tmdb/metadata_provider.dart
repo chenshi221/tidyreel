@@ -154,6 +154,9 @@ class TmdbProvider implements MetadataProvider {
           number: e['episode_number'] as int,
           title: _str(e['name']),
           airDate: _date(e['air_date']),
+          stillPath: _str(e['still_path']),
+          overview: _str(e['overview']),
+          runtimeMinutes: e['runtime'] as int?,
         ),
     ];
   }
@@ -245,6 +248,9 @@ class TmdbProvider implements MetadataProvider {
       posterPath: _str(r['poster_path']),
       originCountry: country,
       voteAverage: (r['vote_average'] as num?)?.toDouble(),
+      overview: _str(r['overview']),
+      backdropPath: _str(r['backdrop_path']),
+      genres: [for (final g in _list(r['genres'])) ?_str(g['name'])],
     );
   }
 }

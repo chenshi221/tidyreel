@@ -582,7 +582,7 @@ void main() {
           naming: NamingProfile(tv: const NamingOptions(episodeTitle: true)),
         ),
       );
-      expect(fileOps(on).single.dst, endsWith('$name.S01E02.第 2 集.mkv'));
+      expect(fileOps(on).single.dst, endsWith('$name.S01E02.第 2 话.mkv'));
     });
 
     test('multi-language naming profile and tmdb tag', () async {
