@@ -13,17 +13,37 @@ final connectionsEditorProvider = connectionsProvider;
 
 enum ConnStatus { connected, authFailed, offline }
 
+/// Status plus the backend's error text, so the card can say *why* it failed.
 final connectionStatusProvider =
-    FutureProvider.family<ConnStatus, ConnectionId>((ref, id) async {
+    FutureProvider.family<({ConnStatus status, String? detail}), ConnectionId>((
+      ref,
+      id,
+    ) async {
       try {
         await ref.watch(backendForProvider)(id).ping();
-        return ConnStatus.connected;
+        return (status: ConnStatus.connected, detail: null);
       } on StorageException catch (e) {
-        return e.code == StorageErrorCode.unauthorized
-            ? ConnStatus.authFailed
-            : ConnStatus.offline;
-      } catch (_) {
-        return ConnStatus.offline;
+        if (e.code == StorageErrorCode.unauthorized) {
+          return (
+            status: ConnStatus.authFailed,
+            detail: '用户名或密码错误（区分大小写）：${e.message}',
+          );
+        }
+        final c = ref
+            .watch(connectionsProvider)
+            .where((c) => c.id == id)
+            .firstOrNull;
+        final noDav =
+            c?.type == ConnectionType.webdav &&
+            !c!.endpoint.replaceAll(RegExp(r'/+$'), '').endsWith('/dav');
+        return (
+          status: ConnStatus.offline,
+          detail: noDav
+              ? '${e.message}\n提示：Alist/OpenList 的 WebDAV 地址要以 /dav 结尾，或把类型改成 Alist'
+              : e.message,
+        );
+      } catch (e) {
+        return (status: ConnStatus.offline, detail: '$e');
       }
     });
 

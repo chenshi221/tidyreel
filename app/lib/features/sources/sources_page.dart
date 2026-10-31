@@ -91,7 +91,8 @@ class _ConnectionCard extends ConsumerWidget {
     final c = connection;
     final status = ref.watch(connectionStatusProvider(c.id));
     final scheme = Theme.of(context).colorScheme;
-    final (label, color) = switch (status.asData?.value) {
+    final detail = status.asData?.value.detail;
+    final (label, color) = switch (status.asData?.value.status) {
       ConnStatus.connected => ('已连接', Colors.green),
       ConnStatus.authFailed => ('认证失败', scheme.error),
       ConnStatus.offline => ('离线', scheme.outline),
@@ -155,6 +156,14 @@ class _ConnectionCard extends ConsumerWidget {
                     Text(label, style: TextStyle(color: color)),
                   ],
                 ),
+                if (detail != null) ...[
+                  const SizedBox(height: 4),
+                  SelectableText(
+                    detail,
+                    maxLines: 4,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
               ],
             ),
           ),

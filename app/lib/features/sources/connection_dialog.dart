@@ -119,16 +119,26 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                 controller: _endpoint,
                 decoration: InputDecoration(
                   labelText: local ? '文件夹路径' : '服务器地址',
-                  hintText: local
-                      ? '/Users/me/Downloads'
-                      : 'http://nas.local:5244',
+                  hintText: switch (_type) {
+                    ConnectionType.local => '/Users/me/Downloads',
+                    ConnectionType.alist => 'http://127.0.0.1:5244',
+                    ConnectionType.webdav => 'http://127.0.0.1:5244/dav',
+                  },
+                  helperText: _type == ConnectionType.webdav
+                      ? 'Alist/OpenList 的 WebDAV 地址要以 /dav 结尾；用 Alist 类型更快'
+                      : null,
                   errorText: required(_endpoint),
                 ),
               ),
               if (!local) ...[
                 TextField(
                   controller: _user,
-                  decoration: const InputDecoration(labelText: '用户名'),
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  decoration: const InputDecoration(
+                    labelText: '用户名',
+                    helperText: '区分大小写，Alist 默认是 admin',
+                  ),
                 ),
                 // Saved to the keychain via connectionPasswordsProvider.
                 TextField(
