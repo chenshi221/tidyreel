@@ -1,0 +1,28 @@
+{
+  "id": "5acf93e50e0a26080e0006ad",
+  "name": "按故事篇章",
+  "type": 6,
+  "description": "",
+  "episode_count": 4,
+  "group_count": 2,
+  "groups": [
+    {
+      "id": "g2",
+      "name": "第二篇",
+      "order": 2,
+      "episodes": [
+        {"episode_number": 2, "season_number": 2, "order": 1, "name": "d"},
+        {"episode_number": 1, "season_number": 2, "order": 0, "name": "c"}
+      ]
+    },
+    {
+      "id": "g1",
+      "name": "第一篇",
+      "order": 1,
+      "episodes": [
+        {"episode_number": 1, "season_number": 1, "order": 0, "name": "a"},
+        {"episode_number": 2, "season_number": 1, "order": 1, "name": "b"}
+      ]
+    }
+  ]
+}

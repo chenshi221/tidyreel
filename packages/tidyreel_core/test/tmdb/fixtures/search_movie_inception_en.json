@@ -1,0 +1,37 @@
+{
+  "page": 1,
+  "results": [
+    {
+      "adult": false,
+      "id": 64956,
+      "original_language": "en",
+      "original_title": "Inception: The Cobol Job",
+      "poster_path": "/cobol.jpg",
+      "release_date": "2010-12-07",
+      "title": "Inception: The Cobol Job",
+      "vote_average": 6.9
+    },
+    {
+      "adult": false,
+      "id": 27205,
+      "original_language": "en",
+      "original_title": "Inception",
+      "poster_path": "/xlaY2zyzMfkhk0HSC5VUwzoZPU1.jpg",
+      "release_date": "2010-07-15",
+      "title": "Inception",
+      "vote_average": 8.369
+    },
+    {
+      "adult": false,
+      "id": 700001,
+      "original_language": "en",
+      "original_title": "Inception Point",
+      "poster_path": null,
+      "release_date": "2017-03-02",
+      "title": "Inception Point",
+      "vote_average": 5.0
+    }
+  ],
+  "total_pages": 1,
+  "total_results": 3
+}

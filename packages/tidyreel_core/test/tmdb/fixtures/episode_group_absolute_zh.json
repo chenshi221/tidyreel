@@ -1,0 +1,19 @@
+{
+  "id": "6bd0a4f61f1b37191f1117be",
+  "name": "绝对顺序",
+  "type": 2,
+  "episode_count": 3,
+  "group_count": 1,
+  "groups": [
+    {
+      "id": "abs",
+      "name": "绝对集数",
+      "order": 1,
+      "episodes": [
+        {"episode_number": 1, "season_number": 1, "order": 0},
+        {"episode_number": 2, "season_number": 1, "order": 1},
+        {"episode_number": 1, "season_number": 2, "order": 2}
+      ]
+    }
+  ]
+}
