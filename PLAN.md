@@ -123,7 +123,7 @@
 tidyreel/
 ├─ packages/
 │  └─ tidyreel_core/          # 纯 Dart，不依赖 Flutter，用 `dart test` 跑测试
-│     ├─ lib/src/model/       # 数据模型，用 freezed 生成
+│     ├─ lib/src/model/       # 数据模型（普通不可变类）
 │     ├─ lib/src/parser/      # 文件名解析
 │     ├─ lib/src/tmdb/        # TMDB 客户端和匹配
 │     ├─ lib/src/storage/     # 存储后端：Alist / WebDAV / Local
@@ -148,11 +148,12 @@ tidyreel/
 | 路由 | `go_router` |
 | HTTP | `dio` |
 | WebDAV | `webdav_client` |
-| 本地数据库（连接配置、历史、TMDB 缓存） | `drift` + `sqlite3_flutter_libs` |
+| 本地数据库（连接配置、历史、TMDB 缓存） | `drift`（新版自带 sqlite，不再需要 `sqlite3_flutter_libs`） |
 | 密钥存储（密码、token、API key） | `flutter_secure_storage` |
 | 选本地文件夹 | `file_selector` |
 | 窗口尺寸 | `window_manager` |
-| 数据模型 | `freezed` + `json_serializable` |
+| 数据模型 | core 里用普通的不可变类，不做代码生成；只有 `app/lib/data/` 里的 drift 用代码生成 |
+| 测试用的 mock 服务器 | `shelf`（只在开发时用） |
 
 ### 4.2 核心接口（第 0 阶段先定下来，之后各 Agent 只按接口写代码）
 
@@ -231,7 +232,7 @@ abstract interface class TaskManager {
 
 - 请求都带 `language=zh-CN`；搜不到时再用 `en-US` 搜一次；查询前去掉标点和年份。
 - 匹配打分：标题相似度（同时比较简繁和原名）+ 年份 ±1 + 类型是否一致 + 本地集数和 TMDB 集数是否吻合。
-- 缓存放在 drift，有效期 7 天；全局限速每秒 20 个请求。
+- 缓存 v1 先放内存（core 不依赖 drift），每次运行内有效；全局限速每秒 20 个请求。
 - 支持在设置里填 Base URL（代理地址）；API key 支持 v3 key 和 v4 read token 两种。
 
 ---

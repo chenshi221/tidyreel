@@ -1,0 +1,18 @@
+name: tidyreel_core
+description: Tidyreel core engine — parse, match, plan and execute media renames.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.13.3
+
+dependencies:
+  collection: ^1.19.1
+  dio: ^5.11.1
+  path: ^1.9.1
+  webdav_client: ^1.2.2
+
+dev_dependencies:
+  lints: ^6.0.0
+  shelf: ^1.4.3
+  test: ^1.25.6
