@@ -1,8 +1,10 @@
 import 'package:file_selector/file_selector.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
 import '../../ui/tokens.dart';
+import '../../ui/widgets.dart';
 import 'sources_providers.dart' show ConnCheck, ConnStatus;
 
 String connectionTypeLabel(ConnectionType t) => switch (t) {
@@ -12,9 +14,9 @@ String connectionTypeLabel(ConnectionType t) => switch (t) {
 };
 
 IconData connectionTypeIcon(ConnectionType t) => switch (t) {
-  ConnectionType.alist => Icons.cloud_outlined,
-  ConnectionType.webdav => Icons.dns_outlined,
-  ConnectionType.local => Icons.computer_outlined,
+  ConnectionType.alist => CupertinoIcons.cloud,
+  ConnectionType.webdav => CupertinoIcons.globe,
+  ConnectionType.local => CupertinoIcons.desktopcomputer,
 };
 
 class ConnectionDraft {
@@ -264,161 +266,154 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
     final theme = Theme.of(context);
     String? required(TextEditingController c) =>
         _showErrors && c.text.trim().isEmpty ? '必填' : null;
-    const gap = SizedBox(height: 14);
 
-    Widget label(String text) => Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: Text(text, style: theme.textTheme.titleSmall),
+    TextField field(
+      String key,
+      TextEditingController c, {
+      String? hint,
+      String? error,
+      bool obscure = false,
+      Widget? suffix,
+      ValueChanged<String>? onChanged,
+      TextInputType? keyboard,
+    }) => TextField(
+      key: ValueKey('field-$key'),
+      controller: c,
+      obscureText: obscure,
+      autocorrect: false,
+      enableSuggestions: false,
+      keyboardType: keyboard,
+      style: theme.textTheme.bodyMedium,
+      decoration: InputDecoration(
+        hintText: hint,
+        errorText: error,
+        suffixIcon: suffix,
+      ),
+      onChanged: onChanged,
     );
 
     final server = <Widget>[
-      label('服务器'),
-      Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 112,
-            child: DropdownButtonFormField<String>(
-              key: const ValueKey('scheme'),
-              initialValue: _scheme,
-              decoration: const InputDecoration(labelText: '协议'),
-              items: const [
-                DropdownMenuItem(value: 'http', child: Text('http')),
-                DropdownMenuItem(value: 'https', child: Text('https')),
-              ],
+      FormRow(
+        label: '服务器',
+        help: _type == ConnectionType.webdav
+            ? null
+            : 'Alist / OpenList 默认端口 5244',
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _SchemeMenu(
+              value: _scheme,
               onChanged: (v) => setState(() {
-                _scheme = v!;
+                _scheme = v;
                 _testResult = null;
               }),
             ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: TextField(
-              controller: _host,
-              autocorrect: false,
-              decoration: InputDecoration(
-                labelText: '主机 / IP',
-                hintText: '192.168.1.10 或 nas.local',
-                errorText: required(_host),
-              ),
-              onChanged: _onHostChanged,
-            ),
-          ),
-          const SizedBox(width: 8),
-          SizedBox(
-            width: 104,
-            child: TextField(
-              controller: _port,
-              keyboardType: TextInputType.number,
-              decoration: InputDecoration(
-                labelText: '端口',
-                hintText: _defaultPort,
-                errorText: _showErrors ? _portError() : null,
+            const SizedBox(width: 6),
+            Expanded(
+              child: field(
+                '主机',
+                _host,
+                hint: '主机名或 IP，如 192.168.1.10',
+                error: required(_host),
+                onChanged: _onHostChanged,
               ),
             ),
-          ),
-        ],
-      ),
-      if (_type == ConnectionType.webdav) ...[
-        gap,
-        TextField(
-          controller: _path,
-          autocorrect: false,
-          decoration: const InputDecoration(
-            labelText: '路径',
-            hintText: _davPath,
-            helperText: 'Alist / OpenList 的 WebDAV 填 /dav；其他 WebDAV 服务按实际路径填写',
-          ),
+            const SizedBox(width: 6),
+            Padding(
+              padding: const EdgeInsets.only(top: 7),
+              child: Text(':', style: TextStyle(color: p.textFaint)),
+            ),
+            const SizedBox(width: 6),
+            SizedBox(
+              width: 76,
+              child: field(
+                '端口',
+                _port,
+                hint: _defaultPort,
+                keyboard: TextInputType.number,
+                error: _showErrors ? _portError() : null,
+              ),
+            ),
+          ],
         ),
-      ],
-      const SizedBox(height: 8),
-      Row(
-        children: [
-          Icon(Icons.link, size: 14, color: p.textFaint),
-          const SizedBox(width: 6),
-          Expanded(
-            child: SelectableText(
-              _host.text.trim().isEmpty ? '填写主机后显示完整地址' : _endpoint,
-              key: const ValueKey('endpoint-preview'),
-              style: TextStyle(
-                fontFamily: monoFamily,
-                fontFamilyFallback: monoFallback,
-                fontSize: 12.5,
-                color: p.textMuted,
-              ),
-            ),
-          ),
-        ],
       ),
-      gap,
-      label('账号'),
-      Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: TextField(
-              controller: _user,
-              autocorrect: false,
-              enableSuggestions: false,
-              decoration: const InputDecoration(
-                labelText: '用户名',
-                helperText: '区分大小写',
-              ),
-            ),
+      if (_type == ConnectionType.webdav)
+        FormRow(
+          label: '路径',
+          help: 'Alist / OpenList 填 /dav；其他 WebDAV 服务按实际路径填写，可以留空',
+          child: field('路径', _path, hint: _davPath),
+        ),
+      FormRow(
+        label: '',
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+          decoration: BoxDecoration(
+            color: p.hover,
+            borderRadius: BorderRadius.circular(Radii.md),
           ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: TextField(
-              controller: _password,
-              obscureText: !_showPassword,
-              autocorrect: false,
-              enableSuggestions: false,
-              decoration: InputDecoration(
-                labelText: '密码',
-                helperText: '保存在系统钥匙串',
-                suffixIcon: IconButton(
-                  tooltip: _showPassword ? '隐藏密码' : '显示密码',
-                  iconSize: 18,
-                  icon: Icon(
-                    _showPassword
-                        ? Icons.visibility_off_outlined
-                        : Icons.visibility_outlined,
+          child: Row(
+            children: [
+              Icon(CupertinoIcons.link, size: 13, color: p.textFaint),
+              const SizedBox(width: 6),
+              Expanded(
+                child: SelectableText(
+                  _host.text.trim().isEmpty ? '填写主机后显示完整地址' : _endpoint,
+                  key: const ValueKey('endpoint-preview'),
+                  style: TextStyle(
+                    fontFamily: monoFamily,
+                    fontFamilyFallback: monoFallback,
+                    fontSize: 12,
+                    color: p.textMuted,
                   ),
-                  onPressed: () =>
-                      setState(() => _showPassword = !_showPassword),
                 ),
               ),
-            ),
+            ],
           ),
-        ],
+        ),
+      ),
+      const SizedBox(height: 6),
+      FormRow(
+        label: '用户名',
+        help: '区分大小写',
+        child: field('用户名', _user, hint: 'admin'),
+      ),
+      FormRow(
+        label: '密码',
+        help: '保存在系统钥匙串里',
+        child: field(
+          '密码',
+          _password,
+          obscure: !_showPassword,
+          suffix: IconButton(
+            tooltip: _showPassword ? '隐藏密码' : '显示密码',
+            iconSize: 15,
+            icon: Icon(
+              _showPassword ? CupertinoIcons.eye_slash : CupertinoIcons.eye,
+            ),
+            onPressed: () => setState(() => _showPassword = !_showPassword),
+          ),
+        ),
       ),
     ];
 
     final local = <Widget>[
-      label('文件夹'),
-      Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: TextField(
-              controller: _folder,
-              decoration: InputDecoration(
-                labelText: '文件夹路径',
-                hintText: '/Users/me/Downloads',
-                errorText: required(_folder),
+      FormRow(
+        label: '文件夹',
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: field(
+                '文件夹',
+                _folder,
+                hint: '/Users/me/Downloads',
+                error: required(_folder),
               ),
             ),
-          ),
-          const SizedBox(width: 8),
-          Padding(
-            padding: const EdgeInsets.only(top: 2),
-            child: OutlinedButton(
-              onPressed: _pickFolder,
-              child: const Text('选择…'),
-            ),
-          ),
-        ],
+            const SizedBox(width: 6),
+            OutlinedButton(onPressed: _pickFolder, child: const Text('选择…')),
+          ],
+        ),
       ),
     ];
 
@@ -429,123 +424,192 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
       _ => p.warning,
     };
 
-    return AlertDialog(
-      title: Text(widget.existing == null ? '添加连接' : '编辑连接'),
-      contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
-      content: SizedBox(
-        width: 500,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              SegmentedButton<ConnectionType>(
-                showSelectedIcon: false,
-                segments: [
-                  for (final t in ConnectionType.values)
-                    ButtonSegment(
-                      value: t,
-                      icon: Icon(connectionTypeIcon(t), size: 18),
-                      label: Text(connectionTypeLabel(t)),
-                    ),
-                ],
-                selected: {_type},
-                onSelectionChanged: (v) => _setType(v.first),
-              ),
-              const SizedBox(height: 6),
-              Text(switch (_type) {
-                ConnectionType.alist =>
-                  '通过 Alist / OpenList 的 API 连接，批量改名更快。端口默认 5244。',
-                ConnectionType.webdav =>
-                  '通用 WebDAV。连接 Alist / OpenList 时，路径填 /dav。',
-                ConnectionType.local => '直接整理这台电脑上的文件夹。',
-              }, style: theme.textTheme.bodySmall),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _name,
-                decoration: InputDecoration(
-                  labelText: '名称',
-                  hintText: '比如：家里的 NAS',
-                  errorText: required(_name),
-                ),
-              ),
-              gap,
-              ...(_local ? local : server),
-              gap,
-              label('整理'),
-              TextField(
-                controller: _root,
-                decoration: const InputDecoration(
-                  labelText: '媒体库根目录（可选）',
-                  hintText: '/影视库',
-                  helperText: '「移动到媒体库」模式下，整理好的文件放到这里',
-                ),
-              ),
-              if (result != null) ...[
-                const SizedBox(height: 14),
-                Container(
-                  key: const ValueKey('test-result'),
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: resultColor.withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(Radii.md),
-                    border: Border.all(
-                      color: resultColor.withValues(alpha: 0.35),
+    return MacSheet(
+      child: SizedBox(
+        width: 540,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(22, 20, 22, 0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    widget.existing == null ? '添加连接' : '编辑连接',
+                    style: theme.textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 14),
+                  Center(
+                    child: Segmented<ConnectionType>(
+                      options: {
+                        for (final t in ConnectionType.values)
+                          t: connectionTypeLabel(t),
+                      },
+                      value: _type,
+                      onChanged: _setType,
                     ),
                   ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(
-                        result.status == ConnStatus.connected
-                            ? Icons.check_circle_outline
-                            : Icons.error_outline,
-                        size: 18,
-                        color: resultColor,
+                  const SizedBox(height: 8),
+                  Center(
+                    child: Text(switch (_type) {
+                      ConnectionType.alist =>
+                        '通过 Alist / OpenList 的 API 连接，批量改名更快',
+                      ConnectionType.webdav =>
+                        '通用 WebDAV：Alist、OpenList、群晖、Nextcloud 等',
+                      ConnectionType.local => '直接整理这台电脑上的文件夹',
+                    }, style: theme.textTheme.bodySmall),
+                  ),
+                ],
+              ),
+            ),
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(22, 14, 26, 6),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    FormRow(
+                      label: '名称',
+                      child: field(
+                        '名称',
+                        _name,
+                        hint: '比如：家里的 NAS',
+                        error: required(_name),
                       ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: SelectableText(
-                          result.status == ConnStatus.connected
-                              ? '连接成功'
-                              : (result.detail ?? '连接失败'),
-                          style: TextStyle(fontSize: 13, color: p.text),
+                    ),
+                    ...(_local ? local : server),
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 8),
+                      child: Divider(),
+                    ),
+                    FormRow(
+                      label: '媒体库',
+                      help: '「移动到媒体库」模式下，整理好的文件放到这里（可选）',
+                      child: field('媒体库', _root, hint: '/影视库'),
+                    ),
+                    if (result != null) ...[
+                      const SizedBox(height: 10),
+                      Container(
+                        key: const ValueKey('test-result'),
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: resultColor.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(Radii.md),
+                          border: Border.all(
+                            color: resultColor.withValues(alpha: 0.3),
+                            width: hairline,
+                          ),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(
+                              result.status == ConnStatus.connected
+                                  ? CupertinoIcons.checkmark_circle_fill
+                                  : CupertinoIcons.exclamationmark_circle_fill,
+                              size: 16,
+                              color: resultColor,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: SelectableText(
+                                result.status == ConnStatus.connected
+                                    ? '连接成功'
+                                    : (result.detail ?? '连接失败'),
+                                style: TextStyle(fontSize: 12.5, color: p.text),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ],
-                  ),
+                  ],
                 ),
-              ],
-            ],
-          ),
-        ),
-      ),
-      actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
-      actions: [
-        Row(
-          children: [
-            if (widget.tester != null)
-              TextButton.icon(
-                onPressed: _testing ? null : _test,
-                icon: _testing
-                    ? const SizedBox(
-                        width: 14,
-                        height: 14,
-                        child: CircularProgressIndicator(strokeWidth: 1.6),
-                      )
-                    : const Icon(Icons.wifi_tethering, size: 18),
-                label: const Text('测试连接'),
               ),
-            const Spacer(),
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('取消'),
             ),
-            const SizedBox(width: 8),
-            FilledButton(onPressed: _save, child: const Text('保存')),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 22, 18),
+              child: Row(
+                children: [
+                  if (widget.tester != null)
+                    TextButton.icon(
+                      onPressed: _testing ? null : _test,
+                      icon: _testing
+                          ? const SizedBox(
+                              width: 12,
+                              height: 12,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 1.5,
+                              ),
+                            )
+                          : const Icon(
+                              CupertinoIcons.bolt_horizontal,
+                              size: 15,
+                            ),
+                      label: const Text('测试连接'),
+                    ),
+                  const Spacer(),
+                  OutlinedButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('取消'),
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton(onPressed: _save, child: const Text('保存')),
+                ],
+              ),
+            ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// http / https popup button.
+class _SchemeMenu extends StatelessWidget {
+  final String value;
+  final ValueChanged<String> onChanged;
+
+  const _SchemeMenu({required this.value, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    return PopupMenuButton<String>(
+      key: const ValueKey('scheme'),
+      tooltip: '协议',
+      initialValue: value,
+      onSelected: onChanged,
+      position: PopupMenuPosition.under,
+      itemBuilder: (_) => [
+        for (final s in ['http', 'https'])
+          PopupMenuItem(value: s, height: 30, child: Text(s)),
       ],
+      child: Container(
+        height: 31,
+        padding: const EdgeInsets.only(left: 9, right: 5),
+        decoration: BoxDecoration(
+          color: p.panel,
+          borderRadius: BorderRadius.circular(Radii.md),
+          border: Border.all(color: p.lineStrong, width: hairline),
+          boxShadow: panelShadow(),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('$value://', style: const TextStyle(fontSize: 13)),
+            const SizedBox(width: 2),
+            Icon(
+              CupertinoIcons.chevron_up_chevron_down,
+              size: 11,
+              color: p.textMuted,
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

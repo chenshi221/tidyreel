@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -89,13 +90,13 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
       subtitle: '${connectionTypeLabel(c.type)}  ·  ${c.endpoint}',
       leading: IconButton(
         tooltip: '返回连接列表',
-        icon: const Icon(Icons.arrow_back),
+        icon: const Icon(CupertinoIcons.chevron_left),
         onPressed: () => ref.read(openConnectionProvider.notifier).set(null),
       ),
       actions: [
         IconButton(
           tooltip: '刷新',
-          icon: const Icon(Icons.refresh),
+          icon: const Icon(CupertinoIcons.arrow_clockwise),
           onPressed: () => ref
               .read(browserRefreshProvider.notifier)
               .set(ref.read(browserRefreshProvider) + 1),
@@ -103,7 +104,7 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
         IconButton(
           tooltip: fav ? '取消收藏此文件夹' : '收藏此文件夹',
           icon: Icon(
-            fav ? Icons.star_rounded : Icons.star_outline_rounded,
+            fav ? CupertinoIcons.star_fill : CupertinoIcons.star,
             color: fav ? p.accent : null,
           ),
           onPressed: () => ref
@@ -115,11 +116,11 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(24, 0, 32, 0),
+            padding: const EdgeInsets.fromLTRB(20, 0, 28, 0),
             child: _Breadcrumbs(dir: dir, onTap: _goto),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(32, 8, 32, 12),
+            padding: const EdgeInsets.fromLTRB(28, 6, 28, 12),
             child: Wrap(
               spacing: 8,
               runSpacing: 8,
@@ -130,7 +131,7 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
                   child: TextField(
                     controller: _search,
                     decoration: const InputDecoration(
-                      prefixIcon: Icon(Icons.search, size: 18),
+                      prefixIcon: Icon(CupertinoIcons.search, size: 14),
                       hintText: '在当前文件夹内搜索',
                     ),
                     onChanged: ref.read(browserSearchProvider.notifier).set,
@@ -149,7 +150,7 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
                 FilterChip(
                   avatar: selectMode
                       ? null
-                      : const Icon(Icons.checklist, size: 16),
+                      : const Icon(CupertinoIcons.checkmark_square, size: 14),
                   label: const Text('多选'),
                   selected: selectMode,
                   onSelected: toggleSelectMode,
@@ -164,13 +165,13 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
               children: [
                 Positioned.fill(
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(32, 0, 32, 24),
+                    padding: const EdgeInsets.fromLTRB(28, 0, 28, 20),
                     child: Panel(
                       child: entries.when(
                         loading: () =>
                             const Center(child: CircularProgressIndicator()),
                         error: (e, _) => EmptyState(
-                          icon: Icons.error_outline,
+                          icon: CupertinoIcons.exclamationmark_triangle,
                           title: '无法读取文件夹',
                           message: '$e',
                           action: OutlinedButton(
@@ -181,7 +182,7 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
                         ),
                         data: (list) => list.isEmpty
                             ? const EmptyState(
-                                icon: Icons.folder_off_outlined,
+                                icon: CupertinoIcons.folder,
                                 title: '这个文件夹是空的',
                               )
                             : ListView.separated(
@@ -256,45 +257,35 @@ class _SelectionBar extends StatelessWidget {
     final p = Palette.of(context);
     return Container(
       constraints: const BoxConstraints(maxWidth: 680),
-      padding: const EdgeInsets.fromLTRB(18, 10, 10, 10),
+      padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
       decoration: BoxDecoration(
         color: p.panel,
         borderRadius: BorderRadius.circular(Radii.xl),
-        border: Border.all(color: p.line),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.06),
-            blurRadius: 16,
-            offset: const Offset(0, 4),
-          ),
-        ],
+        border: Border.all(color: p.line, width: hairline),
+        boxShadow: floatShadow(),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
             '已选 $count 项',
-            style: const TextStyle(fontWeight: FontWeight.w600),
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
           ),
-          const SizedBox(width: 16),
-          SegmentedButton<OrganizeMode>(
-            showSelectedIcon: false,
-            segments: const [
-              ButtonSegment(value: OrganizeMode.inPlace, label: Text('原地整理')),
-              ButtonSegment(
-                value: OrganizeMode.moveToLibrary,
-                label: Text('移动到媒体库'),
-              ),
-            ],
-            selected: {mode},
-            onSelectionChanged: (v) => onMode(v.first),
+          const SizedBox(width: 14),
+          Segmented<OrganizeMode>(
+            options: const {
+              OrganizeMode.inPlace: '原地整理',
+              OrganizeMode.moveToLibrary: '移动到媒体库',
+            },
+            value: mode,
+            onChanged: onMode,
           ),
           const SizedBox(width: 16),
           TextButton(onPressed: onCancel, child: const Text('取消')),
           const SizedBox(width: 4),
           FilledButton.icon(
             onPressed: onSubmit,
-            icon: const Icon(Icons.arrow_upward, size: 18),
+            icon: const Icon(CupertinoIcons.arrow_up_circle_fill, size: 15),
             label: const Text('提交为任务'),
           ),
         ],
@@ -322,19 +313,23 @@ class _SortMenu extends StatelessWidget {
     onSelected: onChanged,
     itemBuilder: (_) => [
       for (final e in _labels.entries)
-        PopupMenuItem(value: e.key, child: Text(e.value)),
+        PopupMenuItem(value: e.key, height: 30, child: Text(e.value)),
     ],
     child: Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
       decoration: BoxDecoration(
-        border: Border.all(color: Palette.of(context).line),
+        border: Border.all(
+          color: Palette.of(context).lineStrong,
+          width: hairline,
+        ),
         borderRadius: BorderRadius.circular(Radii.md),
         color: Palette.of(context).panel,
+        boxShadow: panelShadow(),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.swap_vert, size: 16),
+          const Icon(CupertinoIcons.arrow_up_arrow_down, size: 12),
           const SizedBox(width: 6),
           Text(_labels[value]!, style: const TextStyle(fontSize: 13)),
         ],
@@ -373,7 +368,7 @@ class _Breadcrumbs extends StatelessWidget {
       children: [
         crumb('根目录', '/', parts.isEmpty),
         for (var i = 0; i < parts.length; i++) ...[
-          Icon(Icons.chevron_right, size: 16, color: p.textFaint),
+          Icon(CupertinoIcons.chevron_right, size: 11, color: p.textFaint),
           crumb(
             parts[i],
             '/${parts.take(i + 1).join('/')}',
@@ -401,11 +396,11 @@ const _videoExt = {
 const _subExt = {'ass', 'ssa', 'srt', 'sub', 'idx', 'vtt', 'sup'};
 
 IconData _entryIcon(RemoteEntry e) {
-  if (e.isDir) return Icons.folder_rounded;
+  if (e.isDir) return CupertinoIcons.folder_fill;
   final ext = e.name.contains('.') ? e.name.split('.').last.toLowerCase() : '';
-  if (_videoExt.contains(ext)) return Icons.movie_outlined;
-  if (_subExt.contains(ext)) return Icons.subtitles_outlined;
-  return Icons.insert_drive_file_outlined;
+  if (_videoExt.contains(ext)) return CupertinoIcons.film;
+  if (_subExt.contains(ext)) return CupertinoIcons.captions_bubble;
+  return CupertinoIcons.doc;
 }
 
 class _EntryTile extends StatelessWidget {
@@ -458,7 +453,7 @@ class _EntryTile extends StatelessWidget {
           ? IconButton(
               tooltip: '进入文件夹',
               iconSize: 18,
-              icon: const Icon(Icons.chevron_right),
+              icon: const Icon(CupertinoIcons.chevron_right),
               onPressed: onOpen,
             )
           : null,

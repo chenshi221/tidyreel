@@ -64,24 +64,24 @@ void main() {
     await tester.pumpAndSettle();
 
     String field(String label) => tester
-        .widget<TextField>(find.widgetWithText(TextField, label))
+        .widget<TextField>(find.byKey(ValueKey('field-$label')))
         .controller!
         .text;
-    expect(field('主机 / IP'), 'nas.local');
+    expect(field('主机'), 'nas.local');
     expect(field('端口'), '5244');
-    final pw = tester.widget<TextField>(find.widgetWithText(TextField, '密码'));
+    final pw = tester.widget<TextField>(find.byKey(const ValueKey('field-密码')));
     expect(pw.controller!.text, 's3cret');
     expect(pw.obscureText, isTrue);
     await tester.tap(find.byTooltip('显示密码'));
     await tester.pump();
     expect(
       tester
-          .widget<TextField>(find.widgetWithText(TextField, '密码'))
+          .widget<TextField>(find.byKey(const ValueKey('field-密码')))
           .obscureText,
       isFalse,
     );
 
-    await tester.enterText(find.widgetWithText(TextField, '名称'), '新名字');
+    await tester.enterText(find.byKey(const ValueKey('field-名称')), '新名字');
     await tester.tap(find.text('保存'));
     await tester.pumpAndSettle();
     expect(find.text('新名字'), findsWidgets); // row + favorite
@@ -102,20 +102,20 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       tester
-          .widget<TextField>(find.widgetWithText(TextField, '路径'))
+          .widget<TextField>(find.byKey(const ValueKey('field-路径')))
           .controller!
           .text,
       '/dav',
     );
 
     await tester.enterText(
-      find.widgetWithText(TextField, '主机 / IP'),
+      find.byKey(const ValueKey('field-主机')),
       'https://10.0.0.5:5245/dav',
     );
     await tester.pump();
     expect(find.text('https://10.0.0.5:5245/dav'), findsOneWidget);
 
-    await tester.enterText(find.widgetWithText(TextField, '名称'), 'D');
+    await tester.enterText(find.byKey(const ValueKey('field-名称')), 'D');
     await tester.tap(find.text('测试连接'));
     await tester.pumpAndSettle();
     expect(find.text('连接成功'), findsOneWidget); // demo backend
@@ -125,13 +125,13 @@ void main() {
     await pumpPage(tester, const SourcesPage());
     await tester.tap(find.text('添加连接'));
     await tester.pumpAndSettle();
-    await tester.enterText(find.widgetWithText(TextField, '名称'), 'X');
-    await tester.enterText(find.widgetWithText(TextField, '主机 / IP'), 'nas');
-    await tester.enterText(find.widgetWithText(TextField, '端口'), '99999');
+    await tester.enterText(find.byKey(const ValueKey('field-名称')), 'X');
+    await tester.enterText(find.byKey(const ValueKey('field-主机')), 'nas');
+    await tester.enterText(find.byKey(const ValueKey('field-端口')), '99999');
     await tester.tap(find.text('保存'));
     await tester.pumpAndSettle();
     expect(find.text('端口应为 1–65535'), findsOneWidget);
-    expect(find.byType(AlertDialog), findsOneWidget);
+    expect(find.byType(Dialog), findsOneWidget);
   });
 
   testWidgets('delete asks for confirmation', (tester) async {

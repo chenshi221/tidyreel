@@ -51,6 +51,16 @@ Future<void> _loadFonts() async {
     for (final w in ['Regular', 'SemiBold']) '$_fonts/NotoSerifSC-$w.otf',
   ]);
   await _load('Menlo', ['/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf']);
+  final pubCache =
+      Platform.environment['PUB_CACHE'] ??
+      '${Platform.environment['HOME']}/.pub-cache';
+  final cupertino = Directory('$pubCache/hosted/pub.dev')
+      .listSync()
+      .whereType<Directory>()
+      .where((d) => d.path.contains('cupertino_icons-'))
+      .map((d) => '${d.path}/assets/CupertinoIcons.ttf')
+      .toList();
+  await _load('packages/cupertino_icons/CupertinoIcons', cupertino);
   final flutterRoot = Platform.environment['FLUTTER_ROOT'] ?? '/opt/flutter';
   await _load('MaterialIcons', [
     '$flutterRoot/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf',

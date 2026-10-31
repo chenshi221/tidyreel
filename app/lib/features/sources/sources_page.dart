@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
@@ -24,7 +25,7 @@ class SourcesPage extends ConsumerWidget {
     ];
     final add = FilledButton.icon(
       onPressed: () => _edit(context, ref),
-      icon: const Icon(Icons.add, size: 18),
+      icon: const Icon(CupertinoIcons.plus, size: 14),
       label: const Text('添加连接'),
     );
     return PageScaffold(
@@ -34,13 +35,13 @@ class SourcesPage extends ConsumerWidget {
       actions: [if (conns.isNotEmpty) add],
       child: conns.isEmpty
           ? EmptyState(
-              icon: Icons.cloud_outlined,
+              icon: CupertinoIcons.cloud,
               title: '还没有连接',
               message: '添加一个 Alist、WebDAV 或本地文件夹，就可以开始整理了',
               action: add,
             )
           : ListView(
-              padding: const EdgeInsets.fromLTRB(32, 0, 32, 32),
+              padding: const EdgeInsets.fromLTRB(28, 0, 28, 28),
               children: [
                 const SectionLabel('连接'),
                 Panel(
@@ -67,15 +68,15 @@ class SourcesPage extends ConsumerWidget {
                           HoverRow(
                             key: ValueKey('fav ${f.conn.id.value} ${f.path}'),
                             leading: Icon(
-                              Icons.star_rounded,
+                              CupertinoIcons.star_fill,
                               size: 20,
                               color: Palette.of(context).accent,
                             ),
                             title: Text(f.path),
                             subtitle: Text(f.conn.name),
                             hoverTrailing: const Icon(
-                              Icons.chevron_right,
-                              size: 18,
+                              CupertinoIcons.chevron_right,
+                              size: 13,
                             ),
                             onTap: () => openBrowser(ref, f.conn, f.path),
                           ),
@@ -158,8 +159,8 @@ class _ConnectionRow extends ConsumerWidget {
 
     return HoverRow(
       key: ValueKey('conn ${c.id.value}'),
-      padding: const EdgeInsets.fromLTRB(Space.lg, 14, Space.sm, 14),
-      leading: IconTile(connectionTypeIcon(c.type), size: 36),
+      padding: const EdgeInsets.fromLTRB(14, 11, 8, 11),
+      leading: IconTile(connectionTypeIcon(c.type), size: 32),
       title: Text(c.name),
       subtitle: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -185,21 +186,21 @@ class _ConnectionRow extends ConsumerWidget {
           if (failed)
             IconButton(
               tooltip: '重新检测',
-              iconSize: 18,
-              icon: const Icon(Icons.refresh),
+              icon: const Icon(CupertinoIcons.arrow_clockwise),
               onPressed: () => ref.invalidate(connectionStatusProvider(c.id)),
             ),
           PopupMenuButton<String>(
             tooltip: '更多',
-            icon: const Icon(Icons.more_horiz, size: 20),
+            icon: const Icon(CupertinoIcons.ellipsis, size: 16),
             onSelected: (v) {
               if (v == 'edit') _edit(context, ref, c);
               if (v == 'delete') _delete(context, ref, c);
             },
             itemBuilder: (_) => [
-              const PopupMenuItem(value: 'edit', child: Text('编辑')),
+              const PopupMenuItem(value: 'edit', height: 30, child: Text('编辑')),
               PopupMenuItem(
                 value: 'delete',
+                height: 30,
                 child: Text('删除', style: TextStyle(color: p.danger)),
               ),
             ],

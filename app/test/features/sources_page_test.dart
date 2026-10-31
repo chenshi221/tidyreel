@@ -23,8 +23,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('必填'), findsNWidgets(2)); // name + host
 
-    await tester.enterText(find.widgetWithText(TextField, '名称'), '公司 NAS');
-    await tester.enterText(find.widgetWithText(TextField, '主机 / IP'), 'nas');
+    await tester.enterText(find.byKey(const ValueKey('field-名称')), '公司 NAS');
+    await tester.enterText(find.byKey(const ValueKey('field-主机')), 'nas');
     await tester.pump();
     expect(find.text('http://nas:5244'), findsOneWidget); // live preview
     await tester.tap(find.text('保存'));

@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -7,6 +8,7 @@ import '../data/providers.dart';
 import '../features/sources/sources_providers.dart';
 import '../features/tasks/tasks_page.dart' show stageLabel;
 import '../ui/tokens.dart';
+import '../ui/widgets.dart';
 import '../widgets/common.dart';
 
 final sidebarCollapsedProvider = NotifierProvider<Val<bool>, bool>(
@@ -18,8 +20,8 @@ final sidebarCollapsedProvider = NotifierProvider<Val<bool>, bool>(
 class Sidebar extends ConsumerWidget {
   const Sidebar({super.key});
 
-  static const expandedWidth = 236.0;
-  static const collapsedWidth = 64.0;
+  static const expandedWidth = 224.0;
+  static const collapsedWidth = 60.0;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -31,6 +33,8 @@ class Sidebar extends ConsumerWidget {
         .length;
     final active = tasks.where((t) => t.stage.isActive).toList();
     final location = GoRouterState.of(context).uri.path;
+    // macOS: the traffic lights float over the sidebar's top-left corner.
+    final mac = Theme.of(context).platform == TargetPlatform.macOS;
 
     void go(String path) {
       // Re-selecting 来源 leaves the file browser and shows the list again.
@@ -40,32 +44,40 @@ class Sidebar extends ConsumerWidget {
       context.go(path);
     }
 
-    Widget item(
-      String path,
-      IconData icon,
-      IconData selectedIcon,
-      String label, {
-      int badge = 0,
-    }) {
-      final selected = location.startsWith(path);
-      return _NavItem(
-        key: ValueKey('nav-$label'),
-        icon: selected ? selectedIcon : icon,
-        label: label,
-        selected: selected,
-        badge: badge,
-        collapsed: collapsed,
-        onTap: () => go(path),
-      );
-    }
+    Widget item(String path, IconData icon, String label, {int badge = 0}) =>
+        _NavItem(
+          key: ValueKey('nav-$label'),
+          icon: icon,
+          label: label,
+          selected: location.startsWith(path),
+          badge: badge,
+          collapsed: collapsed,
+          onTap: () => go(path),
+        );
+
+    final toggle = IconButton(
+      tooltip: collapsed ? '展开侧栏' : '收起侧栏',
+      iconSize: 16,
+      icon: const Icon(CupertinoIcons.sidebar_left),
+      onPressed: () => ref
+          .read(sidebarCollapsedProvider.notifier)
+          .set(!ref.read(sidebarCollapsedProvider)),
+    );
+
+    Widget sectionTitle(String text) => Padding(
+      padding: const EdgeInsets.fromLTRB(10, 16, 10, 4),
+      child: Text(text, style: Theme.of(context).textTheme.labelSmall),
+    );
 
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 160),
-      curve: Curves.easeOut,
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
       width: collapsed ? collapsedWidth : expandedWidth,
       decoration: BoxDecoration(
         color: p.sidebar,
-        border: Border(right: BorderSide(color: p.line)),
+        border: Border(
+          right: BorderSide(color: p.line, width: hairline),
+        ),
       ),
       child: ClipRect(
         child: OverflowBox(
@@ -73,40 +85,36 @@ class Sidebar extends ConsumerWidget {
           minWidth: 0,
           maxWidth: collapsed ? collapsedWidth : expandedWidth,
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(10, 14, 10, 12),
+            padding: EdgeInsets.fromLTRB(8, mac ? 8 : 12, 8, 10),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _Brand(collapsed: collapsed),
-                const SizedBox(height: 18),
-                item(
-                  '/sources',
-                  Icons.folder_open_outlined,
-                  Icons.folder_open,
-                  '来源',
-                ),
+                if (mac)
+                  SizedBox(
+                    height: 30,
+                    child: Align(
+                      alignment: collapsed
+                          ? Alignment.bottomCenter
+                          : Alignment.centerRight,
+                      child: toggle,
+                    ),
+                  ),
+                if (collapsed && !mac) Center(child: toggle),
+                if (!collapsed) _Brand(trailing: mac ? null : toggle),
+                if (!collapsed)
+                  sectionTitle('资料库')
+                else
+                  const SizedBox(height: 12),
+                item('/sources', CupertinoIcons.folder, '来源'),
                 item(
                   '/tasks',
-                  Icons.checklist_rtl_outlined,
-                  Icons.checklist_rtl,
+                  CupertinoIcons.square_list,
                   '任务',
                   badge: pending,
                 ),
-                item(
-                  '/naming',
-                  Icons.text_fields_outlined,
-                  Icons.text_fields,
-                  '命名规则',
-                ),
+                item('/naming', CupertinoIcons.textformat, '命名规则'),
                 if (!collapsed && active.isNotEmpty) ...[
-                  const SizedBox(height: 20),
-                  Padding(
-                    padding: const EdgeInsets.only(left: 10, bottom: 6),
-                    child: Text(
-                      '后台任务',
-                      style: Theme.of(context).textTheme.labelSmall,
-                    ),
-                  ),
+                  sectionTitle('后台任务'),
                   Expanded(
                     child: ListView(
                       padding: EdgeInsets.zero,
@@ -125,13 +133,7 @@ class Sidebar extends ConsumerWidget {
                   ),
                 ] else
                   const Spacer(),
-                const SizedBox(height: 8),
-                item(
-                  '/settings',
-                  Icons.settings_outlined,
-                  Icons.settings,
-                  '设置',
-                ),
+                item('/settings', CupertinoIcons.gear, '设置'),
               ],
             ),
           ),
@@ -141,68 +143,69 @@ class Sidebar extends ConsumerWidget {
   }
 }
 
-class _Brand extends ConsumerWidget {
-  final bool collapsed;
+class _Brand extends StatelessWidget {
+  final Widget? trailing;
 
-  const _Brand({required this.collapsed});
+  const _Brand({this.trailing});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final p = Palette.of(context);
-    final toggle = IconButton(
-      tooltip: collapsed ? '展开侧栏' : '收起侧栏',
-      iconSize: 18,
-      visualDensity: VisualDensity.compact,
-      icon: const Icon(Icons.view_sidebar_outlined),
-      onPressed: () => ref
-          .read(sidebarCollapsedProvider.notifier)
-          .set(!ref.read(sidebarCollapsedProvider)),
-    );
-    if (collapsed) return Center(child: toggle);
-    return Row(
-      children: [
-        const SizedBox(width: 6),
-        Container(
-          width: 26,
-          height: 26,
-          decoration: BoxDecoration(
-            color: p.accent,
-            borderRadius: BorderRadius.circular(7),
-          ),
-          child: Icon(Icons.movie_filter, size: 16, color: p.onAccent),
-        ),
-        const SizedBox(width: 10),
-        Text(
-          '理片',
-          style: TextStyle(
-            fontFamily: serifFamily,
-            fontFamilyFallback: serifFallback,
-            fontSize: 19,
-            fontWeight: FontWeight.w600,
-            color: p.text,
-          ),
-        ),
-        const SizedBox(width: 6),
-        Expanded(
-          child: Text(
-            'Tidyreel',
-            maxLines: 1,
-            overflow: TextOverflow.clip,
-            style: TextStyle(
-              fontFamily: serifFamily,
-              fontFamilyFallback: serifFallback,
-              fontSize: 13,
-              color: p.textFaint,
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 6, 0, 2),
+      child: Row(
+        children: [
+          Container(
+            width: 22,
+            height: 22,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color.lerp(p.accent, Colors.white, 0.18)!, p.accent],
+              ),
+              borderRadius: BorderRadius.circular(6),
+              boxShadow: [
+                BoxShadow(
+                  color: p.accent.withValues(alpha: 0.35),
+                  blurRadius: 4,
+                  offset: const Offset(0, 1),
+                ),
+              ],
+            ),
+            child: const Icon(
+              CupertinoIcons.film_fill,
+              size: 12,
+              color: Colors.white,
             ),
           ),
-        ),
-        toggle,
-      ],
+          const SizedBox(width: 9),
+          Text(
+            '理片',
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+              color: p.text,
+              letterSpacing: 0.5,
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              'Tidyreel',
+              maxLines: 1,
+              overflow: TextOverflow.clip,
+              style: TextStyle(fontSize: 12, color: p.textFaint),
+            ),
+          ),
+          ?trailing,
+        ],
+      ),
     );
   }
 }
 
-class _NavItem extends StatefulWidget {
+class _NavItem extends StatelessWidget {
   final IconData icon;
   final String label;
   final bool selected;
@@ -221,105 +224,84 @@ class _NavItem extends StatefulWidget {
   });
 
   @override
-  State<_NavItem> createState() => _NavItemState();
-}
-
-class _NavItemState extends State<_NavItem> {
-  var _hover = false;
-
-  @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
-    final w = widget;
-    final bg = w.selected
-        ? p.selected
-        : (_hover ? p.hover : Colors.transparent);
-    final icon = Icon(
-      w.icon,
-      size: 19,
-      color: w.selected ? p.text : p.textMuted,
+    final iconW = Icon(
+      icon,
+      size: 16,
+      color: selected ? p.accent : p.textMuted,
     );
-    final badge = w.badge > 0
-        ? Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-            decoration: BoxDecoration(
-              color: p.accent,
-              borderRadius: BorderRadius.circular(9),
-            ),
-            child: Text(
-              '${w.badge}',
-              style: TextStyle(
-                color: p.onAccent,
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          )
-        : null;
-    final body = MouseRegion(
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: w.onTap,
-        child: Container(
-          height: 38,
-          margin: const EdgeInsets.only(bottom: 2),
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          decoration: BoxDecoration(
-            color: bg,
-            borderRadius: BorderRadius.circular(Radii.md),
-          ),
-          child: w.collapsed
-              ? Center(
-                  child: badge == null
-                      ? icon
-                      : Badge(label: Text('${w.badge}'), child: icon),
-                )
-              : Row(
-                  children: [
-                    icon,
-                    const SizedBox(width: 12),
-                    Expanded(
+    final body = Hoverable(
+      onTap: onTap,
+      builder: (context, hover) => AnimatedContainer(
+        duration: const Duration(milliseconds: 100),
+        height: 30,
+        margin: const EdgeInsets.only(bottom: 1),
+        padding: const EdgeInsets.symmetric(horizontal: 9),
+        decoration: BoxDecoration(
+          color: selected ? p.selected : (hover ? p.hover : Colors.transparent),
+          borderRadius: BorderRadius.circular(Radii.md),
+        ),
+        child: collapsed
+            ? Center(
+                child: badge == 0
+                    ? iconW
+                    : Badge(label: Text('$badge'), child: iconW),
+              )
+            : Row(
+                children: [
+                  iconW,
+                  const SizedBox(width: 9),
+                  Expanded(
+                    child: Text(
+                      label,
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: p.text,
+                        fontWeight: selected
+                            ? FontWeight.w600
+                            : FontWeight.w400,
+                      ),
+                    ),
+                  ),
+                  if (badge > 0)
+                    Container(
+                      constraints: const BoxConstraints(minWidth: 18),
+                      padding: const EdgeInsets.symmetric(horizontal: 5),
+                      decoration: BoxDecoration(
+                        color: p.accent,
+                        borderRadius: BorderRadius.circular(9),
+                      ),
                       child: Text(
-                        w.label,
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: p.text,
-                          fontWeight: w.selected
-                              ? FontWeight.w600
-                              : FontWeight.w400,
+                        '$badge',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          height: 1.45,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
                     ),
-                    ?badge,
-                  ],
-                ),
-        ),
+                ],
+              ),
       ),
     );
-    return w.collapsed ? Tooltip(message: w.label, child: body) : body;
+    return collapsed ? Tooltip(message: label, child: body) : body;
   }
 }
 
 /// One running task in the sidebar: name, stage, thin progress bar.
-class _TaskItem extends ConsumerStatefulWidget {
+class _TaskItem extends StatelessWidget {
   final TaskSummary task;
   final VoidCallback onTap;
 
   const _TaskItem({required this.task, required this.onTap});
 
   @override
-  ConsumerState<_TaskItem> createState() => _TaskItemState();
-}
-
-class _TaskItemState extends ConsumerState<_TaskItem> {
-  var _hover = false;
-
-  @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
-    final t = widget.task;
+    final t = task;
     final review = t.stage == TaskStage.awaitingReview;
     final first = t.paths.isEmpty
         ? t.id.value
@@ -328,76 +310,70 @@ class _TaskItemState extends ConsumerState<_TaskItem> {
     final name = t.paths.length > 1 ? '$first 等 ${t.paths.length} 项' : first;
     final status = switch (t.stage) {
       TaskStage.importing => '导入中 · ${t.importedCount} 个文件',
-      TaskStage.recognizing => '识别中',
-      TaskStage.awaitingReview => '待确认',
+      TaskStage.recognizing => '识别中…',
+      TaskStage.awaitingReview => '识别完成，待确认',
       _ => '执行中 · ${stageLabel(t.stage)}',
     };
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: Container(
-          margin: const EdgeInsets.only(bottom: 2),
-          padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
-          decoration: BoxDecoration(
-            color: _hover ? p.hover : Colors.transparent,
-            borderRadius: BorderRadius.circular(Radii.md),
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: review
-                    ? Container(
-                        width: 8,
-                        height: 8,
-                        decoration: BoxDecoration(
-                          color: p.accent,
-                          shape: BoxShape.circle,
-                        ),
-                      )
-                    : SizedBox(
-                        width: 9,
-                        height: 9,
+    return Hoverable(
+      onTap: onTap,
+      builder: (context, hover) => Container(
+        margin: const EdgeInsets.only(bottom: 1),
+        padding: const EdgeInsets.fromLTRB(9, 6, 9, 7),
+        decoration: BoxDecoration(
+          color: hover ? p.hover : Colors.transparent,
+          borderRadius: BorderRadius.circular(Radii.md),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 3),
+              child: review
+                  ? Icon(
+                      CupertinoIcons.checkmark_circle_fill,
+                      size: 14,
+                      color: p.accent,
+                    )
+                  : SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: Padding(
+                        padding: const EdgeInsets.all(2),
                         child: CircularProgressIndicator(
-                          strokeWidth: 1.6,
+                          strokeWidth: 1.5,
                           color: p.textMuted,
                         ),
                       ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 13, color: p.text),
                     ),
-                    const SizedBox(height: 1),
-                    Text(
-                      status,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 11.5,
-                        color: review ? p.accent : p.textFaint,
-                      ),
+            ),
+            const SizedBox(width: 9),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 12.5, color: p.text),
+                  ),
+                  Text(
+                    status,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: review ? p.accent : p.textFaint,
                     ),
-                    if (!review && t.progress != null) ...[
-                      const SizedBox(height: 6),
-                      LinearProgressIndicator(value: t.progress, minHeight: 3),
-                    ],
+                  ),
+                  if (!review && t.progress != null) ...[
+                    const SizedBox(height: 5),
+                    LinearProgressIndicator(value: t.progress, minHeight: 3),
                   ],
-                ),
+                ],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );

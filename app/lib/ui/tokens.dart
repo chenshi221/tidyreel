@@ -55,41 +55,41 @@ class Palette extends ThemeExtension<Palette> {
   });
 
   static const light = Palette(
-    canvas: Color(0xFFFAF9F5),
-    sidebar: Color(0xFFF3F1EA),
+    canvas: Color(0xFFFBFAF7),
+    sidebar: Color(0xFFF1EFE8),
     panel: Color(0xFFFFFFFF),
-    hover: Color(0xFFF0EEE6),
-    selected: Color(0xFFEAE7DD),
-    line: Color(0xFFE8E6DC),
-    lineStrong: Color(0xFFD1CFC5),
+    hover: Color(0x0A1F1E1D),
+    selected: Color(0x141F1E1D),
+    line: Color(0xFFE6E3DA),
+    lineStrong: Color(0xFFCFCCC2),
     text: Color(0xFF1F1E1D),
-    textMuted: Color(0xFF6B6A63),
-    textFaint: Color(0xFF9C9A92),
+    textMuted: Color(0xFF6E6D66),
+    textFaint: Color(0xFFA09E96),
     accent: Color(0xFFC96442),
-    accentSoft: Color(0xFFF6E7DF),
+    accentSoft: Color(0xFFF7E9E2),
     onAccent: Color(0xFFFFFFFF),
-    success: Color(0xFF4F8A5B),
+    success: Color(0xFF3F8A55),
     warning: Color(0xFFB7791F),
-    danger: Color(0xFFBF4D43),
+    danger: Color(0xFFC2453A),
   );
 
   static const dark = Palette(
-    canvas: Color(0xFF262624),
-    sidebar: Color(0xFF1F1E1D),
-    panel: Color(0xFF30302E),
-    hover: Color(0xFF353532),
-    selected: Color(0xFF3D3D3A),
-    line: Color(0xFF3B3A37),
-    lineStrong: Color(0xFF55544F),
-    text: Color(0xFFECEBE4),
-    textMuted: Color(0xFFA6A59D),
-    textFaint: Color(0xFF7B7A73),
-    accent: Color(0xFFD97757),
-    accentSoft: Color(0xFF45322A),
+    canvas: Color(0xFF242422),
+    sidebar: Color(0xFF1C1C1A),
+    panel: Color(0xFF2D2D2B),
+    hover: Color(0x0FFFFFFF),
+    selected: Color(0x1AFFFFFF),
+    line: Color(0xFF3A3936),
+    lineStrong: Color(0xFF52514C),
+    text: Color(0xFFEDECE6),
+    textMuted: Color(0xFFA8A79F),
+    textFaint: Color(0xFF7A7973),
+    accent: Color(0xFFDB7A59),
+    accentSoft: Color(0xFF43302A),
     onAccent: Color(0xFFFFFFFF),
-    success: Color(0xFF7FB38A),
+    success: Color(0xFF7DB58A),
     warning: Color(0xFFDDA54A),
-    danger: Color(0xFFE07A70),
+    danger: Color(0xFFE5776C),
   );
 
   static Palette of(BuildContext context) =>
@@ -134,23 +134,13 @@ abstract final class Space {
 }
 
 abstract final class Radii {
-  static const sm = 6.0;
-  static const md = 8.0;
-  static const lg = 12.0;
-  static const xl = 16.0;
+  static const sm = 5.0;
+  static const md = 6.0;
+  static const lg = 10.0;
+  static const xl = 12.0;
 }
 
-/// Serif for page titles (Latin glyphs from Georgia, Chinese from Songti on
-/// macOS / SimSun on Windows); everything else uses the platform UI font.
-const serifFamily = 'Georgia';
-const serifFallback = [
-  'Songti SC',
-  'STSong',
-  'Noto Serif CJK SC',
-  'Source Han Serif SC',
-  'SimSun',
-  'serif',
-];
+/// Platform UI font (SF + PingFang on macOS, Segoe + YaHei on Windows).
 const sansFallback = [
   'PingFang SC',
   'Hiragino Sans GB',
@@ -159,3 +149,37 @@ const sansFallback = [
 ];
 const monoFamily = 'Menlo';
 const monoFallback = ['SF Mono', 'Consolas', 'monospace'];
+
+/// macOS type scale (points).
+abstract final class TypeScale {
+  static const title = 22.0;
+  static const headline = 15.0;
+  static const body = 13.0;
+  static const small = 11.5;
+}
+
+/// Hairline width: one physical pixel on Retina.
+const hairline = 0.5;
+
+/// Soft drop shadow for floating surfaces (menus, sheets, floating bars).
+List<BoxShadow> floatShadow([double strength = 1]) => [
+  BoxShadow(
+    color: Colors.black.withValues(alpha: 0.10 * strength),
+    blurRadius: 28,
+    offset: const Offset(0, 10),
+  ),
+  BoxShadow(
+    color: Colors.black.withValues(alpha: 0.06 * strength),
+    blurRadius: 3,
+    offset: const Offset(0, 1),
+  ),
+];
+
+/// Barely-there lift for inset panels.
+List<BoxShadow> panelShadow() => [
+  BoxShadow(
+    color: Colors.black.withValues(alpha: 0.035),
+    blurRadius: 2,
+    offset: const Offset(0, 1),
+  ),
+];

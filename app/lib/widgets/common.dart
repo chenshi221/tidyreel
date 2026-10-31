@@ -1,5 +1,12 @@
+import 'dart:io' show Platform;
+
+import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:window_manager/window_manager.dart';
+
+import '../ui/tokens.dart';
 
 /// Minimal settable state holder: `NotifierProvider<Val<T>, T>(() => Val(x))`.
 class Val<T> extends Notifier<T> {
@@ -29,9 +36,13 @@ String fmtDate(DateTime? d) => d == null
     ? ''
     : '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
-/// Page frame: serif title (+ optional subtitle and actions) over the body.
-/// Switches to standard visual density so every tap target is at least 40px
-/// (the app theme is compact). With [maxWidth] the whole page is centered.
+/// True in the real macOS app (not tests): the native title bar is hidden and
+/// page headers double as the window's drag area.
+bool get isMacDesktop => !kIsWeb && Platform.isMacOS;
+
+/// Page frame: bold title (+ optional subtitle, leading and actions) over the
+/// body. On macOS the header is the window's drag area. With [maxWidth] the
+/// whole page is centered.
 class PageScaffold extends StatelessWidget {
   final String title;
   final String? subtitle;
@@ -53,40 +64,44 @@ class PageScaffold extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    Widget header = Padding(
+      padding: const EdgeInsets.fromLTRB(28, 22, 24, 10),
+      child: Row(
+        children: [
+          if (leading != null) ...[leading!, const SizedBox(width: 6)],
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  title,
+                  key: const ValueKey('page-title'),
+                  style: theme.textTheme.headlineSmall,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (subtitle != null) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    subtitle!,
+                    style: theme.textTheme.bodySmall,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ],
+            ),
+          ),
+          for (final a in actions) ...[const SizedBox(width: 6), a],
+        ],
+      ),
+    );
+    if (isMacDesktop) header = DragToMoveArea(child: header);
     Widget page = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(32, 24, 32, 12),
-          child: Row(
-            children: [
-              if (leading != null) ...[leading!, const SizedBox(width: 8)],
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      title,
-                      key: const ValueKey('page-title'),
-                      style: theme.textTheme.headlineSmall,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    if (subtitle != null) ...[
-                      const SizedBox(height: 2),
-                      Text(
-                        subtitle!,
-                        style: theme.textTheme.bodySmall,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              for (final a in actions) ...[const SizedBox(width: 8), a],
-            ],
-          ),
-        ),
+        header,
         Expanded(child: child),
       ],
     );
@@ -99,49 +114,74 @@ class PageScaffold extends StatelessWidget {
         ),
       );
     }
-    return Theme(
-      data: theme.copyWith(visualDensity: VisualDensity.standard),
-      child: page,
-    );
+    return page;
   }
 }
 
-/// TMDB poster, or an icon when there is none.
+/// TMDB image URL; [size] is a TMDB size bucket (w92, w185, w342, w780, original).
+String tmdbImage(String path, [String size = 'w185']) =>
+    'https://image.tmdb.org/t/p/$size$path';
+
+/// TMDB poster (2:3) with a hairline border and soft shadow, or an icon when
+/// there is none. Picks the image size from the rendered width.
 class Poster extends StatelessWidget {
   final String? posterPath;
   final IconData icon;
   final double width;
   final double height;
+  final double radius;
 
   const Poster({
     super.key,
     this.posterPath,
-    this.icon = Icons.movie_outlined,
+    this.icon = CupertinoIcons.film,
     this.width = 46,
     this.height = 69,
+    this.radius = 6,
   });
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    final p = Palette.of(context);
     final placeholder = Container(
       width: width,
       height: height,
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: Icon(icon, color: scheme.onSurfaceVariant),
+      color: p.sidebar,
+      child: Icon(icon, color: p.textFaint, size: width * 0.4),
     );
-    if (posterPath == null) return placeholder;
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(6),
-      child: Image.network(
-        'https://image.tmdb.org/t/p/w185$posterPath',
-        width: width,
-        height: height,
-        fit: BoxFit.cover,
-        errorBuilder: (_, _, _) => placeholder,
+    final size = width <= 60 ? 'w92' : (width <= 120 ? 'w185' : 'w342');
+    return Container(
+      width: width,
+      height: height,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(radius),
+        border: Border.all(color: p.line, width: hairline),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.12),
+            blurRadius: width > 80 ? 14 : 4,
+            offset: Offset(0, width > 80 ? 5 : 1),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(radius),
+        child: posterPath == null
+            ? placeholder
+            : Image.network(
+                tmdbImage(posterPath!, size),
+                width: width,
+                height: height,
+                fit: BoxFit.cover,
+                errorBuilder: (_, _, _) => placeholder,
+                frameBuilder: (_, child, frame, sync) => sync
+                    ? child
+                    : AnimatedOpacity(
+                        opacity: frame == null ? 0 : 1,
+                        duration: const Duration(milliseconds: 220),
+                        child: frame == null ? placeholder : child,
+                      ),
+              ),
       ),
     );
   }
@@ -178,4 +218,4 @@ Future<bool> confirmDialog(
     ) ??
     false;
 
-const warningColor = Color(0xFFB26A00);
+const warningColor = Color(0xFFB7791F);
