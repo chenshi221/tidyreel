@@ -1,0 +1,65 @@
+# Push a tag like v0.1.0 to build the macOS app and publish a GitHub Release.
+# The default TMDB key comes from the repository secret TMDB_TOKEN (never committed).
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.4
+          cache: true
+
+      - name: Checks
+        run: tool/check.sh
+
+      - name: Default TMDB key
+        env:
+          TMDB_TOKEN: ${{ secrets.TMDB_TOKEN }}
+        run: |
+          if [ -n "$TMDB_TOKEN" ]; then
+            printf '{"TMDB_TOKEN":"%s"}' "$TMDB_TOKEN" > app/tmdb.local.json
+          else
+            echo "::warning::TMDB_TOKEN secret is not set; users will have to enter their own key"
+          fi
+
+      - name: Build
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          case "$version" in [0-9]*) args="--build-name=$version" ;; *) args="" ;; esac
+          tool/build_macos.sh release $args
+
+      - name: Package
+        run: |
+          zip="Tidyreel-${GITHUB_REF_NAME}-macos.zip"
+          ditto -c -k --keepParent app/build/macos/Build/Products/Release/tidyreel.app "$zip"
+          echo "ZIP=$zip" >> "$GITHUB_ENV"
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "$ZIP" \
+            --title "理片 Tidyreel $GITHUB_REF_NAME" \
+            --generate-notes \
+            --notes "未签名的测试版：首次打开请右键 tidyreel.app →「打开」，或在终端执行 xattr -dr com.apple.quarantine tidyreel.app"
+
+      - name: Upload build (manual runs)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ZIP }}
+          path: ${{ env.ZIP }}
