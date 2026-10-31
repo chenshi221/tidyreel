@@ -170,12 +170,20 @@ class MockAlist {
   }
 }
 
-/// Minimal WebDAV server mounted under `/dav`, Basic auth admin:pw.
+/// Minimal WebDAV server mounted under [mount] (default `/dav`, '' = root),
+/// Basic auth admin:pw. [absoluteHrefs] answers hrefs as full URLs.
 class MockWebDav {
   final MockTree tree;
-  static const mount = '/dav';
+  final String mount;
+  final bool absoluteHrefs;
 
-  MockWebDav(Map<String, int> files) : tree = MockTree(files);
+  MockWebDav(
+    Map<String, int> files, {
+    this.mount = '/dav',
+    this.absoluteHrefs = false,
+  }) : tree = MockTree(files);
+
+  Uri? _origin;
 
   String _decode(Uri u) {
     final segs = u.pathSegments.where((s) => s.isNotEmpty).toList();
@@ -185,15 +193,23 @@ class MockWebDav {
   /// `/dav/a/b` -> `/a/b`; null when outside the mount.
   String? _local(Uri u) {
     final full = _decode(u);
+    if (mount.isEmpty) return full;
     if (full != mount && !full.startsWith('$mount/')) return null;
     final rest = full.substring(mount.length);
     return rest.isEmpty ? '/' : rest;
   }
 
   String _href(String path) {
-    final segs = ['dav', ...path.split('/').where((s) => s.isNotEmpty)];
-    final h = "/${segs.map(Uri.encodeComponent).join("/")}";
-    return tree.isDir(path) ? '$h/' : h;
+    final segs = [
+      ...mount.split('/').where((s) => s.isNotEmpty),
+      ...path.split('/').where((s) => s.isNotEmpty),
+    ];
+    var h = "/${segs.map(Uri.encodeComponent).join("/")}";
+    if (tree.isDir(path) && h != '/') h = '$h/';
+    if (absoluteHrefs && _origin != null) {
+      h = '${_origin!.scheme}://${_origin!.authority}$h';
+    }
+    return h;
   }
 
   String _entry(String path) {
@@ -209,6 +225,7 @@ class MockWebDav {
     if (req.headers['authorization'] != auth) {
       return Response(401, headers: {'www-authenticate': 'Basic realm="x"'});
     }
+    _origin = req.requestedUri;
     final path = _local(req.requestedUri);
     if (path == null) return Response.notFound('');
     switch (req.method) {

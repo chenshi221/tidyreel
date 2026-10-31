@@ -56,6 +56,25 @@ void main() {
     );
   });
 
+  // Non-/dav mounts: server root, a nested path, Chinese + space, full-URL hrefs.
+  for (final (label, mount, endpointPath, absolute) in [
+    ('root', '', '', false),
+    ('root, trailing slash', '', '/', false),
+    ('nested', '/remote.php/webdav', '/remote.php/webdav', false),
+    ('unicode', '/网盘 1', '/网盘 1/', true),
+  ]) {
+    storageContract('WebDAV mount $label', (files) async {
+      final server = await MockServer.start(
+        MockWebDav(files, mount: mount, absoluteHrefs: absolute).handle,
+      );
+      addTearDown(server.close);
+      return createBackend(
+        cfg(ConnectionType.webdav, '${server.url}$endpointPath'),
+        const Credentials(password: 'pw'),
+      );
+    });
+  }
+
   group('Local', () {
     test('refuses paths that escape the root', () async {
       final be = await makeLocal({'/a.txt': 1});
