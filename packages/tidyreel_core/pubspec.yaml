@@ -10,8 +10,6 @@ dependencies:
   collection: ^1.19.1
   dio: ^5.11.1
   path: ^1.9.1
-  webdav_client: ^1.2.2
-
 dev_dependencies:
   lints: ^6.0.0
   shelf: ^1.4.3
