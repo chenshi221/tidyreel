@@ -1,5 +1,8 @@
 import '../model/connection.dart';
 import '../model/scan.dart';
+import 'alist_backend.dart';
+import 'local_backend.dart';
+import 'webdav_backend.dart';
 
 /// Owner: Agent C. PLAN §4.4.
 /// All paths are absolute and '/'-separated, relative to the connection root.
@@ -48,4 +51,8 @@ enum StorageErrorCode {
 StorageBackend createBackend(
   ConnectionConfig config,
   Credentials credentials,
-) => throw UnimplementedError('Agent C');
+) => switch (config.type) {
+  ConnectionType.alist => AlistBackend(config, credentials),
+  ConnectionType.webdav => WebDAVBackend(config, credentials),
+  ConnectionType.local => LocalBackend(config.endpoint),
+};
