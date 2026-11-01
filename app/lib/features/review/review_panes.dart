@@ -1,7 +1,6 @@
-import 'dart:ui' show ImageFilter;
-
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
@@ -90,11 +89,12 @@ class CandidateTile extends StatelessWidget {
   }
 }
 
-/// Search box + result list; shared by the 纠错 dialog and the inline box on
-/// unmatched groups.
+/// Search box + type / year filters + result list; shared by the 纠错 dialog
+/// and the inline box on unmatched groups.
 class TmdbSearchBox extends ConsumerStatefulWidget {
   final String initial;
   final MediaKind? kind;
+  final int? year;
   final ValueChanged<Candidate> onPick;
   final bool autoSearch;
 
@@ -102,6 +102,7 @@ class TmdbSearchBox extends ConsumerStatefulWidget {
     super.key,
     required this.initial,
     this.kind,
+    this.year,
     required this.onPick,
     this.autoSearch = false,
   });
@@ -112,6 +113,9 @@ class TmdbSearchBox extends ConsumerStatefulWidget {
 
 class _TmdbSearchBoxState extends ConsumerState<TmdbSearchBox> {
   late final _c = TextEditingController(text: widget.initial);
+  late final _yearC = TextEditingController(text: widget.year?.toString());
+  // MediaKind.unknown = 全部
+  late var _kind = widget.kind ?? MediaKind.unknown;
   List<Candidate>? _results;
   var _busy = false;
   String? _error;
@@ -125,7 +129,18 @@ class _TmdbSearchBoxState extends ConsumerState<TmdbSearchBox> {
   @override
   void dispose() {
     _c.dispose();
+    _yearC.dispose();
     super.dispose();
+  }
+
+  int? get _year {
+    final y = int.tryParse(_yearC.text.trim());
+    return y != null && y >= 1870 && y <= 2100 ? y : null;
+  }
+
+  void _setYear(int? y) {
+    _yearC.text = y?.toString() ?? '';
+    _search();
   }
 
   Future<void> _search() async {
@@ -136,7 +151,13 @@ class _TmdbSearchBoxState extends ConsumerState<TmdbSearchBox> {
       _error = null;
     });
     try {
-      final r = await ref.read(metadataProvider).search(q, kind: widget.kind);
+      final r = await ref
+          .read(metadataProvider)
+          .search(
+            q,
+            kind: _kind == MediaKind.unknown ? null : _kind,
+            year: _year,
+          );
       if (mounted) setState(() => _results = r);
     } catch (e) {
       if (mounted) setState(() => _error = '搜索失败：$e');
@@ -172,6 +193,59 @@ class _TmdbSearchBoxState extends ConsumerState<TmdbSearchBox> {
           ),
           onSubmitted: (_) => _search(),
         ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 6,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            Segmented<MediaKind>(
+              key: const ValueKey('search-kind'),
+              options: const {
+                MediaKind.unknown: '全部',
+                MediaKind.episode: '剧集',
+                MediaKind.movie: '电影',
+              },
+              value: _kind,
+              onChanged: (k) {
+                setState(() => _kind = k);
+                _search();
+              },
+            ),
+            SizedBox(
+              width: 120,
+              child: TextField(
+                key: const ValueKey('search-year'),
+                controller: _yearC,
+                style: const TextStyle(fontSize: 13),
+                keyboardType: TextInputType.number,
+                inputFormatters: [
+                  FilteringTextInputFormatter.digitsOnly,
+                  LengthLimitingTextInputFormatter(4),
+                ],
+                decoration: InputDecoration(
+                  hintText: '年份',
+                  suffixIcon: PopupMenuButton<int>(
+                    tooltip: '选择年份',
+                    iconSize: 14,
+                    icon: const Icon(CupertinoIcons.calendar),
+                    onSelected: (y) => _setYear(y == 0 ? null : y),
+                    itemBuilder: (_) => [
+                      const PopupMenuItem(
+                        value: 0,
+                        height: 28,
+                        child: Text('不限'),
+                      ),
+                      for (var y = DateTime.now().year + 1; y >= 1950; y--)
+                        PopupMenuItem(value: y, height: 28, child: Text('$y')),
+                    ],
+                  ),
+                ),
+                onSubmitted: (_) => _search(),
+              ),
+            ),
+          ],
+        ),
         if (_error != null)
           Padding(
             padding: const EdgeInsets.only(top: 6),
@@ -197,6 +271,7 @@ Future<Candidate?> showTmdbSearchDialog(
   BuildContext context, {
   required String initial,
   MediaKind? kind,
+  int? year,
 }) => showDialog<Candidate>(
   context: context,
   builder: (ctx) => MacSheet(
@@ -215,6 +290,7 @@ Future<Candidate?> showTmdbSearchDialog(
                 child: TmdbSearchBox(
                   initial: initial,
                   kind: kind,
+                  year: year,
                   autoSearch: true,
                   onPick: (c) => Navigator.pop(ctx, c),
                 ),
@@ -343,6 +419,11 @@ class _GroupCard extends StatelessWidget {
               ? p.accent.withValues(alpha: 0.10)
               : (hover ? p.hover : Colors.transparent),
           borderRadius: BorderRadius.circular(Radii.lg),
+          border: Border.all(
+            color: selected
+                ? p.accent.withValues(alpha: 0.45)
+                : Colors.transparent,
+          ),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -419,9 +500,9 @@ class _GroupCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     if (ratio != null)
-                      LinearProgressIndicator(
+                      GradientProgress(
                         value: ratio,
-                        minHeight: 3,
+                        height: 4,
                         color: comp.incomplete ? p.warning : p.success,
                       ),
                     const SizedBox(height: 4),
@@ -469,119 +550,308 @@ String seasonTabLabel(int season) => season == 0 ? '特别篇' : '第 $season �
 
 enum _RowKind { main, special, extra, ignore }
 
-/// Returns the override for [row], or null when cancelled.
+/// Returns the override for [row], or null when cancelled. For episodes the
+/// sheet lists the matched show's TMDB episodes to pick from; typing a season
+/// and episode is the fallback (手动填写).
 Future<FileOverride?> showEditRowDialog(
   BuildContext context,
   MediaGroup group,
-  ReviewRow row,
-) {
-  final season = TextEditingController(
+  ReviewRow row, {
+  GroupDecision? decision,
+  List<ReviewRow> rows = const [],
+}) => showDialog<FileOverride>(
+  context: context,
+  builder: (_) =>
+      _EditRowSheet(group: group, row: row, decision: decision, rows: rows),
+);
+
+class _EditRowSheet extends ConsumerStatefulWidget {
+  final MediaGroup group;
+  final ReviewRow row;
+  final GroupDecision? decision;
+  final List<ReviewRow> rows;
+
+  const _EditRowSheet({
+    required this.group,
+    required this.row,
+    required this.decision,
+    required this.rows,
+  });
+
+  @override
+  ConsumerState<_EditRowSheet> createState() => _EditRowSheetState();
+}
+
+class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
+  late final row = widget.row;
+  late final isTv = widget.group.kind == MediaKind.episode;
+  late final current = targetRef(row);
+  late final seasonC = TextEditingController(
     text: '${row.season == noSeason ? 1 : row.season}',
   );
-  final ep = TextEditingController(
+  late final epC = TextEditingController(
     text: '${episodeOf(row.file, row.override) ?? ''}',
   );
-  var kind = row.override?.ignore ?? false
+  late var kind = row.override?.ignore ?? false
       ? _RowKind.ignore
       : switch (row.override?.kind) {
           MediaKind.special => _RowKind.special,
           MediaKind.extra => _RowKind.extra,
           _ => _RowKind.main,
         };
-  final isTv = group.kind == MediaKind.episode;
-  return showDialog<FileOverride>(
-    context: context,
-    builder: (ctx) => StatefulBuilder(
-      builder: (ctx, setState) => MacSheet(
-        child: SizedBox(
-          width: 420,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text('修正这个文件', style: Theme.of(ctx).textTheme.titleMedium),
-                const SizedBox(height: 4),
-                Text(
-                  row.file.name,
-                  style: Theme.of(ctx).textTheme.bodySmall,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
+  late var season = current?.season ?? 1;
+  var manual = false;
+
+  MediaKind? get _kind => switch (kind) {
+    _RowKind.main =>
+      widget.group.kind == MediaKind.movie
+          ? MediaKind.movie
+          : MediaKind.episode,
+    _RowKind.special => MediaKind.special,
+    _RowKind.extra => MediaKind.extra,
+    _RowKind.ignore => row.override?.kind,
+  };
+
+  void _pick(int s, int e) =>
+      Navigator.pop(context, FileOverride(season: s, episode: e, kind: _kind));
+
+  void _save() => Navigator.pop(
+    context,
+    FileOverride(
+      season: isTv ? int.tryParse(seasonC.text) : null,
+      episode: isTv ? int.tryParse(epC.text) : null,
+      kind: _kind,
+      ignore: kind == _RowKind.ignore,
+    ),
+  );
+
+  @override
+  void dispose() {
+    seasonC.dispose();
+    epC.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final sizes = seasonSizes(widget.group, widget.decision);
+    final tmdbId = effectiveMatch(widget.group, widget.decision)?.tmdbId;
+    final hasSpecials =
+        widget.group.show?.seasons.any((s) => s.number == 0) ?? false;
+    final seasons = switch (kind) {
+      _RowKind.main => (sizes.keys.toList()..sort()),
+      _RowKind.special when hasSpecials && sizes.isNotEmpty => [0],
+      _ => const <int>[],
+    };
+    final picking = isTv && tmdbId != null && seasons.isNotEmpty && !manual;
+    if (picking && !seasons.contains(season)) season = seasons.first;
+    final fields =
+        isTv && (!picking) && kind != _RowKind.ignore && kind != _RowKind.extra;
+    return MacSheet(
+      child: SizedBox(
+        width: 460,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('修正这个文件', style: theme.textTheme.titleMedium),
+              const SizedBox(height: 4),
+              Text(
+                row.file.name,
+                style: theme.textTheme.bodySmall,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 14),
+              Center(
+                child: Segmented<_RowKind>(
+                  options: const {
+                    _RowKind.main: '正片',
+                    _RowKind.special: '特别篇',
+                    _RowKind.extra: '花絮',
+                    _RowKind.ignore: '忽略',
+                  },
+                  value: kind,
+                  onChanged: (v) => setState(() => kind = v),
                 ),
-                const SizedBox(height: 14),
-                Center(
-                  child: Segmented<_RowKind>(
-                    options: const {
-                      _RowKind.main: '正片',
-                      _RowKind.special: '特别篇',
-                      _RowKind.extra: '花絮',
-                      _RowKind.ignore: '忽略',
-                    },
-                    value: kind,
-                    onChanged: (v) => setState(() => kind = v),
+              ),
+              if (picking) ...[
+                const SizedBox(height: 12),
+                if (seasons.length > 1)
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      for (final s in seasons)
+                        ChoiceChip(
+                          key: ValueKey('pick-season-$s'),
+                          label: Text(seasonTabLabel(s)),
+                          selected: s == season,
+                          onSelected: (_) => setState(() => season = s),
+                        ),
+                    ],
+                  ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  height: 300,
+                  child: Panel(child: _episodeList(tmdbId, season)),
+                ),
+              ],
+              if (fields) ...[
+                const SizedBox(height: 12),
+                FormRow(
+                  label: '季',
+                  labelWidth: 56,
+                  child: TextField(
+                    key: const ValueKey('edit-season'),
+                    controller: seasonC,
+                    keyboardType: TextInputType.number,
                   ),
                 ),
-                if (isTv) ...[
-                  const SizedBox(height: 12),
-                  FormRow(
-                    label: '季',
-                    labelWidth: 56,
-                    child: TextField(
-                      key: const ValueKey('edit-season'),
-                      controller: season,
-                      keyboardType: TextInputType.number,
-                    ),
+                FormRow(
+                  label: '集',
+                  labelWidth: 56,
+                  child: TextField(
+                    key: const ValueKey('edit-episode'),
+                    controller: epC,
+                    keyboardType: TextInputType.number,
                   ),
-                  FormRow(
-                    label: '集',
-                    labelWidth: 56,
-                    child: TextField(
-                      key: const ValueKey('edit-episode'),
-                      controller: ep,
-                      keyboardType: TextInputType.number,
+                ),
+              ],
+              const SizedBox(height: 14),
+              Row(
+                children: [
+                  if (isTv &&
+                      tmdbId != null &&
+                      seasons.isNotEmpty &&
+                      kind != _RowKind.ignore)
+                    TextButton(
+                      key: const ValueKey('edit-manual'),
+                      onPressed: () => setState(() => manual = !manual),
+                      child: Text(manual ? '从 TMDB 剧集里选' : '手动填写季和集'),
                     ),
+                  const Spacer(),
+                  OutlinedButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('取消'),
                   ),
-                ],
-                const SizedBox(height: 14),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    OutlinedButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      child: const Text('取消'),
-                    ),
+                  if (!picking) ...[
                     const SizedBox(width: 8),
                     FilledButton(
                       key: const ValueKey('edit-save'),
-                      onPressed: () => Navigator.pop(
-                        ctx,
-                        FileOverride(
-                          season: isTv ? int.tryParse(season.text) : null,
-                          episode: isTv ? int.tryParse(ep.text) : null,
-                          kind: switch (kind) {
-                            _RowKind.main =>
-                              group.kind == MediaKind.movie
-                                  ? MediaKind.movie
-                                  : MediaKind.episode,
-                            _RowKind.special => MediaKind.special,
-                            _RowKind.extra => MediaKind.extra,
-                            _RowKind.ignore => row.override?.kind,
-                          },
-                          ignore: kind == _RowKind.ignore,
-                        ),
-                      ),
+                      onPressed: _save,
                       child: const Text('保存'),
                     ),
                   ],
-                ),
-              ],
-            ),
+                ],
+              ),
+            ],
           ),
         ),
       ),
-    ),
-  );
+    );
+  }
+
+  Widget _episodeList(int tmdbId, int season) {
+    final p = Palette.of(context);
+    // Which file each episode already gets, so double-booking shows.
+    final taken = <EpisodeRef, String>{
+      for (final r in widget.rows)
+        if (r.file.path != row.file.path &&
+            r.file.role == FileRole.video &&
+            !r.ignored)
+          ?targetRef(r): r.file.name,
+    };
+    return ref
+        .watch(seasonEpisodesProvider((tmdbId, season)))
+        .when(
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (e, _) => EmptyState(
+            icon: CupertinoIcons.exclamationmark_triangle,
+            title: '读不到这一季的剧集',
+            message: '可以用「手动填写季和集」',
+          ),
+          data: (eps) => ListView(
+            padding: const EdgeInsets.all(4),
+            children: [
+              for (final e in eps)
+                Hoverable(
+                  key: ValueKey('pick-ep-$season-${e.number}'),
+                  onTap: () => _pick(season, e.number),
+                  builder: (context, hover) {
+                    final ref = EpisodeRef(season, e.number);
+                    final isCurrent = ref == current;
+                    final other = taken[ref];
+                    return Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 7,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isCurrent
+                            ? p.accent.withValues(alpha: 0.10)
+                            : hover
+                            ? p.hover
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(Radii.md),
+                      ),
+                      child: Row(
+                        children: [
+                          SizedBox(
+                            width: 34,
+                            child: Text(
+                              'E${_pad(e.number)}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: p.textMuted,
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  [
+                                    e.title ?? '第 ${e.number} 集',
+                                    if (e.airDate != null) fmtDate(e.airDate),
+                                  ].join('  ·  '),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontSize: 13),
+                                ),
+                                if (other != null)
+                                  Text(
+                                    '已对应：$other',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: p.warning,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                          if (isCurrent)
+                            Icon(
+                              CupertinoIcons.checkmark,
+                              size: 13,
+                              color: p.accent,
+                            ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+            ],
+          ),
+        );
+  }
 }
 
 /// Artwork header: blurred backdrop (or warm gradient), poster, titles,
@@ -636,13 +906,27 @@ class WorkHeader extends StatelessWidget {
         children: [
           if (onImage) ...[
             Positioned.fill(
-              child: ImageFiltered(
-                imageFilter: ImageFilter.blur(sigmaX: 28, sigmaY: 28),
-                child: Image.network(
-                  tmdbImage(backdrop, 'w780'),
-                  fit: BoxFit.cover,
-                  alignment: Alignment.topCenter,
-                  errorBuilder: (_, _, _) => ColoredBox(color: p.accentSoft),
+              child: Image.network(
+                tmdbImage(backdrop, 'w1280'),
+                fit: BoxFit.cover,
+                alignment: Alignment.topRight,
+                errorBuilder: (_, _, _) => ColoredBox(color: p.accentSoft),
+              ),
+            ),
+            // Opaque behind the text on the left, artwork showing on the right.
+            Positioned.fill(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.centerLeft,
+                    end: Alignment.centerRight,
+                    stops: const [0, 0.5, 1],
+                    colors: [
+                      p.panel.withValues(alpha: 0.97),
+                      p.panel.withValues(alpha: 0.86),
+                      p.panel.withValues(alpha: 0.18),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -650,12 +934,11 @@ class WorkHeader extends StatelessWidget {
               child: DecoratedBox(
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
-                    begin: Alignment.centerLeft,
-                    end: Alignment.centerRight,
+                    begin: Alignment.bottomCenter,
+                    end: Alignment.center,
                     colors: [
-                      p.panel.withValues(alpha: 0.93),
-                      p.panel.withValues(alpha: 0.82),
-                      p.panel.withValues(alpha: 0.62),
+                      p.panel.withValues(alpha: 0.9),
+                      p.panel.withValues(alpha: 0),
                     ],
                   ),
                 ),
@@ -663,18 +946,18 @@ class WorkHeader extends StatelessWidget {
             ),
           ],
           Padding(
-            padding: const EdgeInsets.all(18),
+            padding: const EdgeInsets.fromLTRB(20, 22, 20, 20),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Poster(
                   posterPath: m?.posterPath,
                   icon: isTv ? CupertinoIcons.tv : CupertinoIcons.film,
-                  width: 96,
-                  height: 144,
-                  radius: 8,
+                  width: 112,
+                  height: 168,
+                  radius: 9,
                 ),
-                const SizedBox(width: 18),
+                const SizedBox(width: 20),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -745,6 +1028,19 @@ class WorkHeader extends StatelessWidget {
                             ),
                         ],
                       ),
+                      if (isTv &&
+                          m != null &&
+                          (comp.tmdbEpisodes ?? 0) > 0) ...[
+                        const SizedBox(height: 10),
+                        SizedBox(
+                          width: 220,
+                          child: GradientProgress(
+                            value: comp.localEpisodes / comp.tmdbEpisodes!,
+                            color: comp.incomplete ? p.warning : p.success,
+                            height: 5,
+                          ),
+                        ),
+                      ],
                       if (overview != null) ...[
                         const SizedBox(height: 10),
                         Text(
@@ -786,6 +1082,9 @@ class DetailPane extends StatelessWidget {
   final void Function(ReviewRow) onEdit;
   final void Function(ReviewRow, bool) onCheck;
 
+  /// Put the row at this episode and renumber the files after it.
+  final void Function(ReviewRow, EpisodeRef) onShift;
+
   const DetailPane({
     super.key,
     required this.group,
@@ -795,6 +1094,7 @@ class DetailPane extends StatelessWidget {
     required this.onTab,
     required this.onEdit,
     required this.onCheck,
+    required this.onShift,
   });
 
   @override
@@ -854,6 +1154,54 @@ class DetailPane extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
       children: [
         WorkHeader(group: group, decision: decision),
+        if (!(decision?.selected ?? true)) ...[
+          const SizedBox(height: 10),
+          Container(
+            key: const ValueKey('unchecked-note'),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            decoration: BoxDecoration(
+              color: Palette.of(context).warning.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(Radii.md),
+            ),
+            child: Text(
+              m == null
+                  ? '还没有匹配作品，执行时会跳过。先在右侧「重新搜索 TMDB」选定作品。'
+                  : '这个作品没有勾选，执行时会跳过，下面也不会生成新名字。在左侧列表勾选它即可。',
+              style: const TextStyle(fontSize: 12.5),
+            ),
+          ),
+        ],
+        if (seasonOverflow(group, decision, rows) case final o?) ...[
+          const SizedBox(height: 10),
+          Container(
+            key: const ValueKey('overflow-note'),
+            padding: const EdgeInsets.fromLTRB(12, 6, 6, 6),
+            decoration: BoxDecoration(
+              color: Palette.of(context).warning.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(Radii.md),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '「${o.row.file.name}」排到了 '
+                    'S${_pad(o.target.season)}E${_pad(o.target.episode)}，'
+                    '但 TMDB 第 ${o.target.season} 季只有 ${o.size} 集。'
+                    '要改成 S${_pad(o.target.season + 1)}E01，后面的文件依次顺延吗？',
+                    style: const TextStyle(fontSize: 12.5),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                FilledButton(
+                  key: const ValueKey('overflow-apply'),
+                  onPressed: () =>
+                      onShift(o.row, EpisodeRef(o.target.season + 1, 1)),
+                  child: const Text('改成并顺延'),
+                ),
+              ],
+            ),
+          ),
+        ],
         const SizedBox(height: 14),
         Wrap(
           spacing: 6,
@@ -869,6 +1217,7 @@ class DetailPane extends StatelessWidget {
                     .where((x) => x.number == s)
                     .firstOrNull
                     ?.posterPath,
+                color: s == noSeason ? null : seasonColor(s),
                 selected: current == s,
                 onTap: () => onTab(s),
               ),
@@ -890,32 +1239,54 @@ class DetailPane extends StatelessWidget {
               indent: 52,
               children: [
                 for (final e in entries)
-                  switch (e) {
-                    _Entry(:final row?, sidecar: false) => _EpisodeRow(
-                      row: row,
-                      tmdbId: group.kind == MediaKind.episode
-                          ? m?.tmdbId
-                          : null,
-                      onEdit: () => onEdit(row),
-                      onCheck: (v) => onCheck(row, v),
-                    ),
-                    _Entry(:final row?, sidecar: true) => _SidecarRow(
-                      row: row,
-                      onEdit: () => onEdit(row),
-                      onCheck: (v) => onCheck(row, v),
-                    ),
-                    _Entry(:final missingEpisode?) => _MissingRow(
-                      season: current,
-                      episode: missingEpisode,
-                      tmdbId: m?.tmdbId,
-                    ),
-                    _ => const SizedBox.shrink(),
-                  },
+                  if (e.row case final row?)
+                    ContextMenuArea(
+                      items: () => [
+                        MenuAction(
+                          '修改对应关系…',
+                          () => onEdit(row),
+                          icon: CupertinoIcons.pencil,
+                        ),
+                        MenuAction(
+                          row.ignored ? '恢复（参与整理）' : '忽略这个文件',
+                          () => onCheck(row, row.ignored),
+                          icon: row.ignored
+                              ? CupertinoIcons.arrow_uturn_left
+                              : CupertinoIcons.eye_slash,
+                        ),
+                      ],
+                      child: _rowFor(e, current),
+                    )
+                  else
+                    _rowFor(e, current),
               ],
             ),
           ),
       ],
     );
+  }
+
+  Widget _rowFor(_Entry e, int current) {
+    final m = effectiveMatch(group, decision);
+    return switch (e) {
+      _Entry(:final row?, sidecar: false) => _EpisodeRow(
+        row: row,
+        tmdbId: group.kind == MediaKind.episode ? m?.tmdbId : null,
+        onEdit: () => onEdit(row),
+        onCheck: (v) => onCheck(row, v),
+      ),
+      _Entry(:final row?, sidecar: true) => _SidecarRow(
+        row: row,
+        onEdit: () => onEdit(row),
+        onCheck: (v) => onCheck(row, v),
+      ),
+      _Entry(:final missingEpisode?) => _MissingRow(
+        season: current,
+        episode: missingEpisode,
+        tmdbId: m?.tmdbId,
+      ),
+      _ => const SizedBox.shrink(),
+    };
   }
 }
 
@@ -937,6 +1308,7 @@ class _SeasonChip extends StatelessWidget {
   final String label;
   final String? posterPath;
   final IconData? icon;
+  final Color? color;
   final bool selected;
   final VoidCallback onTap;
 
@@ -945,6 +1317,7 @@ class _SeasonChip extends StatelessWidget {
     required this.label,
     this.posterPath,
     this.icon,
+    this.color,
     required this.selected,
     required this.onTap,
   });
@@ -958,12 +1331,25 @@ class _SeasonChip extends StatelessWidget {
         duration: const Duration(milliseconds: 120),
         padding: EdgeInsets.fromLTRB(posterPath != null ? 4 : 10, 4, 11, 4),
         decoration: BoxDecoration(
-          color: selected ? p.text : (hover ? p.hover : p.panel),
+          color: selected
+              ? (color ?? p.text)
+              : (hover ? (color ?? p.text).withValues(alpha: 0.07) : p.panel),
           borderRadius: BorderRadius.circular(8),
           border: Border.all(
-            color: selected ? p.text : p.line,
-            width: hairline,
+            color: selected
+                ? (color ?? p.text)
+                : (color?.withValues(alpha: 0.35) ?? p.line),
+            width: selected ? hairline : 1,
           ),
+          boxShadow: selected
+              ? [
+                  BoxShadow(
+                    color: (color ?? p.text).withValues(alpha: 0.28),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ]
+              : null,
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -983,13 +1369,25 @@ class _SeasonChip extends StatelessWidget {
             ] else if (icon != null) ...[
               Icon(icon, size: 13, color: selected ? p.canvas : p.textMuted),
               const SizedBox(width: 5),
+            ] else if (color != null) ...[
+              Container(
+                width: 7,
+                height: 7,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: selected ? Colors.white : color,
+                ),
+              ),
+              const SizedBox(width: 6),
             ],
             Text(
               label,
               style: TextStyle(
                 fontSize: 12.5,
                 fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-                color: selected ? p.canvas : p.text,
+                color: selected
+                    ? (color == null ? p.canvas : Colors.white)
+                    : p.text,
               ),
             ),
           ],
@@ -1003,21 +1401,25 @@ class _SeasonChip extends StatelessWidget {
 class _EpBadge extends StatelessWidget {
   final String text;
   final bool dim;
+  final Color? color;
 
-  const _EpBadge(this.text, {this.dim = false});
+  const _EpBadge(this.text, {this.dim = false, this.color});
 
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
+    final c = color;
     return Container(
       width: 34,
       height: 26,
       alignment: Alignment.center,
       decoration: BoxDecoration(
-        color: dim ? Colors.transparent : p.sidebar,
+        color: dim
+            ? Colors.transparent
+            : (c?.withValues(alpha: 0.13) ?? p.sidebar),
         borderRadius: BorderRadius.circular(6),
         border: Border.all(
-          color: dim ? p.lineStrong : p.line,
+          color: dim ? p.lineStrong : (c?.withValues(alpha: 0.3) ?? p.line),
           width: dim ? 1 : hairline,
         ),
       ),
@@ -1026,7 +1428,7 @@ class _EpBadge extends StatelessWidget {
         style: TextStyle(
           fontSize: 12,
           fontWeight: FontWeight.w700,
-          color: dim ? p.textFaint : p.text,
+          color: dim ? p.textFaint : (c ?? p.text),
           fontFeatures: const [FontFeature.tabularFigures()],
         ),
       ),
@@ -1063,14 +1465,28 @@ class _EpisodeRow extends ConsumerWidget {
     }
     final badge = target == null ? '—' : _pad(target.episode);
     final newName = r.ignored ? '已忽略' : r.newName ?? '（无改动）';
+    // The planner flags real guesses on the op ("识别置信度较低"); only a file
+    // it skipped falls back to the parser's own confidence.
     final lowConfidence =
-        r.file.parsed != null && r.file.parsed!.confidence < 0.7;
+        r.op == null &&
+        r.file.parsed != null &&
+        r.file.parsed!.confidence < 0.7;
 
+    final issue = r.conflict
+        ? p.danger
+        : (r.op?.warning != null || lowConfidence ? p.warning : null);
     return Hoverable(
       onTap: onEdit,
       builder: (context, hover) => Container(
-        color: hover ? p.hover : Colors.transparent,
-        padding: const EdgeInsets.fromLTRB(6, 9, 12, 9),
+        decoration: BoxDecoration(
+          color: hover
+              ? p.hover
+              : (issue?.withValues(alpha: 0.05) ?? Colors.transparent),
+          border: Border(
+            left: BorderSide(color: issue ?? Colors.transparent, width: 3),
+          ),
+        ),
+        padding: const EdgeInsets.fromLTRB(3, 9, 12, 9),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -1086,7 +1502,12 @@ class _EpisodeRow extends ConsumerWidget {
               padding: const EdgeInsets.only(top: 1),
               child: tmdbId == null && target == null
                   ? IconTile(CupertinoIcons.film, size: 26)
-                  : _EpBadge(badge),
+                  : _EpBadge(
+                      badge,
+                      color: target == null || r.ignored
+                          ? null
+                          : seasonColor(target.season),
+                    ),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -1122,42 +1543,46 @@ class _EpisodeRow extends ConsumerWidget {
                     ),
                   Tooltip(
                     message: [
+                      '原：${r.file.path}',
                       if (r.op != null && r.op!.dst.isNotEmpty)
                         '新：${r.op!.dst}',
-                      '原：${r.file.path}',
                     ].join('\n'),
                     waitDuration: const Duration(milliseconds: 700),
+                    // 原名 → 新名, reading order: what it is now, then what it becomes.
                     child: Text(
-                      newName,
-                      maxLines: 3,
+                      r.file.name,
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: tmdbId != null ? 12.5 : 13,
-                        color: r.ignored
-                            ? p.textFaint
-                            : (tmdbId != null ? p.textMuted : p.text),
-                        fontWeight: tmdbId != null ? null : FontWeight.w500,
-                        decoration: r.ignored
-                            ? TextDecoration.lineThrough
-                            : null,
-                      ),
+                      style: TextStyle(fontSize: 11.5, color: p.textFaint),
                     ),
                   ),
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(
-                        CupertinoIcons.arrow_turn_down_right,
-                        size: 10,
-                        color: p.textFaint,
+                      Padding(
+                        padding: const EdgeInsets.only(top: 3),
+                        child: Icon(
+                          CupertinoIcons.arrow_right,
+                          size: 10,
+                          color: p.textFaint,
+                        ),
                       ),
                       const SizedBox(width: 4),
                       Flexible(
                         child: Text(
-                          r.file.name,
-                          maxLines: 2,
+                          newName,
+                          maxLines: 3,
                           overflow: TextOverflow.ellipsis,
-                          style: TextStyle(fontSize: 11, color: p.textFaint),
+                          style: TextStyle(
+                            fontSize: tmdbId != null ? 12.5 : 13,
+                            color: r.ignored
+                                ? p.textFaint
+                                : (tmdbId != null ? p.textMuted : p.text),
+                            fontWeight: tmdbId != null ? null : FontWeight.w500,
+                            decoration: r.ignored
+                                ? TextDecoration.lineThrough
+                                : null,
+                          ),
                         ),
                       ),
                     ],
@@ -1229,7 +1654,13 @@ class _SidecarRow extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    r.ignored ? '已忽略' : r.newName ?? '（无改动）',
+                    r.file.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 11, color: p.textFaint),
+                  ),
+                  Text(
+                    '→ ${r.ignored ? '已忽略' : r.newName ?? '（无改动）'}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -1237,12 +1668,6 @@ class _SidecarRow extends StatelessWidget {
                       color: r.ignored ? p.textFaint : p.textMuted,
                       decoration: r.ignored ? TextDecoration.lineThrough : null,
                     ),
-                  ),
-                  Text(
-                    r.file.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 11, color: p.textFaint),
                   ),
                 ],
               ),
@@ -1345,17 +1770,22 @@ class _FolderOps extends StatelessWidget {
                           switch (o.kind) {
                             OpKind.mkdir => '新建 ${o.dst}',
                             OpKind.delete => '删除 ${o.src}',
-                            OpKind.relocate => o.dst,
+                            OpKind.relocate => o.src,
                           },
-                          style: const TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w500,
-                          ),
+                          style: o.kind == OpKind.relocate
+                              ? TextStyle(fontSize: 11.5, color: p.textFaint)
+                              : const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w500,
+                                ),
                         ),
                         if (o.kind == OpKind.relocate)
                           Text(
-                            o.src,
-                            style: TextStyle(fontSize: 11, color: p.textFaint),
+                            '→ ${o.dst}',
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w500,
+                            ),
                           ),
                       ],
                     ),

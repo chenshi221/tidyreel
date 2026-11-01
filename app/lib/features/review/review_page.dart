@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
 import '../../data/providers.dart';
+import '../../data/settings.dart';
 import '../../ui/tokens.dart';
 import '../../ui/widgets.dart';
 import '../../widgets/common.dart';
@@ -109,13 +110,61 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
       _review!.decisions[id] ?? const GroupDecision();
 
   Future<void> _editRow(MediaGroup g, ReviewRow row) async {
-    final o = await showEditRowDialog(context, g, row);
-    if (o == null) return;
     final d = _decisionOf(g.id);
+    final rows = rowsOf(g, d, _review!);
+    final o = await showEditRowDialog(context, g, row, decision: d, rows: rows);
+    if (o == null) return;
+    final to = o.season != null && o.episode != null
+        ? EpisodeRef(o.season!, o.episode!)
+        : null;
+    final main =
+        !o.ignore && o.kind != MediaKind.special && o.kind != MediaKind.extra;
+    // Moving one episode moves the ones after it too (12 -> S02E01, 13 -> S02E02 …).
+    if (g.kind == MediaKind.episode &&
+        main &&
+        to != null &&
+        to != targetRef(row)) {
+      return _shift(g, row, to, kind: o.kind);
+    }
     await _update(
       g.id,
       d.copyWith(overrides: {...d.overrides, row.file.path: o}),
     );
+  }
+
+  Future<void> _shift(
+    MediaGroup g,
+    ReviewRow row,
+    EpisodeRef to, {
+    MediaKind? kind,
+  }) async {
+    final before = _decisionOf(g.id);
+    final set = shiftFrom(
+      g,
+      before,
+      rowsOf(g, before, _review!),
+      row,
+      to,
+      kind: kind ?? row.override?.kind,
+    );
+    await _update(
+      g.id,
+      before.copyWith(overrides: {...before.overrides, ...set}),
+    );
+    if (!mounted || set.length < 2) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text('后面 ${set.length - 1} 个文件已依次顺延'),
+          persist: false,
+          duration: const Duration(seconds: 6),
+          action: SnackBarAction(
+            label: '撤销',
+            onPressed: () => _update(g.id, before),
+          ),
+        ),
+      );
   }
 
   Future<void> _checkRow(MediaGroup g, ReviewRow row, bool on) {
@@ -142,35 +191,42 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
       context,
       initial: effectiveMatch(g, _decisionOf(g.id))?.title ?? g.anchorTitle,
       kind: g.kind == MediaKind.unknown ? null : g.kind,
+      year: effectiveMatch(g, _decisionOf(g.id))?.year ?? g.anchorYear,
     );
-    if (c != null) await _update(g.id, _decisionOf(g.id).copyWith(match: c));
+    // Picking a match means "organize this": an unmatched group starts unchecked.
+    if (c != null) {
+      await _update(g.id, _decisionOf(g.id).copyWith(match: c, selected: true));
+    }
   }
 
   Future<void> _execute() async {
     final r = _review;
     if (r == null || r.preview.conflicts.isNotEmpty) return;
     final ops = r.preview.ops.where((o) => o.selected).toList();
+    if (ops.isEmpty) return;
     int n(ExecPhase p) => ops.where((o) => o.phase == p).length;
     final groups = r.decisions.values.where((d) => d.selected).length;
-    final ok = await confirmDialog(
-      context,
-      title: '执行任务',
-      content: Text(
-        '将处理 $groups 个作品：\n'
-        '· 重命名/移动文件 ${n(ExecPhase.files)} 项\n'
-        '· 整理文件夹 ${n(ExecPhase.folders)} 项\n'
-        '· 清理 ${n(ExecPhase.cleanup)} 项\n'
-        '执行后可在任务页撤销。',
-      ),
-      confirmLabel: '执行',
-    );
+    final ok =
+        !ref.read(settingsProvider).confirmBeforeExecute ||
+        await confirmDialog(
+          context,
+          title: '执行任务',
+          content: Text(
+            '将处理 $groups 个作品：\n'
+            '· 重命名/移动文件 ${n(ExecPhase.files)} 项\n'
+            '· 整理文件夹 ${n(ExecPhase.folders)} 项\n'
+            '· 清理 ${n(ExecPhase.cleanup)} 项\n'
+            '执行后可在任务页撤销。',
+          ),
+          confirmLabel: '执行',
+        );
     if (!ok || !mounted) return;
     final router = GoRouter.of(context);
     await _tm.run(_id);
-    router.go('/tasks');
+    router.go('/tasks/${_id.value}');
   }
 
-  // ---- keyboard: ↑↓ groups, space toggles, ⌘F search, ⌘↩ execute
+  // ---- keyboard: ↑↓ groups, ←→ seasons, space toggles, ⌘F search, ⌘↩ execute
 
   KeyEventResult _onKey(FocusNode _, KeyEvent e) {
     if (e is KeyUpEvent) return KeyEventResult.ignored;
@@ -197,6 +253,25 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
       final next = i + (k == LogicalKeyboardKey.arrowDown ? 1 : -1);
       if (next >= 0 && next < v.length) {
         setState(() => _selected = v[next].id);
+      }
+      return KeyEventResult.handled;
+    }
+    final g = _selectedGroup;
+    if (g != null &&
+        (k == LogicalKeyboardKey.arrowLeft ||
+            k == LogicalKeyboardKey.arrowRight)) {
+      // Same tab order as DetailPane: seasons ascending, then 文件夹.
+      final tabs = [
+        ...({
+          for (final row in rowsOf(g, _decisionOf(g.id), _review!)) row.season,
+        }.toList()..sort()),
+        folderTab,
+      ];
+      final at = tabs.indexOf(_detailTab);
+      final next =
+          (at < 0 ? 0 : at) + (k == LogicalKeyboardKey.arrowRight ? 1 : -1);
+      if (next >= 0 && next < tabs.length) {
+        setState(() => _detailTab = tabs[next]);
       }
       return KeyEventResult.handled;
     }
@@ -235,6 +310,14 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
               color: Palette.of(context).textMuted,
             ),
           ),
+        const Tooltip(
+          message:
+              '快捷键\n↑ ↓  切换作品\n← →  切换季 / 文件夹\n空格  勾选或取消作品\n⌘F  搜索\n⌘↩  执行',
+          child: Padding(
+            padding: EdgeInsets.all(8),
+            child: Icon(CupertinoIcons.keyboard, size: 16),
+          ),
+        ),
         IconButton(
           key: const ValueKey('toggle-actions'),
           tooltip: _showActions ? '隐藏作品操作' : '显示作品操作',
@@ -330,8 +413,10 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                     }),
                     onCheck: (id, v) =>
                         _update(id, _decisionOf(id).copyWith(selected: v)),
-                    onPick: (grp, c) =>
-                        _update(grp.id, _decisionOf(grp.id).copyWith(match: c)),
+                    onPick: (grp, c) => _update(
+                      grp.id,
+                      _decisionOf(grp.id).copyWith(match: c, selected: true),
+                    ),
                   ),
                 ),
                 const SizedBox(height: 64),
@@ -354,6 +439,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                       onTab: (t) => setState(() => _detailTab = t),
                       onEdit: (row) => _editRow(g, row),
                       onCheck: (row, v) => _checkRow(g, row, v),
+                      onShift: (row, to) => _shift(g, row, to),
                     ),
                   ),
           ),
@@ -364,12 +450,15 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
               padding: const EdgeInsets.only(bottom: 64),
               child: g == null
                   ? const SizedBox.shrink()
-                  : ActionPane(
-                      key: ValueKey(g.id),
-                      group: g,
-                      decision: _decisionOf(g.id),
-                      onChange: (d) => _update(g.id, d),
-                      onCorrect: () => _correct(g),
+                  // Own layer: stale strips were seen here while scrolling.
+                  : RepaintBoundary(
+                      child: ActionPane(
+                        key: ValueKey(g.id),
+                        group: g,
+                        decision: _decisionOf(g.id),
+                        onChange: (d) => _update(g.id, d),
+                        onCorrect: () => _correct(g),
+                      ),
                     ),
             ),
         ],
@@ -436,7 +525,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
           const SizedBox(width: 18),
           FilledButton.icon(
             key: const ValueKey('execute-button'),
-            onPressed: conflicts == 0 ? _execute : null,
+            onPressed: conflicts == 0 && ops > 0 ? _execute : null,
             icon: const Icon(CupertinoIcons.play_fill, size: 12),
             label: const Text('执行任务  ⌘↩'),
           ),

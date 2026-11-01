@@ -42,7 +42,7 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('folder-tab')));
     await tester.pumpAndSettle();
-    expect(find.text('/下载/完成/异兽魔都 (2020)'), findsOneWidget);
+    expect(find.text('→ /下载/完成/异兽魔都 (2020)'), findsOneWidget);
 
     await tester.tap(find.text('待手动识别 (1)'));
     await tester.pumpAndSettle();
@@ -50,23 +50,48 @@ void main() {
     expect(find.byKey(const ValueKey('inline-search-g3')), findsOneWidget);
   });
 
-  testWidgets('editing a row calls updateDecision with a FileOverride', (
+  testWidgets('editing a row: pick a TMDB episode, later files follow', (
     tester,
   ) async {
     final (tm, id) = await open(tester);
+    Future<GroupDecision> decision() async =>
+        (await tm.review(id) as TaskReview).decisions[_g1]!;
+
     await tester.tap(find.text('[Sub] Dorohedoro S01E01 [1080p].mkv'));
     await tester.pumpAndSettle();
-    await tester.enterText(find.byKey(const ValueKey('edit-episode')), '5');
+    // TMDB episode list; picking E03 moves this file and renumbers the rest.
+    await tester.tap(find.byKey(const ValueKey('pick-ep-1-3')));
+    await tester.pumpAndSettle();
+    var d = await decision();
+    expect(d.overrides[_file]!.episode, 3);
+    expect(d.overrides[_file]!.season, 1);
+    // 11 later season-1 files: E04…E12, then season 1 is full -> S02E01, S02E02.
+    expect(d.overrides, hasLength(12));
+    final refs = {
+      for (final o in d.overrides.values) EpisodeRef(o.season!, o.episode!),
+    };
+    expect(
+      refs,
+      containsAll([const EpisodeRef(1, 12), const EpisodeRef(2, 2)]),
+    );
+    expect(find.text('后面 11 个文件已依次顺延'), findsOneWidget);
+    await tester.tap(find.text('撤销'));
+    await tester.pumpAndSettle();
+    expect((await decision()).overrides, isEmpty);
+
+    // Manual entry is the fallback; 花絮 needs no episode.
+    await tester.tap(find.text('[Sub] Dorohedoro S01E01 [1080p].mkv'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('edit-manual')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('edit-episode')), findsOneWidget);
     await tester.tap(find.text('花絮'));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('edit-save')));
     await tester.pumpAndSettle();
-
-    final o =
-        (await tm.review(id) as TaskReview).decisions[_g1]!.overrides[_file]!;
-    expect(o.episode, 5);
-    expect(o.season, 1);
-    expect(o.kind, MediaKind.extra);
-    expect(o.ignore, isFalse);
+    d = await decision();
+    expect(d.overrides[_file]!.kind, MediaKind.extra);
+    expect(d.overrides, hasLength(1));
   });
 
   testWidgets('right pane: strategy, offset, manual match', (tester) async {
@@ -83,10 +108,12 @@ void main() {
     // unmatched group: inline search moves it to 可整理
     await tester.tap(find.text('待手动识别 (1)'));
     await tester.pumpAndSettle();
-    final box = find.descendant(
-      of: find.byKey(const ValueKey('inline-search-g3')),
-      matching: find.byType(TextField),
-    );
+    final box = find
+        .descendant(
+          of: find.byKey(const ValueKey('inline-search-g3')),
+          matching: find.byType(TextField),
+        )
+        .first;
     await tester.enterText(box, '盗梦');
     await tester.tap(find.byTooltip('搜索'));
     await tester.pumpAndSettle();
@@ -99,10 +126,11 @@ void main() {
     await tester.pumpAndSettle();
     d = (await tm.review(id) as TaskReview).decisions[const GroupId('g3')]!;
     expect(d.match?.tmdbId, 27205);
+    expect(d.selected, isTrue); // picking a match checks the group
     expect(find.text('可整理 (3)'), findsOneWidget);
   });
 
-  testWidgets('keyboard: arrows move, space toggles; execute goes to tasks', (
+  testWidgets('keyboard: arrows move, space toggles; execute opens the task', (
     tester,
   ) async {
     final (tm, id) = await open(tester);
@@ -131,7 +159,18 @@ void main() {
     expect(find.textContaining('重命名/移动文件'), findsOneWidget);
     await tester.tap(find.text('执行'));
     await tester.pumpAndSettle();
-    expect(find.text('ROUTE /tasks'), findsOneWidget);
+    expect(find.text('ROUTE detail ${id.value}'), findsOneWidget);
+  });
+
+  testWidgets('left/right arrows step through seasons and 文件夹', (tester) async {
+    await open(tester);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight); // 第 2 季
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight); // 文件夹
+    await tester.pumpAndSettle();
+    expect(find.text('→ /下载/完成/异兽魔都 (2020)'), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pumpAndSettle();
+    expect(find.text('→ /下载/完成/异兽魔都 (2020)'), findsNothing);
   });
 
   testWidgets('header, TMDB episode titles and missing-episode rows', (
