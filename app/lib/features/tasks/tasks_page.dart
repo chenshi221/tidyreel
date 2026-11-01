@@ -23,6 +23,12 @@ final taskWorksProvider = FutureProvider.autoDispose
       ];
     });
 
+/// Files of a recognized task that joined no work (shown as 未归类).
+final taskUnassignedProvider = FutureProvider.autoDispose.family<int, TaskId>(
+  (ref, id) async =>
+      (await ref.watch(taskManagerProvider).review(id)).scan.unassigned.length,
+);
+
 /// 任务中心（PLAN §5）.
 class TasksPage extends ConsumerStatefulWidget {
   const TasksPage({super.key});
@@ -134,6 +140,9 @@ class TaskCard extends ConsumerWidget {
     final works = recognized
         ? ref.watch(taskWorksProvider(t.id)).value ?? const <Candidate>[]
         : const <Candidate>[];
+    final unassigned = recognized
+        ? ref.watch(taskUnassignedProvider(t.id)).value ?? 0
+        : 0;
     final folder =
         t.paths.firstOrNull?.split('/').where((s) => s.isNotEmpty).lastOrNull ??
         '根目录';
@@ -329,6 +338,8 @@ class TaskCard extends ConsumerWidget {
                               '字幕',
                               t.subtitleCount,
                             ),
+                            if (unassigned > 0)
+                              _Count(CupertinoIcons.tray, '未归类', unassigned),
                           ],
                         ),
                       ],

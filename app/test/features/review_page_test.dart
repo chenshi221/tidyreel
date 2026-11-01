@@ -50,6 +50,29 @@ void main() {
     expect(find.byKey(const ValueKey('inline-search-g3')), findsOneWidget);
   });
 
+  testWidgets('subtitles fold under their episode until opened', (
+    tester,
+  ) async {
+    await open(tester);
+    const sub = '[Sub] Dorohedoro S01E01.chs.ass';
+    expect(find.text(sub), findsNothing);
+    expect(find.text('1 个字幕'), findsWidgets);
+    await tester.tap(find.text('1 个字幕').first);
+    await tester.pumpAndSettle();
+    expect(find.text(sub), findsOneWidget);
+  });
+
+  testWidgets('未归类 lists files no work claimed, with a reason', (tester) async {
+    await open(tester);
+    await tapKey(tester, 'unassigned-link');
+    expect(find.text('未归类 1 个文件'), findsWidgets);
+    expect(find.textContaining('广告或垃圾文件'), findsOneWidget);
+    // Back to a work.
+    await tester.tap(find.text('异兽魔都').first);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('广告或垃圾文件'), findsNothing);
+  });
+
   testWidgets('editing a row: pick a TMDB episode, later files follow', (
     tester,
   ) async {

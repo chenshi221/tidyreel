@@ -1110,7 +1110,8 @@ class DetailPane extends StatelessWidget {
         : missingEpisodes(group, decision, rows, current);
     final m = effectiveMatch(group, decision);
 
-    // Videos ordered by episode, each followed by its sidecars (same stem).
+    // Videos ordered by episode, each carrying the subtitles / audio / other
+    // files named after it ("Show.S01E01.mkv" → "Show.S01E01.zh.ass").
     final entries = <_Entry>[];
     if (current != folderTab) {
       final videos = shown.where((r) => r.file.role == FileRole.video).toList()
@@ -1122,22 +1123,38 @@ class DetailPane extends StatelessWidget {
               : a.file.name.compareTo(b.file.name);
         });
       final others = shown.where((r) => r.file.role != FileRole.video).toList();
-      final used = <ReviewRow>{};
-      String stem(String n) {
-        final i = n.indexOf('.');
-        return i < 0 ? n : n.substring(0, i);
+      String base(String n) {
+        final i = n.lastIndexOf('.');
+        return i <= 0 ? n : n.substring(0, i);
+      }
+
+      // Each companion goes to the video with the longest matching name.
+      final owned = <ReviewRow, List<ReviewRow>>{for (final v in videos) v: []};
+      final videoRef = {for (final v in videos) v: targetRef(v)};
+      final loose = <ReviewRow>[];
+      for (final o in others) {
+        ReviewRow? best;
+        for (final v in videos) {
+          final b = base(v.file.name);
+          if (o.file.name.startsWith('$b.') &&
+              (best == null || b.length > base(best.file.name).length)) {
+            best = v;
+          }
+        }
+        // Names often differ ("… [1080p].mkv" vs "….chs.ass"): same episode.
+        final ref = targetRef(o);
+        best ??= ref == null
+            ? null
+            : videos.where((v) => videoRef[v] == ref).firstOrNull;
+        best == null ? loose.add(o) : owned[best]!.add(o);
       }
 
       final slots = <(int, _Entry)>[];
       for (final v in videos) {
-        slots.add((targetRef(v)?.episode ?? 1 << 20, _Entry.video(v)));
-        final s = stem(v.file.name);
-        for (final o in others) {
-          if (!used.contains(o) && stem(o.file.name) == s) {
-            used.add(o);
-            slots.add((targetRef(v)?.episode ?? 1 << 20, _Entry.sidecar(o)));
-          }
-        }
+        slots.add((
+          targetRef(v)?.episode ?? 1 << 20,
+          _Entry.video(v, owned[v]!),
+        ));
       }
       for (final e in missing) {
         slots.add((e, _Entry.missing(e)));
@@ -1145,8 +1162,8 @@ class DetailPane extends StatelessWidget {
       // Stable: missing rows slot in before the first video of a later episode.
       slots.sort((a, b) => a.$1.compareTo(b.$1));
       entries.addAll(slots.map((s) => s.$2));
-      for (final o in others) {
-        if (!used.contains(o)) entries.add(_Entry.sidecar(o));
+      for (final o in loose) {
+        entries.add(_Entry.sidecar(o));
       }
     }
 
@@ -1239,31 +1256,65 @@ class DetailPane extends StatelessWidget {
               indent: 52,
               children: [
                 for (final e in entries)
-                  if (e.row case final row?)
-                    ContextMenuArea(
-                      items: () => [
-                        MenuAction(
-                          '修改对应关系…',
-                          () => onEdit(row),
-                          icon: CupertinoIcons.pencil,
-                        ),
-                        MenuAction(
-                          row.ignored ? '恢复（参与整理）' : '忽略这个文件',
-                          () => onCheck(row, row.ignored),
-                          icon: row.ignored
-                              ? CupertinoIcons.arrow_uturn_left
-                              : CupertinoIcons.eye_slash,
-                        ),
+                  if (e.companions.isNotEmpty)
+                    _VideoBlock(
+                      key: ValueKey('block ${e.row!.file.path}'),
+                      video: _withMenu(e, current),
+                      companions: [
+                        for (final c in e.companions)
+                          _withMenu(_Entry.sidecar(c), current),
                       ],
-                      child: _rowFor(e, current),
+                      summary: _companionSummary(e.companions),
+                      startOpen: e.companions.any(
+                        (c) => c.conflict || c.ignored,
+                      ),
                     )
                   else
-                    _rowFor(e, current),
+                    _withMenu(e, current),
               ],
             ),
           ),
       ],
     );
+  }
+
+  Widget _withMenu(_Entry e, int current) {
+    final row = e.row;
+    if (row == null) return _rowFor(e, current);
+    return ContextMenuArea(
+      items: () => [
+        MenuAction('修改对应关系…', () => onEdit(row), icon: CupertinoIcons.pencil),
+        MenuAction(
+          row.ignored ? '恢复（参与整理）' : '忽略这个文件',
+          () => onCheck(row, row.ignored),
+          icon: row.ignored
+              ? CupertinoIcons.arrow_uturn_left
+              : CupertinoIcons.eye_slash,
+        ),
+      ],
+      child: _rowFor(e, current),
+    );
+  }
+
+  /// "2 个字幕 · 1 条音轨 · 1 个其他".
+  static String _companionSummary(List<ReviewRow> rows) {
+    var subs = 0, audio = 0, other = 0;
+    for (final r in rows) {
+      if (r.file.role == FileRole.subtitle) {
+        subs++;
+      } else if (_audioExt.contains(
+        r.file.name.split('.').last.toLowerCase(),
+      )) {
+        audio++;
+      } else {
+        other++;
+      }
+    }
+    return [
+      if (subs > 0) '$subs 个字幕',
+      if (audio > 0) '$audio 条音轨',
+      if (other > 0) '$other 个其他文件',
+    ].join(' · ');
   }
 
   Widget _rowFor(_Entry e, int current) {
@@ -1290,18 +1341,97 @@ class DetailPane extends StatelessWidget {
   }
 }
 
+const _audioExt = {'mka', 'ac3', 'eac3', 'dts', 'dtshd', 'truehd'};
+
 class _Entry {
   final ReviewRow? row;
   final bool sidecar;
   final int? missingEpisode;
 
-  const _Entry.video(ReviewRow this.row)
+  /// Subtitles / audio / other files that follow this video.
+  final List<ReviewRow> companions;
+
+  const _Entry.video(ReviewRow this.row, [this.companions = const []])
     : sidecar = false,
       missingEpisode = null;
   const _Entry.sidecar(ReviewRow this.row)
     : sidecar = true,
-      missingEpisode = null;
-  const _Entry.missing(int this.missingEpisode) : row = null, sidecar = false;
+      missingEpisode = null,
+      companions = const [];
+  const _Entry.missing(int this.missingEpisode)
+    : row = null,
+      sidecar = false,
+      companions = const [];
+}
+
+/// A video row with its companions folded under a "▸ 2 个字幕" line. Opens
+/// by itself when a companion needs attention.
+class _VideoBlock extends StatefulWidget {
+  final Widget video;
+  final List<Widget> companions;
+  final String summary;
+  final bool startOpen;
+
+  const _VideoBlock({
+    super.key,
+    required this.video,
+    required this.companions,
+    required this.summary,
+    required this.startOpen,
+  });
+
+  @override
+  State<_VideoBlock> createState() => _VideoBlockState();
+}
+
+class _VideoBlockState extends State<_VideoBlock> {
+  late var _open = widget.startOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        widget.video,
+        Hoverable(
+          onTap: () => setState(() => _open = !_open),
+          builder: (context, hover) => Padding(
+            padding: const EdgeInsets.fromLTRB(52, 0, 12, 6),
+            child: Row(
+              children: [
+                AnimatedRotation(
+                  turns: _open ? 0.25 : 0,
+                  duration: const Duration(milliseconds: 150),
+                  child: Icon(
+                    CupertinoIcons.chevron_right,
+                    size: 10,
+                    color: p.textFaint,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  widget.summary,
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    color: hover ? p.text : p.textMuted,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        if (_open)
+          Padding(
+            padding: const EdgeInsets.only(left: 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: widget.companions,
+            ),
+          ),
+      ],
+    );
+  }
 }
 
 class _SeasonChip extends StatelessWidget {
@@ -1630,6 +1760,8 @@ class _SidecarRow extends StatelessWidget {
     final icon = switch (r.file.role) {
       FileRole.subtitle => CupertinoIcons.captions_bubble,
       FileRole.junk => CupertinoIcons.trash,
+      _ when _audioExt.contains(r.file.name.split('.').last.toLowerCase()) =>
+        CupertinoIcons.music_note,
       _ => CupertinoIcons.doc,
     };
     return Hoverable(
@@ -2058,6 +2190,85 @@ class ActionPane extends ConsumerWidget {
                   ],
                 ),
               ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// Why a file joined no work, in words.
+String unassignedReason(ScanFile f) => switch (f.role) {
+  FileRole.junk => '广告或垃圾文件',
+  FileRole.video => '没识别出所属作品',
+  FileRole.subtitle || FileRole.sidecar => '没找到对应的视频',
+  FileRole.other => '不认识的文件类型',
+};
+
+/// Files no work claimed, by folder. Read-only: they are never touched.
+class UnassignedPane extends StatelessWidget {
+  final List<ScanFile> files;
+
+  const UnassignedPane({super.key, required this.files});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    final byDir = <String, List<ScanFile>>{};
+    for (final f in files) {
+      final i = f.path.lastIndexOf('/');
+      (byDir[i <= 0 ? '/' : f.path.substring(0, i)] ??= []).add(f);
+    }
+    final dirs = byDir.keys.toList()..sort();
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+      children: [
+        Text(
+          '未归类 ${files.length} 个文件',
+          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '这些文件没归进任何作品，执行时原样保留。',
+          style: TextStyle(fontSize: 12.5, color: p.textMuted),
+        ),
+        for (final d in dirs) ...[
+          const SizedBox(height: 14),
+          Text(
+            d,
+            style: TextStyle(fontSize: 12, color: p.textMuted),
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 6),
+          Panel(
+            child: Rows(
+              children: [
+                for (final f in byDir[d]!)
+                  Padding(
+                    key: ValueKey('unassigned ${f.path}'),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            f.name,
+                            style: const TextStyle(fontSize: 13),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Text(
+                          '${fmtSize(f.size)} · ${unassignedReason(f)}',
+                          style: TextStyle(fontSize: 12, color: p.textFaint),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
             ),
           ),
         ],

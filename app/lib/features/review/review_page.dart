@@ -27,6 +27,9 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
   /// 0 = 可整理, 1 = 待手动识别.
   var _tab = 0;
 
+  /// Main area shows the files no work claimed instead of a work.
+  var _showUnassigned = false;
+
   /// Right pane (作品操作) can be hidden to give file names more room.
   var _showActions = true;
   final _searchFocus = FocusNode();
@@ -409,6 +412,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                     selected: _selected,
                     onSelect: (id) => setState(() {
                       _selected = id;
+                      _showUnassigned = false;
                       _detailTab = folderTab - 1;
                     }),
                     onCheck: (id, v) =>
@@ -419,12 +423,34 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                     ),
                   ),
                 ),
+                if (r.scan.unassigned.isNotEmpty)
+                  Material(
+                    type: MaterialType.transparency,
+                    child: ListTile(
+                      key: const ValueKey('unassigned-link'),
+                      dense: true,
+                      selected: _showUnassigned,
+                      leading: const Icon(CupertinoIcons.tray, size: 16),
+                      title: Text('未归类 ${r.scan.unassigned.length} 个文件'),
+                      subtitle: const Text('没归进任何作品，不会被整理'),
+                      trailing: const Icon(
+                        CupertinoIcons.chevron_right,
+                        size: 12,
+                      ),
+                      onTap: () => setState(() => _showUnassigned = true),
+                    ),
+                  ),
                 const SizedBox(height: 64),
               ],
             ),
           ),
           Expanded(
-            child: g == null
+            child: _showUnassigned
+                ? Padding(
+                    padding: const EdgeInsets.only(top: 12, bottom: 64),
+                    child: UnassignedPane(files: r.scan.unassigned),
+                  )
+                : g == null
                 ? const EmptyState(
                     icon: CupertinoIcons.rectangle_stack,
                     title: '选择左侧的作品查看明细',
@@ -443,7 +469,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                     ),
                   ),
           ),
-          if (_showActions)
+          if (_showActions && !_showUnassigned)
             Container(
               width: 284,
               decoration: BoxDecoration(border: Border(left: hairlineSide)),
