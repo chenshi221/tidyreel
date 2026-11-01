@@ -28,6 +28,12 @@ class HookBackend implements StorageBackend {
   Future<void> rename(String path, String newName) =>
       _c('rename', [path, newName], () => inner.rename(path, newName));
   @override
+  Future<void> renameMany(String dir, Map<String, String> names) => _c(
+    'renameMany',
+    [dir, for (final e in names.entries) '${e.key}>${e.value}'],
+    () => inner.renameMany(dir, names),
+  );
+  @override
   Future<void> move(String srcDir, String dstDir, List<String> names) => _c(
     'move',
     [srcDir, dstDir, ...names],
@@ -198,10 +204,9 @@ void main() {
           phase: ExecPhase.folders,
         ),
       ];
-      var moves = 0;
       final be = HookBackend(fs, (m, a) {
-        // fail the 2nd move, and the folder rename
-        if (m == 'move' && ++moves == 2) {
+        // fail b's move (batched with a's, then on its own), and the folder rename
+        if (m == 'move' && a.contains('Show.S01E02.mkv')) {
           throw const StorageException(StorageErrorCode.other, 'boom');
         }
         if (m == 'rename' && a.first == '/d/Show.S01') {
@@ -432,10 +437,11 @@ void main() {
       expect(delays, isEmpty);
     });
 
-    test('at most 2 ops in flight', () async {
+    test('at most 4 ops in flight', () async {
       var inFlight = 0, peak = 0;
+      // One file per folder, so nothing is batched.
       final be = HookBackend(
-        MemoryStorageBackend({for (var i = 0; i < 6; i++) '/d/f$i': 1}),
+        MemoryStorageBackend({for (var i = 0; i < 6; i++) '/d$i/f': 1}),
         (m, a) async {
           if (m != 'rename') return;
           peak = peak < ++inFlight ? inFlight : peak;
@@ -443,21 +449,42 @@ void main() {
           inFlight--;
         },
       );
-      final ops = [for (var i = 0; i < 6; i++) reloc('/d/f$i', '/d/g$i')];
+      final ops = [for (var i = 0; i < 6; i++) reloc('/d$i/f', '/d$i/g')];
       await run(
         executor(history).execute(task, conn, RenamePlan(ops: ops), be),
       );
-      expect(peak, 2);
+      expect(peak, 4);
     });
+  });
+
+  test('files of one folder go in one batch rename and one move', () async {
+    final f = MemoryStorageBackend({
+      for (var i = 1; i <= 3; i++) '/s/4K/0$i.mkv': 1,
+    });
+    final be = HookBackend(f);
+    final ops = [
+      for (var i = 1; i <= 3; i++)
+        reloc('/s/4K/0$i.mkv', '/s/Season 01/S.S01E0$i.mkv'),
+    ];
+    await run(executor(history).execute(task, conn, RenamePlan(ops: ops), be));
+    // Paced per file on non-Alist backends; Alist gets one batch_rename.
+    expect(be.calls.where((c) => c.startsWith('rename ')), hasLength(3));
+    expect(be.calls.where((c) => c.startsWith('move')), hasLength(1));
+    expect(be.calls.where((c) => c.startsWith('exists')), isEmpty);
+    expect(f.files, [
+      for (var i = 1; i <= 3; i++) '/s/Season 01/S.S01E0$i.mkv',
+    ]);
+    final recs = await history.records(await theBatch(history));
+    expect(statusCounts(recs)[OpStatus.done], 3);
   });
 
   test(
     'cancelling the stream stops before the next op but records in-flight ones',
     () async {
       final f = MemoryStorageBackend({
-        for (var i = 0; i < 10; i++) '/d/f$i': 1,
+        for (var i = 0; i < 10; i++) '/d$i/f': 1,
       });
-      final ops = [for (var i = 0; i < 10; i++) reloc('/d/f$i', '/d/g$i')];
+      final ops = [for (var i = 0; i < 10; i++) reloc('/d$i/f', '/d$i/g')];
       final sub = executor(history)
           .execute(task, conn, RenamePlan(ops: ops), f)
           .listen(null);
@@ -468,7 +495,7 @@ void main() {
       final recs = await history.records(await theBatch(history));
       final done = recs.where((r) => r.status == OpStatus.done).length;
       expect(done, inInclusiveRange(1, 9));
-      expect(f.files.where((p) => p.startsWith('/d/g')), hasLength(done));
+      expect(f.files.where((p) => p.endsWith('/g')), hasLength(done));
     },
   );
 }

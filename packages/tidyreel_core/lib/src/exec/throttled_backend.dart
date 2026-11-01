@@ -1,12 +1,14 @@
 import 'dart:async';
 
 import '../model/scan.dart';
+import '../storage/alist_backend.dart';
 import '../storage/storage_backend.dart';
 
 typedef Delay = Future<void> Function(Duration d);
 
 /// Wraps a backend with PLAN §4.3 rule 5: at most one request start per
-/// [minInterval] (200 ms = 5 req/s) and 3 retries (1s/2s/4s) on rate-limit/network errors.
+/// [minInterval] (200 ms = 5 req/s) and 3 retries (1s/2s/4s) on rate-limit,
+/// network and busy (file in use) errors.
 class ThrottledBackend implements StorageBackend {
   final StorageBackend inner;
   final Duration minInterval;
@@ -44,7 +46,8 @@ class ThrottledBackend implements StorageBackend {
       } on StorageException catch (e) {
         final retryable =
             e.code == StorageErrorCode.rateLimited ||
-            e.code == StorageErrorCode.network;
+            e.code == StorageErrorCode.network ||
+            e.code == StorageErrorCode.busy;
         if (!retryable || attempt >= backoff.length) rethrow;
         await delay(backoff[attempt]);
       }
@@ -61,6 +64,18 @@ class ThrottledBackend implements StorageBackend {
   @override
   Future<void> rename(String path, String newName) =>
       _call(() => inner.rename(path, newName));
+
+  /// Alist does it in one request; other backends do one request per file, so
+  /// each is paced on its own.
+  @override
+  Future<void> renameMany(String dir, Map<String, String> names) async {
+    if (inner is AlistBackend) {
+      return _call(() => inner.renameMany(dir, names));
+    }
+    for (final e in names.entries) {
+      await rename('$dir/${e.key}', e.value);
+    }
+  }
 
   @override
   Future<void> move(String srcDir, String dstDir, List<String> names) =>
