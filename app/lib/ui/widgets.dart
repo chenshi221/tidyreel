@@ -204,12 +204,14 @@ class StatusPill extends StatelessWidget {
   final String label;
   final Color color;
   final bool busy;
+  final IconData? icon;
 
   const StatusPill({
     super.key,
     required this.label,
     required this.color,
     this.busy = false,
+    this.icon,
   });
 
   @override
@@ -228,6 +230,8 @@ class StatusPill extends StatelessWidget {
             height: 8,
             child: CircularProgressIndicator(strokeWidth: 1.4, color: color),
           )
+        else if (icon != null)
+          Icon(icon, size: 11, color: color)
         else
           Container(
             width: 6,
@@ -299,8 +303,25 @@ class EmptyState extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 40, color: p.textFaint),
-              const SizedBox(height: 14),
+              Container(
+                width: 76,
+                height: 76,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [
+                      p.accent.withValues(alpha: 0.22),
+                      p.accent.withValues(alpha: 0.04),
+                    ],
+                  ),
+                  border: Border.all(
+                    color: p.accent.withValues(alpha: 0.25),
+                    width: hairline,
+                  ),
+                ),
+                child: Icon(icon, size: 32, color: p.accent),
+              ),
+              const SizedBox(height: 16),
               Text(title, style: theme.textTheme.titleMedium),
               if (message != null) ...[
                 const SizedBox(height: 4),
@@ -545,4 +566,220 @@ class MacSheet extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Fades in and rises a few pixels when first built. [index] staggers items
+/// in a list (capped so long lists don't wait).
+class FadeIn extends StatefulWidget {
+  final Widget child;
+  final int index;
+
+  const FadeIn({super.key, required this.child, this.index = 0});
+
+  @override
+  State<FadeIn> createState() => _FadeInState();
+}
+
+class _FadeInState extends State<FadeIn> with SingleTickerProviderStateMixin {
+  static const _step = 40, _base = 260, _maxSteps = 8;
+  late final AnimationController _c;
+  late final Animation<double> _a;
+
+  @override
+  void initState() {
+    super.initState();
+    final delay = _step * widget.index.clamp(0, _maxSteps);
+    final total = _base + delay;
+    _c = AnimationController(
+      vsync: this,
+      duration: Duration(milliseconds: total),
+    )..forward();
+    _a = CurvedAnimation(
+      parent: _c,
+      curve: Interval(delay / total, 1, curve: Curves.easeOutCubic),
+    );
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      (MediaQuery.maybeDisableAnimationsOf(context) ?? false)
+      ? widget.child
+      : FadeTransition(
+          opacity: _a,
+          child: AnimatedBuilder(
+            animation: _a,
+            builder: (_, c) => Transform.translate(
+              offset: Offset(0, 8 * (1 - _a.value)),
+              child: c,
+            ),
+            child: widget.child,
+          ),
+        );
+}
+
+/// Thick rounded progress bar with a gradient fill that animates between
+/// values.
+class GradientProgress extends StatelessWidget {
+  final double value;
+  final Color color;
+  final double height;
+
+  const GradientProgress({
+    super.key,
+    required this.value,
+    required this.color,
+    this.height = 6,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final hsl = HSLColor.fromColor(color);
+    final light = hsl
+        .withLightness((hsl.lightness + 0.14).clamp(0.0, 1.0))
+        .toColor();
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(height),
+      child: Container(
+        height: height,
+        color: color.withValues(alpha: 0.14),
+        alignment: Alignment.centerLeft,
+        child: TweenAnimationBuilder<double>(
+          tween: Tween(end: value.clamp(0.0, 1.0)),
+          duration: const Duration(milliseconds: 420),
+          curve: Curves.easeOutCubic,
+          builder: (_, v, _) => FractionallySizedBox(
+            widthFactor: v,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(height),
+                gradient: LinearGradient(colors: [light, color]),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A stable hue per season number so 第 1 季 / 第 2 季 read apart at a glance.
+Color seasonColor(int season) {
+  const hues = [
+    Color(0xFF8A8780), // 0: specials, neutral
+    Color(0xFFC96442),
+    Color(0xFF3E7CB1),
+    Color(0xFF5A9A5E),
+    Color(0xFF8B5FBF),
+    Color(0xFFC08A2B),
+    Color(0xFF2F9A9A),
+    Color(0xFFB8527A),
+  ];
+  if (season <= 0) return hues[0];
+  return hues[1 + (season - 1) % (hues.length - 1)];
+}
+
+/// One entry of a right-click / ⋯ menu.
+class MenuAction {
+  final String label;
+  final IconData? icon;
+  final VoidCallback onTap;
+  final bool destructive;
+
+  const MenuAction(
+    this.label,
+    this.onTap, {
+    this.icon,
+    this.destructive = false,
+  });
+}
+
+/// Pops a native-looking menu at [position] (global). `null` items are dividers.
+Future<void> showActionMenu(
+  BuildContext context,
+  Offset position,
+  List<MenuAction?> items,
+) async {
+  final p = Palette.of(context);
+  final overlay = Overlay.of(context).context.findRenderObject()! as RenderBox;
+  final local = overlay.globalToLocal(position);
+  final picked = await showMenu<MenuAction>(
+    context: context,
+    position: RelativeRect.fromLTRB(
+      local.dx,
+      local.dy,
+      overlay.size.width - local.dx,
+      overlay.size.height - local.dy,
+    ),
+    items: [
+      for (final a in items)
+        if (a == null)
+          const PopupMenuDivider(height: 9)
+        else
+          PopupMenuItem<MenuAction>(
+            value: a,
+            height: 30,
+            child: Row(
+              children: [
+                if (a.icon != null) ...[
+                  Icon(
+                    a.icon,
+                    size: 14,
+                    color: a.destructive ? p.danger : p.textMuted,
+                  ),
+                  const SizedBox(width: 9),
+                ],
+                Text(
+                  a.label,
+                  style: TextStyle(color: a.destructive ? p.danger : null),
+                ),
+              ],
+            ),
+          ),
+    ],
+  );
+  picked?.onTap();
+}
+
+/// Right-click (or two-finger click) on [child] opens [items].
+class ContextMenuArea extends StatelessWidget {
+  final Widget child;
+  final List<MenuAction?> Function() items;
+
+  const ContextMenuArea({super.key, required this.child, required this.items});
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+    behavior: HitTestBehavior.translucent,
+    onSecondaryTapUp: (d) => showActionMenu(context, d.globalPosition, items()),
+    child: child,
+  );
+}
+
+/// ⋯ button that opens the same menu as right-click.
+class MoreButton extends StatelessWidget {
+  final List<MenuAction?> Function() items;
+
+  const MoreButton({super.key, required this.items});
+
+  @override
+  Widget build(BuildContext context) => Builder(
+    builder: (context) => IconButton(
+      tooltip: '更多',
+      icon: const Icon(CupertinoIcons.ellipsis, size: 16),
+      onPressed: () {
+        final box = context.findRenderObject()! as RenderBox;
+        showActionMenu(
+          context,
+          box.localToGlobal(box.size.bottomLeft(Offset.zero)),
+          items(),
+        );
+      },
+    ),
+  );
 }

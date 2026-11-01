@@ -97,7 +97,15 @@ class PageScaffold extends StatelessWidget {
         ],
       ),
     );
-    if (isMacDesktop) header = DragToMoveArea(child: header);
+    // Not DragToMoveArea: its double-tap handler holds every click on the
+    // header's buttons for the double-tap timeout (and never resolves in tests).
+    if (isMacDesktop) {
+      header = GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onPanStart: (_) => windowManager.startDragging(),
+        child: header,
+      );
+    }
     Widget page = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [

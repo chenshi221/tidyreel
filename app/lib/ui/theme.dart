@@ -4,8 +4,9 @@ import 'tokens.dart';
 
 /// App theme from [Palette], sized like a native macOS app: 13pt body,
 /// 28pt controls, hairline borders, no ripples, no floating labels.
-ThemeData buildTheme(Brightness brightness) {
-  final p = brightness == Brightness.light ? Palette.light : Palette.dark;
+ThemeData buildTheme(Brightness brightness, {Color? accent}) {
+  final palette = brightness == Brightness.light ? Palette.light : Palette.dark;
+  final p = accent == null ? palette : palette.withAccent(accent);
   final scheme = ColorScheme(
     brightness: brightness,
     primary: p.accent,
@@ -384,10 +385,43 @@ ThemeData buildTheme(Brightness brightness) {
       elevation: 6,
       width: 420,
     ),
+    pageTransitionsTheme: PageTransitionsTheme(
+      builders: {
+        for (final t in TargetPlatform.values) t: const _FadeUpTransitions(),
+      },
+    ),
     scrollbarTheme: ScrollbarThemeData(
       thickness: const WidgetStatePropertyAll(6),
       radius: const Radius.circular(3),
       thumbColor: WidgetStatePropertyAll(p.lineStrong),
     ),
   );
+}
+
+/// Page change: fade in while rising 12px (desktop apps don't slide sideways).
+class _FadeUpTransitions extends PageTransitionsBuilder {
+  const _FadeUpTransitions();
+
+  @override
+  Widget buildTransitions<T>(
+    PageRoute<T> route,
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) {
+    if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) return child;
+    final a = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+    return FadeTransition(
+      opacity: a,
+      child: AnimatedBuilder(
+        animation: a,
+        builder: (_, c) => Transform.translate(
+          offset: Offset(0, 12 * (1 - a.value)),
+          child: c,
+        ),
+        child: child,
+      ),
+    );
+  }
 }

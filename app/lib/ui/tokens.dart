@@ -98,6 +98,29 @@ class Palette extends ThemeExtension<Palette> {
   @override
   Palette copyWith() => this;
 
+  /// Same palette with another accent; the soft tint is mixed from it.
+  Palette withAccent(Color a) => Palette(
+    canvas: canvas,
+    sidebar: sidebar,
+    panel: panel,
+    hover: hover,
+    selected: selected,
+    line: line,
+    lineStrong: lineStrong,
+    text: text,
+    textMuted: textMuted,
+    textFaint: textFaint,
+    accent: a,
+    accentSoft: Color.alphaBlend(
+      a.withValues(alpha: panel.computeLuminance() > 0.5 ? 0.13 : 0.22),
+      panel,
+    ),
+    onAccent: onAccent,
+    success: success,
+    warning: warning,
+    danger: danger,
+  );
+
   @override
   Palette lerp(Palette? other, double t) {
     if (other == null) return this;
