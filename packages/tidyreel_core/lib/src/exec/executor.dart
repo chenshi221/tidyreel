@@ -150,16 +150,10 @@ class DefaultExecutor implements Executor {
       counts[op.phase] = (counts[op.phase] ?? 0) + 1;
     }
     final seen = <ExecPhase, int>{};
-    for (final op in todo) {
-      if (cancelled()) return;
-      String? note; // set => skipped (never overwrite / cannot undo)
-      String? failure;
-      try {
-        note = await _undoOp(be, op);
-      } on Object catch (e) {
-        failure = e.toString();
-      }
-      // On failure the op stays done so the undo can be retried.
+
+    /// [note] set => skipped (never overwrite / cannot undo). On [failure]
+    /// the op stays done so the undo can be retried.
+    Future<void> finish(RenameOp op, String? note, String? failure) async {
       if (failure == null) {
         await history.mark(
           batch,
@@ -178,6 +172,100 @@ class DefaultExecutor implements Executor {
         ),
       );
     }
+
+    Future<void> undoOne(RenameOp op) async {
+      String? note, failure;
+      try {
+        note = await _undoOp(be, op);
+      } on Object catch (e) {
+        failure = e.toString();
+      }
+      await finish(op, note, failure);
+    }
+
+    // Folder renames first and one by one (they nest, and the file ops'
+    // paths are from before them); then files, batched per folder and in
+    // parallel; created folders last, once they are empty again.
+    final folders = [
+      for (final o in todo)
+        if (o.phase != ExecPhase.files) o,
+    ];
+    final files = [
+      for (final o in todo)
+        if (o.phase == ExecPhase.files && o.kind != OpKind.mkdir) o,
+    ];
+    final mkdirs = [
+      for (final o in todo)
+        if (o.phase == ExecPhase.files && o.kind == OpKind.mkdir) o,
+    ];
+    for (final op in folders) {
+      if (cancelled()) return;
+      await undoOne(op);
+    }
+
+    // One fresh listing per folder stands in for two exists() per file.
+    final dirs = {
+      for (final o in files)
+        if (o.kind == OpKind.relocate) ...[
+          p.posix.dirname(o.src),
+          p.posix.dirname(o.dst),
+        ],
+    };
+    final present = <String>{};
+    for (final d in dirs) {
+      if (cancelled()) return;
+      try {
+        present.addAll((await be.list(d, refresh: true)).map((e) => e.path));
+      } on StorageException catch (e) {
+        if (e.code != StorageErrorCode.notFound) rethrow;
+      }
+    }
+    final inverse = <RenameOp>[];
+    final byId = <OpId, RenameOp>{};
+    final rest = <RenameOp>[];
+    for (final o in files) {
+      if (o.kind != OpKind.relocate || o.src == o.dst) {
+        rest.add(o);
+      } else if (present.contains(o.src)) {
+        await finish(o, '原位置已被占用：${o.src}', null);
+      } else if (!present.contains(o.dst)) {
+        await finish(o, '目标已不存在：${o.dst}', null);
+      } else {
+        final inv = RenameOp(
+          id: o.id,
+          kind: o.kind,
+          phase: o.phase,
+          group: o.group,
+          src: o.dst,
+          dst: o.src,
+        );
+        inverse.add(inv);
+        byId[o.id] = o;
+      }
+    }
+    final left = await _batched(
+      inverse,
+      be,
+      (_) => null,
+      (inv, status, error) => finish(byId[inv.id]!, null, null),
+      (inv, {retry = false}) => undoOne(byId[inv.id]!),
+      cancelled,
+    );
+    final queue = [for (final inv in left) byId[inv.id]!, ...rest];
+    var next = 0;
+    Future<void> worker() async {
+      while (!cancelled() && next < queue.length) {
+        await undoOne(queue[next++]);
+      }
+    }
+
+    await Future.wait([
+      for (var i = 0; i < concurrency && i < queue.length; i++) worker(),
+    ]);
+    for (final op in mkdirs) {
+      if (cancelled()) return;
+      await undoOne(op);
+    }
   });
 
   /// Returns a skip reason, or null when the op was undone.
@@ -187,7 +275,10 @@ class DefaultExecutor implements Executor {
         return '删除无法撤销';
       case OpKind.mkdir:
         if (!await be.exists(op.dst)) return null;
-        if ((await be.list(op.dst)).isNotEmpty) return '文件夹非空，已保留';
+        // Fresh listing: deleting a folder on stale data could lose files.
+        if ((await be.list(op.dst, refresh: true)).isNotEmpty) {
+          return '文件夹非空，已保留';
+        }
         await be.remove(p.posix.dirname(op.dst), [p.posix.basename(op.dst)]);
         return null;
       case OpKind.relocate:

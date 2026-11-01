@@ -301,6 +301,30 @@ void main() {
     expect((await history.batches()).first.undone, isTrue);
   });
 
+  test('undo moves a folder of files back in a few batch requests', () async {
+    final mem = MemoryStorageBackend({
+      for (var i = 1; i <= 12; i++) '/s/raw/ep$i.mkv': i,
+    });
+    final before = mem.files;
+    final ops = [
+      mkdir('/s/raw/Season 01'),
+      for (var i = 1; i <= 12; i++)
+        reloc('/s/raw/ep$i.mkv', '/s/raw/Season 01/Show.S01E$i.mkv'),
+      reloc('/s/raw', '/s/Show (2026)', phase: ExecPhase.folders),
+    ];
+    final ex = executor(history);
+    await run(ex.execute(task, conn, RenamePlan(ops: ops), mem));
+    final b = await theBatch(history);
+    final hook = HookBackend(mem);
+    await run(ex.undo(b, hook));
+    expect(mem.files, before);
+    expect(statusCounts(await history.records(b)), {OpStatus.undone: 14});
+    // Not ~4 requests per file: one move for all twelve, no per-file
+    // exists() (renames are one fs/batch_rename on Alist).
+    expect(hook.calls.where((c) => c.startsWith('move')), hasLength(1));
+    expect(hook.calls.where((c) => c.startsWith('exists')).length, lessThan(4));
+  });
+
   test('undo skips deletes and leaves non-empty mkdir folders', () async {
     final ex = executor(history);
     await run(ex.execute(task, conn, RenamePlan(ops: plan()), fs));
