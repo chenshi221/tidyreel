@@ -135,7 +135,12 @@ final demoBackendProvider = Provider<StorageBackend>(
   }),
 );
 
-/// Backend for a connection id; rebuilt when connections or passwords change.
+/// Live backends by server + account. Outlives [backendForProvider] so editing
+/// favorites doesn't log in again or drop cached listings, and connections to
+/// the same server share both.
+final _backendPoolProvider = Provider<Map<String, CachedBackend>>((_) => {});
+
+/// Backend for a connection id, with listings cached (see [CachedBackend]).
 final backendForProvider = Provider<StorageBackend Function(ConnectionId)>((
   ref,
 ) {
@@ -145,14 +150,19 @@ final backendForProvider = Provider<StorageBackend Function(ConnectionId)>((
   }
   final conns = ref.watch(connectionsProvider);
   final passwords = ref.watch(connectionPasswordsProvider);
-  final cache = <ConnectionId, StorageBackend>{};
-  return (id) => cache.putIfAbsent(id, () {
+  final pool = ref.watch(_backendPoolProvider);
+  return (id) {
     final c = conns.firstWhere(
       (c) => c.id == id,
       orElse: () => throw StateError('连接不存在：${id.value}'),
     );
-    return createBackend(c, Credentials(password: passwords[id]));
-  });
+    final key = [c.type.name, c.endpoint, c.username, passwords[id]].join('\n');
+    return pool.putIfAbsent(
+      key,
+      () =>
+          CachedBackend(createBackend(c, Credentials(password: passwords[id]))),
+    );
+  };
 });
 
 /// TMDB token compiled in with `--dart-define-from-file=tmdb.local.json`
@@ -163,19 +173,23 @@ final builtInTmdbTokenProvider = Provider<String>(
 
 final metadataProvider = Provider<MetadataProvider>((ref) {
   if (ref.watch(bootstrapProvider).demo) return FakeMetadataProvider();
-  final s = ref.watch(settingsProvider);
+  // Only the TMDB fields: other settings changes must not drop the cache.
+  final (apiKey, baseUrl, language) = ref.watch(
+    settingsProvider.select(
+      (s) => (s.tmdbApiKey.trim(), s.tmdbBaseUrl.trim(), s.tmdbLanguage),
+    ),
+  );
   // The user's own key wins over the built-in one.
-  final key = s.tmdbApiKey.trim().isNotEmpty
-      ? s.tmdbApiKey.trim()
-      : ref.watch(builtInTmdbTokenProvider);
+  final key = apiKey.isNotEmpty ? apiKey : ref.watch(builtInTmdbTokenProvider);
   if (key.isEmpty) return const _MissingKeyMetadata();
   return TmdbProvider(
     TmdbConfig(
       apiKey: key,
-      baseUrl: s.tmdbBaseUrl.trim(),
-      language: s.tmdbLanguage,
-      fallbackLanguage: s.tmdbLanguage == 'en-US' ? 'zh-CN' : 'en-US',
+      baseUrl: baseUrl,
+      language: language,
+      fallbackLanguage: language == 'en-US' ? 'zh-CN' : 'en-US',
     ),
+    cache: ref.watch(bootstrapProvider).tmdbCache,
   );
 });
 
@@ -192,7 +206,12 @@ final taskManagerProvider = Provider<TaskManager>((ref) {
   final s = ref.read(settingsProvider);
   final tm = DefaultTaskManager(
     backendFor: (id) => ref.read(backendForProvider)(id),
-    recognizer: AnchorRecognizer(const RuleBasedParser(), metadata),
+    recognizer: AnchorRecognizer(
+      const RuleBasedParser(),
+      metadata,
+      altTitles: ref.read(bootstrapProvider).demo ? null : AniListTitles(),
+      hint: () => ref.read(settingsProvider).mediaHint,
+    ),
     planner: DefaultPlanner(metadata),
     executor: DefaultExecutor(
       history,

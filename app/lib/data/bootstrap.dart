@@ -6,6 +6,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'database.dart';
+import 'tmdb_cache.dart';
 
 /// Everything opened before `runApp`: database, non-secret settings (JSON file)
 /// and secrets (secrets.json). [Bootstrap.demo] is fully in-memory, used by tests and
@@ -15,10 +16,19 @@ class Bootstrap {
   final JsonStore prefs;
   final SecretStore secrets;
 
+  /// TMDB replies kept across runs; null in demo mode.
+  final FileTmdbCache? tmdbCache;
+
   /// Demo mode: memory backend with sample files and fake TMDB.
   final bool demo;
 
-  Bootstrap._(this.db, this.prefs, this.secrets, {required this.demo});
+  Bootstrap._(
+    this.db,
+    this.prefs,
+    this.secrets, {
+    required this.demo,
+    this.tmdbCache,
+  });
 
   static Future<Bootstrap> open() async {
     final dir = await getApplicationSupportDirectory();
@@ -30,6 +40,9 @@ class Bootstrap {
         File('${dir.path}${Platform.pathSeparator}secrets.json'),
       ),
       demo: false,
+      tmdbCache: FileTmdbCache.load(
+        File('${dir.path}${Platform.pathSeparator}tmdb_cache.json'),
+      ),
     );
   }
 
