@@ -28,4 +28,6 @@ jobs:
           channel: stable
           flutter-version: 3.47.4
           cache: true
+      # dart analyze doesn't fetch packages by itself (flutter's commands do).
+      - run: cd packages/tidyreel_core && dart pub get
       - run: tool/check.sh
