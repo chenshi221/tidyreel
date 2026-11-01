@@ -21,6 +21,8 @@ const _videoExt = {
 const _subExt = {'srt', 'ass', 'ssa', 'sub', 'idx', 'sup', 'vtt', 'smi', 'lrc'};
 const _sidecarExt = {
   'nfo', 'jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'tbn', 'xml', 'svg', //
+  // External audio tracks follow their video like subtitles do.
+  'mka', 'ac3', 'eac3', 'dts', 'dtshd', 'truehd',
 };
 const _junkExt = {
   'txt',
@@ -468,7 +470,13 @@ Info analyze(String raw, {required bool file}) {
 
   // ---- special / extra / movie keywords
   final em = _extraRe.firstMatch(s) ?? _extraCi.firstMatch(s);
-  if (em != null) {
+  // A keyword before an explicit episode, or one running on into more words
+  // ("Today's Menu for the Emiya Family S01E01"), is part of the title.
+  final inTitle =
+      em != null &&
+      ((a.explicitEp && em.start < cut) ||
+          RegExp(r'^ [a-z]').hasMatch(s.substring(em.end)));
+  if (em != null && !inTitle) {
     a.extraKw = true;
     mark(em.start);
   }

@@ -1160,6 +1160,28 @@ const extras = <Case>[
   Case('01.mkv', dirs: ['Featurettes', 'Movie (2019)'], k: _ex),
   Case('01.mkv', dirs: ['花絮', 'Show'], k: _ex),
   Case('01.mkv', dirs: ['SPs', 'Show'], k: _sp),
+  // An extras keyword inside the title is not an extra.
+  Case(
+    "卫宫家今天的饭.Today's Menu for the Emiya Family.2018.S01E01.mkv",
+    t: '卫宫家今天的饭',
+    s: 1,
+    e: [1],
+    k: 'episode',
+  ),
+  Case(
+    "Today's Menu for the Emiya Family - 03 [1080p].mkv",
+    t: "Today's Menu for the Emiya Family",
+    a: 3,
+    k: 'episode',
+  ),
+  Case('Show.S01.Menu.01.mkv', t: 'Show', k: _ex),
+  Case(
+    '[LoliHouse] Futsutsuka na Akujo dewa Gozaimasu ga - 09 [WebRip 1080p HEVC-10bit AAC ASSx2].mkv',
+    t: 'Futsutsuka na Akujo dewa Gozaimasu ga',
+    a: 9,
+    g: 'LoliHouse',
+    k: 'episode',
+  ),
 ];
 
 const parseCases = <Case>[
@@ -1233,5 +1255,5 @@ const classifyCases = <String, String>{
   'noextension': 'other',
   'Show.S01E01.1080p': 'other',
   'Show.part1.rar': 'other',
-  'a.mka': 'other',
+  'a.mka': 'sidecar',
 };
