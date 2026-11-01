@@ -1,0 +1,4 @@
+#!/bin/sh
+# Installed by tool/install_hooks.sh. Rejects commit subjects that break CONTRIBUTING.md.
+subject=$(grep -v '^#' "$1" | head -n 1)
+exec "$(git rev-parse --show-toplevel)/tool/lint_commit.sh" "$subject"
