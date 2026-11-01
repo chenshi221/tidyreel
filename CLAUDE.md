@@ -16,6 +16,13 @@ sections your task names before writing code.
 - `/usr/bin/git` fails until the Xcode license is accepted; prefix with
   `export PATH=/opt/homebrew/opt/git/bin:$PATH` (flutter needs this too).
 
+## Commits, PRs, releases
+
+Follow `CONTRIBUTING.md`: Conventional Commits (`type(scope): summary`, English,
+≤72 chars, checked by `tool/lint_commit.sh`), PR title = squash commit, PR body in
+Chinese from the template. Versions come from `app/pubspec.yaml`; cut releases with
+`tool/release.sh X.Y.Z` (never push tags unless the user asks).
+
 ## Rules for parallel agents
 
 - Touch only the directories your task owns (PLAN §7). Shared files — `lib/src/model/**`,
