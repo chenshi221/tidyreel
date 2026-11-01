@@ -5,6 +5,7 @@ import '../model/media.dart';
 import '../model/metadata.dart';
 import '../model/scan.dart';
 import '../parser/parser.dart';
+import '../tmdb/anilist.dart';
 import '../tmdb/metadata_provider.dart';
 import 'follow.dart';
 import 'text.dart';
@@ -33,11 +34,28 @@ final _structural = RegExp(
   caseSensitive: false,
 );
 
+/// What the user says a scan holds (设置 › 识别 › 内容类型). [mixed] decides
+/// per folder from the file names.
+enum MediaHint { mixed, anime, tv, movie }
+
+final _cjkRe = RegExp(r'[぀-ヿ㐀-鿿가-힯]');
+
 class AnchorRecognizer implements Recognizer {
   final FilenameParser parser;
   final MetadataProvider metadata;
 
-  AnchorRecognizer(this.parser, this.metadata);
+  /// Asked when TMDB finds nothing for a Latin-script title (romaji).
+  final AltTitleSource? altTitles;
+
+  /// Read once per scan, so a settings change applies to the next one.
+  final MediaHint Function() hint;
+
+  AnchorRecognizer(
+    this.parser,
+    this.metadata, {
+    this.altTitles,
+    MediaHint Function()? hint,
+  }) : hint = hint ?? (() => MediaHint.mixed);
 
   @override
   Future<ScanResult> recognize(
@@ -81,7 +99,7 @@ class AnchorRecognizer implements Recognizer {
       }
     }
 
-    final drafts = _draftGroups(videos, rootDirs);
+    final drafts = _promoteToRoots(_draftGroups(videos, rootDirs), rootDirs);
     for (final f in followers) {
       final d = _homeOf(f, drafts);
       if (d == null) {
@@ -91,12 +109,19 @@ class AnchorRecognizer implements Recognizer {
       }
     }
 
-    final cache = <String, List<Candidate>>{};
-    final groups = <MediaGroup>[];
-    final usedIds = <String>{};
-    for (final d in drafts) {
-      groups.add(await _toGroup(d, cache, usedIds));
+    final cache = <String, Future<List<Candidate>>>{};
+    final h = hint();
+    // A few folders at a time: each costs several TMDB round trips.
+    final looked = <_Lookup>[];
+    for (var i = 0; i < drafts.length; i += 4) {
+      looked.addAll(
+        await Future.wait(
+          drafts.skip(i).take(4).map((d) => _lookup(d, cache, h)),
+        ),
+      );
     }
+    final usedIds = <String>{};
+    final groups = [for (final l in looked) _toGroup(l, usedIds)];
     groups.sort(
       (a, b) => a.rootDir.compareTo(b.rootDir) != 0
           ? a.rootDir.compareTo(b.rootDir)
@@ -171,6 +196,44 @@ class AnchorRecognizer implements Recognizer {
     return drafts;
   }
 
+  /// A selected folder named after the only work inside it, one level down
+  /// ("Show/[Group] Show [01-12]/01.mkv"), becomes that work's folder: it is
+  /// the one renamed, and the inner folder turns into the season folder. With
+  /// several works inside, each keeps its own folder.
+  List<_Draft> _promoteToRoots(List<_Draft> drafts, List<String> rootDirs) {
+    final out = [...drafts];
+    for (final root in rootDirs) {
+      if (root == '/' || _structural.hasMatch(baseOf(root))) continue;
+      final inside = out
+          .where((d) => d.dir == root || d.dir.startsWith('$root/'))
+          .toList();
+      if (inside.length != 1) continue;
+      final d = inside.single;
+      if (d.dir == root || dirOf(d.dir) != root) continue;
+      final title = parser
+          .parse(
+            baseOf(root),
+            parentDirs: [
+              for (var p = dirOf(root); p != '/'; p = dirOf(p)) baseOf(p),
+            ],
+          )
+          .title;
+      // Only when the folder is named after the work: "下载" holding one show
+      // is a container, not the show's folder.
+      final names = [
+        ?d.folderTitle,
+        for (final v in d.videos.take(5)) ?v.file.parsed?.title,
+      ];
+      if (title == null ||
+          normTitle(title).isEmpty ||
+          !names.any((n) => similarity(title, n) >= 0.8)) {
+        continue;
+      }
+      out[out.indexOf(d)] = _Draft(root, d.videos, title, true);
+    }
+    return out;
+  }
+
   _Draft? _homeOf(_Entry f, List<_Draft> drafts) {
     _Draft? best;
     var sameDir = false;
@@ -199,17 +262,23 @@ class AnchorRecognizer implements Recognizer {
 
   // ---- matching -----------------------------------------------------------
 
-  Future<MediaGroup> _toGroup(
+  Future<_Lookup> _lookup(
     _Draft d,
-    Map<String, List<Candidate>> cache,
-    Set<String> usedIds,
+    Map<String, Future<List<Candidate>>> cache,
+    MediaHint hint,
   ) async {
     final vids = [for (final v in d.videos) v.file];
     final main = vids.where((v) => v.parsed?.kind != MediaKind.extra).toList();
     final tvVotes = main.where((v) => _looksTv(v.parsed)).length;
-    final kind = main.isNotEmpty && tvVotes * 2 > main.length
-        ? MediaKind.episode
-        : MediaKind.movie;
+    final looksTv = main.isNotEmpty && tvVotes * 2 > main.length;
+    final kind = switch (hint) {
+      MediaHint.movie => MediaKind.movie,
+      MediaHint.tv => main.isEmpty ? MediaKind.movie : MediaKind.episode,
+      // A folder of several files is a series; one file may be a 剧场版.
+      MediaHint.anime =>
+        looksTv || main.length > 1 ? MediaKind.episode : MediaKind.movie,
+      MediaHint.mixed => looksTv ? MediaKind.episode : MediaKind.movie,
+    };
 
     final fileTitle = _mostCommon([
       for (final v in vids)
@@ -236,48 +305,83 @@ class AnchorRecognizer implements Recognizer {
     Candidate? match;
     var score = 0.0;
     var anchor = queries.isNotEmpty ? queries.first : null;
-    search:
-    for (final q in queries) {
+
+    /// Best acceptable candidate for [q]; [scoreAs] are the names compared
+    /// with TMDB's titles (all AniList aliases, best one counts).
+    Future<bool> tryQuery(String q, {List<String>? scoreAs}) async {
       for (final y in [year, if (year != null) null]) {
-        final key = '${kind.name}|$q|$y';
-        final results = cache[key] ??= await metadata.search(
+        final results = await (cache['${kind.name}|$q|$y'] ??= metadata.search(
           q,
           kind: kind == MediaKind.movie ? MediaKind.movie : MediaKind.episode,
           year: y,
-        );
-        if (results.isEmpty) continue;
-        final s = _score(q, year, results.first);
-        if (s >= matchAcceptScore) {
-          match = results.first;
-          score = s;
-          anchor = q;
-          break search;
+        ));
+        Candidate? best;
+        var bestScore = 0.0;
+        for (final c in results.take(5)) {
+          // Anime mode leans towards Japanese productions on near ties.
+          final s =
+              (scoreAs ?? [q]).map((t) => _score(t, year, c)).fold(0.0, max) +
+              (hint == MediaHint.anime && c.originCountry == 'JP' ? 0.05 : 0);
+          if (s > bestScore) (best, bestScore) = (c, s);
         }
-        score = max(score, s);
+        score = max(score, min(bestScore, 1.0));
+        if (best != null && bestScore >= matchAcceptScore) {
+          match = best;
+          score = min(bestScore, 1.0);
+          return true;
+        }
+      }
+      return false;
+    }
+
+    for (final q in queries) {
+      if (await tryQuery(q)) {
+        anchor = q;
+        break;
+      }
+    }
+    final askAlt =
+        match == null &&
+        altTitles != null &&
+        (hint == MediaHint.mixed || hint == MediaHint.anime);
+    if (askAlt) {
+      alt:
+      for (final q in queries.where((q) => !_cjkRe.hasMatch(q))) {
+        final alts = await altTitles!.altTitles(q);
+        for (final a in alts.take(4)) {
+          if (await tryQuery(a, scoreAs: [q, ...alts])) {
+            anchor = q;
+            break alt;
+          }
+        }
       }
     }
     anchor ??= vids.isNotEmpty ? stem(vids.first.name) : baseOf(d.dir);
 
     final show = match != null && kind == MediaKind.episode
-        ? await metadata.show(match.tmdbId)
+        ? await metadata.show(match!.tmdbId)
         : null;
+    return _Lookup(d, vids, kind, anchor, year, match, score, show);
+  }
 
-    var id = 'g-${stableHash('${d.dir}|${kind.name}|${normTitle(anchor)}')}';
+  MediaGroup _toGroup(_Lookup l, Set<String> usedIds) {
+    final key = '${l.draft.dir}|${l.kind.name}|${normTitle(l.anchor)}';
+    var id = 'g-${stableHash(key)}';
     for (var n = 2; !usedIds.add(id); n++) {
-      id = 'g-${stableHash('${d.dir}|${kind.name}|${normTitle(anchor)}|$n')}';
+      id = 'g-${stableHash('$key|$n')}';
     }
-    final all = [...vids, ...d.followers]
+    final all = [...l.vids, ...l.draft.followers]
       ..sort((a, b) => a.path.compareTo(b.path));
     return MediaGroup(
       id: GroupId(id),
-      kind: kind,
-      anchorTitle: anchor,
-      anchorYear: year,
-      rootDir: d.dir,
+      kind: l.kind,
+      anchorTitle: l.anchor,
+      anchorYear: l.year,
+      rootDir: l.draft.dir,
       files: all,
-      match: match,
-      matchScore: score,
-      show: show,
+      match: l.match,
+      matchScore: l.score,
+      show: l.show,
     );
   }
 
@@ -306,6 +410,28 @@ class AnchorRecognizer implements Recognizer {
           p.season != null ||
           p.episodes.isNotEmpty ||
           p.absolute != null);
+}
+
+class _Lookup {
+  final _Draft draft;
+  final List<ScanFile> vids;
+  final MediaKind kind;
+  final String anchor;
+  final int? year;
+  final Candidate? match;
+  final double score;
+  final ShowDetail? show;
+
+  _Lookup(
+    this.draft,
+    this.vids,
+    this.kind,
+    this.anchor,
+    this.year,
+    this.match,
+    this.score,
+    this.show,
+  );
 }
 
 class _Entry {

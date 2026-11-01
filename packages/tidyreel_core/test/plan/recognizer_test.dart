@@ -16,6 +16,15 @@ class _Wrong extends FakeMetadataProvider {
   }) async => [Demo.friends];
 }
 
+class _Alt implements AltTitleSource {
+  final asked = <String>[];
+  @override
+  Future<List<String>> altTitles(String query) async {
+    asked.add(query);
+    return ['ドロヘドロ'];
+  }
+}
+
 const conn = ConnectionId('c');
 const show = '/下载/异兽魔都 2020 1080p';
 const ep1 = '[Sub] Dorohedoro S01E01 [1080p]';
@@ -208,6 +217,47 @@ void main() {
       final sub = other('/a/Show E10.chs.ass', FileRole.subtitle);
       expect(matchVideo(sub, [v1, v10])?.video.name, 'Show E10.mkv');
       expect(matchVideo(sub, [v1])?.video, isNull);
+    });
+  });
+
+  group('content hint and alt titles', () {
+    const dir = '/下载/Doro Hedoro';
+    final romaji = [
+      '$dir/[Sub] Doro Hedoro - 01 [1080p].mkv',
+      '$dir/[Sub] Doro Hedoro - 02 [1080p].mkv',
+    ];
+
+    test('romaji TMDB misses are matched through alt titles', () async {
+      final alt = _Alt();
+      final r = await AnchorRecognizer(
+        const RuleBasedParser(),
+        FakeMetadataProvider(),
+        altTitles: alt,
+      ).recognize(conn, ['/下载'], entriesOf(romaji));
+      expect(r.groups.single.match?.tmdbId, Demo.dorohedoro.tmdbId);
+      expect(r.groups.single.anchorTitle, 'Doro Hedoro');
+      expect(alt.asked, isNotEmpty);
+    });
+
+    test('TV mode never asks for alt titles', () async {
+      final alt = _Alt();
+      final r = await AnchorRecognizer(
+        const RuleBasedParser(),
+        FakeMetadataProvider(),
+        altTitles: alt,
+        hint: () => MediaHint.tv,
+      ).recognize(conn, ['/下载'], entriesOf(romaji));
+      expect(r.groups.single.match, isNull);
+      expect(alt.asked, isEmpty);
+    });
+
+    test('movie mode treats episode-looking files as movies', () async {
+      final r = await AnchorRecognizer(
+        const RuleBasedParser(),
+        FakeMetadataProvider(),
+        hint: () => MediaHint.movie,
+      ).recognize(conn, ['/下载'], entriesOf(romaji));
+      expect(r.groups.single.kind, MediaKind.movie);
     });
   });
 }

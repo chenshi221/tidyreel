@@ -28,6 +28,9 @@ class AppSettings {
 
   /// Match score 立即执行 needs to touch a work.
   final double confidenceThreshold;
+
+  /// What scans usually contain; 混合 decides per folder.
+  final MediaHint mediaHint;
   final AccentChoice accent;
   final bool sidebarCollapsed;
   final bool reduceMotion;
@@ -46,6 +49,7 @@ class AppSettings {
     this.scanPreview = true,
     this.tmdbLanguage = 'zh-CN',
     this.confidenceThreshold = 0.7,
+    this.mediaHint = MediaHint.mixed,
     this.accent = AccentChoice.terracotta,
     this.sidebarCollapsed = false,
     this.reduceMotion = false,
@@ -65,6 +69,7 @@ class AppSettings {
     bool? scanPreview,
     String? tmdbLanguage,
     double? confidenceThreshold,
+    MediaHint? mediaHint,
     AccentChoice? accent,
     bool? sidebarCollapsed,
     bool? reduceMotion,
@@ -82,6 +87,7 @@ class AppSettings {
     scanPreview: scanPreview ?? this.scanPreview,
     tmdbLanguage: tmdbLanguage ?? this.tmdbLanguage,
     confidenceThreshold: confidenceThreshold ?? this.confidenceThreshold,
+    mediaHint: mediaHint ?? this.mediaHint,
     accent: accent ?? this.accent,
     sidebarCollapsed: sidebarCollapsed ?? this.sidebarCollapsed,
     reduceMotion: reduceMotion ?? this.reduceMotion,
@@ -89,6 +95,14 @@ class AppSettings {
     notifyFinished: notifyFinished ?? this.notifyFinished,
   );
 }
+
+/// Labels for [MediaHint], in menu order.
+const mediaHintLabels = {
+  MediaHint.mixed: '混合',
+  MediaHint.anime: '动漫',
+  MediaHint.tv: '电视剧',
+  MediaHint.movie: '电影',
+};
 
 /// Accent colour: (light, dark).
 enum AccentChoice {
@@ -134,6 +148,7 @@ class SettingsNotifier extends Notifier<AppSettings> {
       confidenceThreshold:
           (j?['confidenceThreshold'] as num?)?.toDouble() ??
           d.confidenceThreshold,
+      mediaHint: pick(MediaHint.values, 'mediaHint', d.mediaHint),
       accent: pick(AccentChoice.values, 'accent', d.accent),
       sidebarCollapsed: j?['sidebarCollapsed'] as bool? ?? d.sidebarCollapsed,
       reduceMotion: j?['reduceMotion'] as bool? ?? d.reduceMotion,
@@ -156,6 +171,7 @@ class SettingsNotifier extends Notifier<AppSettings> {
       'scanPreview': state.scanPreview,
       'tmdbLanguage': state.tmdbLanguage,
       'confidenceThreshold': state.confidenceThreshold,
+      'mediaHint': state.mediaHint.name,
       'accent': state.accent.name,
       'sidebarCollapsed': state.sidebarCollapsed,
       'reduceMotion': state.reduceMotion,

@@ -235,6 +235,15 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             child: Rows(
               children: [
                 SettingRow(
+                  title: '内容类型',
+                  caption: '混合：按文件名逐个判断；动漫会用罗马音查别名、优先日本作品；选电视剧或电影则全部按该类型识别',
+                  control: Segmented<MediaHint>(
+                    options: mediaHintLabels,
+                    value: s.mediaHint,
+                    onChanged: (v) => _set((o) => o.copyWith(mediaHint: v)),
+                  ),
+                ),
+                SettingRow(
                   title: 'TMDB 语言',
                   caption: '片名、简介和集标题用哪种语言，找不到时退回英文',
                   control: Segmented<String>(
@@ -265,6 +274,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   caption: 'TMDB 上刚更新的信息没显示出来时用',
                   control: OutlinedButton(
                     onPressed: () {
+                      ref.read(bootstrapProvider).tmdbCache?.clear();
                       ref.invalidate(metadataProvider);
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(content: Text('已清除 TMDB 缓存')),
