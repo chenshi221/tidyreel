@@ -174,5 +174,17 @@ class FakeTaskManager implements TaskManager {
     _put(_with(id, TaskStage.undone, '已撤销'));
   }
 
+  @override
+  Future<void> retryFailed(TaskId id) async {
+    await Future<void>.delayed(step);
+    _put(_with(id, TaskStage.done, '整理完成'));
+  }
+
+  @override
+  Future<void> delete(TaskId id) async {
+    _tasks.remove(id);
+    _controller.add(_snapshot());
+  }
+
   void dispose() => _controller.close();
 }

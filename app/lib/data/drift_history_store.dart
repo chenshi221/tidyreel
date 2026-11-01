@@ -138,6 +138,20 @@ class DriftHistoryStore implements HistoryStore {
   }
 
   @override
+  Future<void> deleteTask(TaskId task) => db.transaction(() async {
+    final ids =
+        await (db.selectOnly(db.batches)
+              ..addColumns([db.batches.id])
+              ..where(db.batches.taskId.equals(task.value)))
+            .map((r) => r.read(db.batches.id)!)
+            .get();
+    await (db.delete(
+      db.historyRecords,
+    )..where((r) => r.batchId.isIn(ids))).go();
+    await (db.delete(db.batches)..where((b) => b.id.isIn(ids))).go();
+  });
+
+  @override
   Future<bool> isOrganized(ConnectionId connection, String path) async {
     final q =
         db.selectOnly(db.historyRecords).join([

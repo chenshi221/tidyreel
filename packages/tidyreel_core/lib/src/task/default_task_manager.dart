@@ -212,6 +212,10 @@ class DefaultTaskManager implements TaskManager {
     var plan = t.plan ??= await _plan(t);
     if (onlyConfident) plan = _confidentOnly(t, plan);
     if (!plan.canExecute) throw StateError('存在冲突，无法执行');
+    // Never report "整理完成" for a run that would touch nothing.
+    if (!plan.ops.any((o) => o.selected)) {
+      throw StateError('没有可执行的操作：请先勾选要整理的作品');
+    }
     await _set(
       t,
       _with(
@@ -232,6 +236,51 @@ class DefaultTaskManager implements TaskManager {
       ),
       null,
     );
+  }
+
+  @override
+  Future<void> retryFailed(TaskId id) async {
+    final t = await _get(id);
+    final batch = t.summary.batch;
+    if (batch == null || t.summary.stage != TaskStage.partiallyFailed) {
+      throw StateError('任务没有失败的操作');
+    }
+    for (final r in await history.records(batch)) {
+      if (r.status == OpStatus.failed || r.status == OpStatus.skipped) {
+        await history.mark(batch, r.op.id, OpStatus.pending);
+      }
+    }
+    t.cancelled = false;
+    await _set(
+      t,
+      _with(
+        t.summary,
+        stage: TaskStage.renamingFiles,
+        message: '正在重试失败的操作',
+        progress: () => 0,
+      ),
+      force: true,
+    );
+    await _drive(
+      t,
+      executor.resume(batch, backendFor(t.summary.connection)),
+      batch,
+    );
+  }
+
+  @override
+  Future<void> delete(TaskId id) async {
+    final t = await _get(id);
+    if (t.summary.stage.isActive &&
+        t.summary.stage != TaskStage.awaitingReview) {
+      throw StateError('任务正在进行，先取消再删除');
+    }
+    _tasks.remove(id);
+    _changes.add(_snapshot());
+    // Let a pending summary write land first so it can't resurrect the row.
+    await t.persistQueue;
+    await store.delete(id);
+    await history.deleteTask(id);
   }
 
   @override

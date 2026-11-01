@@ -69,6 +69,18 @@ class MemoryHistoryStore implements HistoryStore {
   ].reversed.toList();
 
   @override
+  Future<void> deleteTask(TaskId task) async {
+    final ids = [
+      for (final e in _batches.entries)
+        if (e.value.task == task) e.key,
+    ];
+    for (final id in ids) {
+      _batches.remove(id);
+      _records.remove(id);
+    }
+  }
+
+  @override
   Future<bool> isOrganized(ConnectionId connection, String path) async {
     for (final MapEntry(key: id, value: b) in _batches.entries) {
       if (b.conn != connection) continue;

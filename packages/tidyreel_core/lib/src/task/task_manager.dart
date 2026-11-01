@@ -35,4 +35,11 @@ abstract interface class TaskManager {
   Future<void> cancel(TaskId id);
 
   Future<void> undo(TaskId id, {Set<OpId>? only});
+
+  /// Runs a partly failed task's failed (and therefore skipped) ops again.
+  Future<void> retryFailed(TaskId id);
+
+  /// Removes a task that isn't running (anything but importing, recognizing
+  /// or executing) together with its undo history. Files are not touched.
+  Future<void> delete(TaskId id);
 }
