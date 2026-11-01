@@ -121,6 +121,69 @@ void main() {
     expect(find.text('连接成功'), findsOneWidget); // demo backend
   });
 
+  testWidgets('Alist drops a typed /dav prefix, empty name is filled in', (
+    tester,
+  ) async {
+    final (_, c) = await pumpPage(tester, const SourcesPage());
+    await tester.tap(find.text('添加连接'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const ValueKey('field-主机')), 'nas');
+    await tester.enterText(
+      find.byKey(const ValueKey('field-打开目录')),
+      '/dav/外接硬盘/影视',
+    );
+    await tester.enterText(find.byKey(const ValueKey('field-媒体库')), '/dav/库');
+    await tester.tap(find.text('保存'));
+    await tester.pumpAndSettle();
+    final saved = c.read(connectionsProvider).last;
+    expect(saved.startDir, '/外接硬盘/影视');
+    expect(saved.libraryRoot, '/库');
+    expect(saved.name, '影视');
+  });
+
+  testWidgets('浏览… picks a folder on the server', (tester) async {
+    await pumpPage(tester, const SourcesPage());
+    await tester.tap(find.text('添加连接'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const ValueKey('field-主机')), 'nas');
+    await tester.tap(find.text('浏览…').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('pick 下载')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('pick-this')));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const ValueKey('field-打开目录')))
+          .controller!
+          .text,
+      '/下载',
+    );
+  });
+
+  testWidgets('复制 makes a new connection with the same password', (
+    tester,
+  ) async {
+    final (_, c) = await pumpPage(tester, const SourcesPage());
+    const id = ConnectionId('demo-alist');
+    c.read(connectionPasswordsProvider.notifier).set({id: 's3cret'});
+    await tester.pump();
+    final before = c.read(connectionsProvider).length;
+    await tester.tap(find.byTooltip('更多').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.textContaining('复制'));
+    await tester.pumpAndSettle();
+    expect(find.text('添加连接'), findsWidgets);
+    await tester.enterText(find.byKey(const ValueKey('field-打开目录')), '/影视');
+    await tester.tap(find.text('保存'));
+    await tester.pumpAndSettle();
+    final all = c.read(connectionsProvider);
+    expect(all.length, before + 1);
+    expect(all.last.id, isNot(id));
+    expect(all.last.name, '影视');
+    expect(c.read(connectionPasswordsProvider)[all.last.id], 's3cret');
+  });
+
   testWidgets('bad port is rejected', (tester) async {
     await pumpPage(tester, const SourcesPage());
     await tester.tap(find.text('添加连接'));

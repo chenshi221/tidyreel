@@ -1,14 +1,17 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
 import '../../data/providers.dart';
+import '../../data/settings.dart';
 import '../../ui/tokens.dart';
 import '../../ui/widgets.dart';
 import '../../widgets/common.dart';
 import 'connection_dialog.dart' show connectionTypeLabel;
+import 'scan_preview.dart';
 import 'sources_providers.dart';
 
 /// In-page file browser for one connection (PLAN §1 步骤 2–3).
@@ -37,30 +40,37 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
   }
 
   /// Submits [only] (one row's 整理 button) or the current selection.
-  Future<void> _submit([String? only]) async {
+  Future<void> _submit([String? only, OrganizeMode? mode]) async {
     final paths = only != null
         ? [only]
         : (ref.read(browserSelectionProvider).toList()..sort());
+    final history = ref.read(historyProvider);
+    final ok =
+        !ref.read(settingsProvider).scanPreview ||
+        await showScanPreview(
+          context,
+          backend: ref.read(backendForProvider)(widget.connection.id),
+          paths: paths,
+          organizedCount: (dirs) async {
+            var n = 0;
+            for (final d in dirs) {
+              if (await history.isOrganized(widget.connection.id, d)) n++;
+            }
+            return n;
+          },
+        );
+    if (!ok || !mounted) return;
     final id = await ref
         .read(taskManagerProvider)
-        .submit(widget.connection.id, paths, ref.read(browserModeProvider));
+        .submit(
+          widget.connection.id,
+          paths,
+          mode ?? ref.read(browserModeProvider),
+        );
     if (!mounted) return;
     if (only == null) ref.read(browserSelectionProvider.notifier).clear();
-    final router = GoRouter.of(context);
-    final messenger = ScaffoldMessenger.of(context)..hideCurrentSnackBar();
-    messenger.showSnackBar(
-      SnackBar(
-        content: Text('已提交任务 ${id.value}'),
-        // With an action Flutter keeps the bar until dismissed; don't.
-        persist: false,
-        duration: const Duration(seconds: 4),
-        showCloseIcon: true,
-        action: SnackBarAction(
-          label: '查看',
-          onPressed: () => router.go('/tasks'),
-        ),
-      ),
-    );
+    // The detail page follows the task and opens the review once recognized.
+    context.go('/tasks/${id.value}');
   }
 
   @override
@@ -85,6 +95,77 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
           ? sel.setAll(selection.difference(paths.toSet()))
           : sel.setAll({...selection, ...paths});
     }
+
+    final favs = ref
+        .watch(connectionsEditorProvider)
+        .firstWhere((e) => e.id == c.id, orElse: () => c)
+        .favorites;
+    void toggleFav(String path) =>
+        ref.read(connectionsEditorProvider.notifier).toggleFavorite(c.id, path);
+    void copyPath(String path) {
+      Clipboard.setData(ClipboardData(text: path));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('已复制路径')));
+    }
+
+    List<MenuAction?> organizeItems(String path) => [
+      MenuAction(
+        '整理（原地）',
+        () => _submit(path, OrganizeMode.inPlace),
+        icon: CupertinoIcons.wand_stars,
+      ),
+      MenuAction(
+        '整理（移动到媒体库）',
+        () => _submit(path, OrganizeMode.moveToLibrary),
+        icon: CupertinoIcons.tray_arrow_down,
+      ),
+    ];
+
+    List<MenuAction?> entryMenu(RemoteEntry e) => [
+      if (e.isDir)
+        MenuAction('打开', () => _goto(e.path), icon: CupertinoIcons.folder),
+      ...organizeItems(e.path),
+      null,
+      MenuAction(
+        selection.contains(e.path) ? '取消选中' : '选中',
+        () => ref.read(browserSelectionProvider.notifier).toggle(e.path),
+        icon: CupertinoIcons.checkmark_square,
+      ),
+      if (e.isDir)
+        MenuAction(
+          favs.contains(e.path) ? '取消收藏' : '收藏',
+          () => toggleFav(e.path),
+          icon: favs.contains(e.path)
+              ? CupertinoIcons.star_slash
+              : CupertinoIcons.star,
+        ),
+      MenuAction(
+        '复制路径',
+        () => copyPath(e.path),
+        icon: CupertinoIcons.doc_on_clipboard,
+      ),
+    ];
+
+    List<MenuAction?> folderMenu() => [
+      MenuAction('刷新', () {
+        ref
+            .read(browserRefreshProvider.notifier)
+            .set(ref.read(browserRefreshProvider) + 1);
+      }, icon: CupertinoIcons.arrow_clockwise),
+      MenuAction('全选 / 取消全选', selectAll, icon: CupertinoIcons.checkmark_square),
+      null,
+      ...organizeItems(dir),
+      MenuAction(
+        fav ? '取消收藏当前文件夹' : '收藏当前文件夹',
+        () => toggleFav(dir),
+        icon: fav ? CupertinoIcons.star_slash : CupertinoIcons.star,
+      ),
+      MenuAction(
+        '复制当前路径',
+        () => copyPath(dir),
+        icon: CupertinoIcons.doc_on_clipboard,
+      ),
+    ];
 
     return PageScaffold(
       title: c.name,
@@ -168,49 +249,58 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
                 Positioned.fill(
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(28, 0, 28, 20),
-                    child: Panel(
-                      child: entries.when(
-                        loading: () =>
-                            const Center(child: CircularProgressIndicator()),
-                        error: (e, _) => EmptyState(
-                          icon: CupertinoIcons.exclamationmark_triangle,
-                          title: '无法读取文件夹',
-                          message: '$e',
-                          action: OutlinedButton(
-                            onPressed: () =>
-                                ref.invalidate(browserEntriesProvider),
-                            child: const Text('重试'),
+                    child: ContextMenuArea(
+                      items: folderMenu,
+                      child: Panel(
+                        child: entries.when(
+                          loading: () =>
+                              const Center(child: CircularProgressIndicator()),
+                          error: (e, _) => EmptyState(
+                            icon: CupertinoIcons.exclamationmark_triangle,
+                            title: '无法读取文件夹',
+                            message: '$e',
+                            action: OutlinedButton(
+                              onPressed: () =>
+                                  ref.invalidate(browserEntriesProvider),
+                              child: const Text('重试'),
+                            ),
                           ),
-                        ),
-                        data: (list) => list.isEmpty
-                            ? const EmptyState(
-                                icon: CupertinoIcons.folder,
-                                title: '这个文件夹是空的',
-                              )
-                            : ListView.separated(
-                                padding: EdgeInsets.fromLTRB(
-                                  6,
-                                  6,
-                                  6,
-                                  selection.isNotEmpty ? 96 : 6,
+                          data: (list) => list.isEmpty
+                              ? const EmptyState(
+                                  icon: CupertinoIcons.folder,
+                                  title: '这个文件夹是空的',
+                                )
+                              : ListView.separated(
+                                  padding: EdgeInsets.fromLTRB(
+                                    6,
+                                    6,
+                                    6,
+                                    selection.isNotEmpty ? 96 : 6,
+                                  ),
+                                  itemCount: list.length,
+                                  separatorBuilder: (_, _) =>
+                                      const Divider(indent: 16, endIndent: 16),
+                                  itemBuilder: (_, i) {
+                                    final e = list[i];
+                                    return ContextMenuArea(
+                                      key: ValueKey('menu ${e.name}'),
+                                      items: () => entryMenu(e),
+                                      child: _EntryTile(
+                                        entry: e,
+                                        anySelected: selection.isNotEmpty,
+                                        selected: selection.contains(e.path),
+                                        onToggle: () => ref
+                                            .read(
+                                              browserSelectionProvider.notifier,
+                                            )
+                                            .toggle(e.path),
+                                        onOpen: () => _goto(e.path),
+                                        onOrganize: () => _submit(e.path),
+                                      ),
+                                    );
+                                  },
                                 ),
-                                itemCount: list.length,
-                                separatorBuilder: (_, _) =>
-                                    const Divider(indent: 16, endIndent: 16),
-                                itemBuilder: (_, i) {
-                                  final e = list[i];
-                                  return _EntryTile(
-                                    entry: e,
-                                    anySelected: selection.isNotEmpty,
-                                    selected: selection.contains(e.path),
-                                    onToggle: () => ref
-                                        .read(browserSelectionProvider.notifier)
-                                        .toggle(e.path),
-                                    onOpen: () => _goto(e.path),
-                                    onOrganize: () => _submit(e.path),
-                                  );
-                                },
-                              ),
+                        ),
                       ),
                     ),
                   ),
@@ -221,14 +311,16 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
                     right: 0,
                     bottom: 40,
                     child: Center(
-                      child: _SelectionBar(
-                        count: selection.length,
-                        mode: ref.watch(browserModeProvider),
-                        onMode: ref.read(browserModeProvider.notifier).set,
-                        onCancel: ref
-                            .read(browserSelectionProvider.notifier)
-                            .clear,
-                        onSubmit: _submit,
+                      child: FadeIn(
+                        child: _SelectionBar(
+                          count: selection.length,
+                          mode: ref.watch(browserModeProvider),
+                          onMode: ref.read(browserModeProvider.notifier).set,
+                          onCancel: ref
+                              .read(browserSelectionProvider.notifier)
+                              .clear,
+                          onSubmit: _submit,
+                        ),
                       ),
                     ),
                   ),
@@ -272,6 +364,25 @@ class _SelectionBar extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          Container(
+            constraints: const BoxConstraints(minWidth: 22),
+            height: 22,
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: p.accent,
+              borderRadius: BorderRadius.circular(11),
+            ),
+            child: Text(
+              '$count',
+              style: TextStyle(
+                color: p.onAccent,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
           Text(
             '已选 $count 项',
             style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
@@ -385,26 +496,18 @@ class _Breadcrumbs extends StatelessWidget {
   }
 }
 
-const _videoExt = {
-  'mkv',
-  'mp4',
-  'avi',
-  'mov',
-  'ts',
-  'm2ts',
-  'wmv',
-  'flv',
-  'rmvb',
-  'webm',
-  'iso',
+Color _entryColor(RemoteEntry e, Palette p) => switch (_entryIcon(e)) {
+  CupertinoIcons.folder_fill => p.accent.withValues(alpha: 0.85),
+  CupertinoIcons.film => seasonColor(2),
+  CupertinoIcons.captions_bubble => seasonColor(3),
+  _ => p.textMuted,
 };
-const _subExt = {'ass', 'ssa', 'srt', 'sub', 'idx', 'vtt', 'sup'};
 
 IconData _entryIcon(RemoteEntry e) {
   if (e.isDir) return CupertinoIcons.folder_fill;
   final ext = e.name.contains('.') ? e.name.split('.').last.toLowerCase() : '';
-  if (_videoExt.contains(ext)) return CupertinoIcons.film;
-  if (_subExt.contains(ext)) return CupertinoIcons.captions_bubble;
+  if (videoExt.contains(ext)) return CupertinoIcons.film;
+  if (subtitleExt.contains(ext)) return CupertinoIcons.captions_bubble;
   return CupertinoIcons.doc;
 }
 
@@ -462,11 +565,7 @@ class _EntryTile extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 4),
-            Icon(
-              _entryIcon(e),
-              size: 20,
-              color: e.isDir ? p.accent.withValues(alpha: 0.85) : p.textMuted,
-            ),
+            Icon(_entryIcon(e), size: 20, color: _entryColor(e, p)),
             const SizedBox(width: 12),
             Expanded(
               child: Column(

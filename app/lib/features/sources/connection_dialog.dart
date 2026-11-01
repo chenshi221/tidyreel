@@ -5,12 +5,19 @@ import 'package:tidyreel_core/tidyreel_core.dart';
 
 import '../../ui/tokens.dart';
 import '../../ui/widgets.dart';
-import 'sources_providers.dart' show ConnCheck, ConnStatus;
+import 'folder_picker.dart';
+import 'sources_providers.dart' show ConnCheck, ConnStatus, FolderLister;
 
 String connectionTypeLabel(ConnectionType t) => switch (t) {
   ConnectionType.alist => 'Alist',
   ConnectionType.webdav => 'WebDAV',
   ConnectionType.local => '本地',
+};
+
+Color connectionTypeColor(ConnectionType t) => switch (t) {
+  ConnectionType.alist => const Color(0xFF3E7CB1),
+  ConnectionType.webdav => const Color(0xFF8B5FBF),
+  ConnectionType.local => const Color(0xFF5A9A5E),
 };
 
 IconData connectionTypeIcon(ConnectionType t) => switch (t) {
@@ -71,28 +78,41 @@ class EndpointParts {
 }
 
 /// Add (when [existing] is null) or edit a connection. [initialPassword] is the
-/// saved one (read from the keychain) so editing never silently clears it.
-/// [tester] backs the 测试连接 button.
+/// saved one (from secrets.json) so editing never silently clears it.
+/// [tester] backs the 测试连接 button, [lister] the 浏览… folder pickers.
+/// [copy]: [existing] is a template for a new connection (复制).
 Future<ConnectionDraft?> showConnectionDialog(
   BuildContext context, {
   ConnectionConfig? existing,
   String? initialPassword,
+  bool copy = false,
   Future<ConnCheck> Function(ConnectionConfig, String password)? tester,
+  FolderLister? lister,
 }) => showDialog<ConnectionDraft>(
   context: context,
   builder: (_) => _ConnectionDialog(
     existing: existing,
     initialPassword: initialPassword,
+    copy: copy,
     tester: tester,
+    lister: lister,
   ),
 );
 
 class _ConnectionDialog extends StatefulWidget {
   final ConnectionConfig? existing;
   final String? initialPassword;
+  final bool copy;
   final Future<ConnCheck> Function(ConnectionConfig, String)? tester;
+  final FolderLister? lister;
 
-  const _ConnectionDialog({this.existing, this.initialPassword, this.tester});
+  const _ConnectionDialog({
+    this.existing,
+    this.initialPassword,
+    this.copy = false,
+    this.tester,
+    this.lister,
+  });
 
   @override
   State<_ConnectionDialog> createState() => _ConnectionDialogState();
@@ -109,7 +129,9 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
       : EndpointParts.parse(widget.existing!.endpoint);
 
   late var _scheme = _initial.scheme;
-  late final _name = TextEditingController(text: widget.existing?.name);
+  late final _name = TextEditingController(
+    text: widget.copy ? null : widget.existing?.name,
+  );
   late final _host = TextEditingController(text: _initial.host);
   late final _port = TextEditingController(text: _initial.port);
   late final _path = TextEditingController(
@@ -218,26 +240,45 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
     return n == null || n < 1 || n > 65535 ? '端口应为 1–65535' : null;
   }
 
-  bool _valid() =>
-      _name.text.trim().isNotEmpty &&
-      (_local
-          ? _folder.text.trim().isNotEmpty
-          : _host.text.trim().isNotEmpty && _portError() == null);
+  bool _valid() => _local
+      ? _folder.text.trim().isNotEmpty
+      : _host.text.trim().isNotEmpty && _portError() == null;
+
+  /// Alist's API paths never start with the WebDAV mount: "/dav/外接硬盘"
+  /// typed into an Alist connection means "/外接硬盘".
+  String _apiPath(String text) {
+    final d = normalizeDir(text);
+    if (_type != ConnectionType.alist) return d;
+    return d == _davPath ? '/' : d.replaceFirst(RegExp('^$_davPath/'), '/');
+  }
+
+  /// Empty 名称: last folder of 打开目录, else the host / local folder name.
+  String get _autoName {
+    String last(String path) =>
+        path.split(RegExp(r'[/\\]')).where((s) => s.isNotEmpty).lastOrNull ??
+        '';
+    final start = last(_apiPath(_start.text));
+    if (start.isNotEmpty) return start;
+    return _local ? last(_folder.text) : _host.text.trim();
+  }
 
   ConnectionConfig _config() {
     String? opt(TextEditingController c) =>
         c.text.trim().isEmpty ? null : c.text.trim();
+    final root = opt(_root);
     return ConnectionConfig(
-      id:
-          widget.existing?.id ??
-          ConnectionId('c${DateTime.now().microsecondsSinceEpoch}'),
-      name: _name.text.trim(),
+      id: !widget.copy && widget.existing != null
+          ? widget.existing!.id
+          : ConnectionId('c${DateTime.now().microsecondsSinceEpoch}'),
+      name: _name.text.trim().isEmpty ? _autoName : _name.text.trim(),
       type: _type,
       endpoint: _endpoint,
       username: _local ? null : opt(_user),
-      libraryRoot: opt(_root),
-      favorites: widget.existing?.favorites ?? const [],
-      startDir: normalizeDir(_start.text),
+      libraryRoot: root == null ? null : _apiPath(root),
+      favorites: widget.copy
+          ? const []
+          : widget.existing?.favorites ?? const [],
+      startDir: _apiPath(_start.text),
     );
   }
 
@@ -269,12 +310,41 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
     });
   }
 
+  /// 浏览…: pick [c]'s folder on the server with the unsaved settings.
+  Future<void> _browse(TextEditingController c, String title) async {
+    if (!_valid()) {
+      setState(() => _showErrors = true);
+      return;
+    }
+    final config = _config();
+    final password = _local ? '' : _password.text;
+    final dir = await showRemoteFolderPicker(
+      context,
+      title: title,
+      initial: c.text.trim().isEmpty ? '/' : _apiPath(c.text),
+      list: (dir) => widget.lister!(config, password, dir),
+    );
+    if (dir != null) c.text = dir == '/' ? '' : dir;
+  }
+
   Future<void> _pickFolder() async {
     final dir = await getDirectoryPath(
       initialDirectory: _folder.text.trim().isEmpty ? null : _folder.text,
     );
     if (dir != null) _folder.text = dir;
   }
+
+  Widget _withBrowse(Widget field, VoidCallback onBrowse) =>
+      widget.lister == null
+      ? field
+      : Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: field),
+            const SizedBox(width: 6),
+            OutlinedButton(onPressed: onBrowse, child: const Text('浏览…')),
+          ],
+        );
 
   @override
   Widget build(BuildContext context) {
@@ -395,7 +465,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
       ),
       FormRow(
         label: '密码',
-        help: '保存在系统钥匙串里',
+        help: '只保存在这台电脑上',
         child: field(
           '密码',
           _password,
@@ -453,7 +523,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    widget.existing == null ? '添加连接' : '编辑连接',
+                    widget.existing == null || widget.copy ? '添加连接' : '编辑连接',
                     style: theme.textTheme.titleMedium,
                   ),
                   const SizedBox(height: 14),
@@ -489,12 +559,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                   children: [
                     FormRow(
                       label: '名称',
-                      child: field(
-                        '名称',
-                        _name,
-                        hint: '比如：家里的 NAS',
-                        error: required(_name),
-                      ),
+                      child: field('名称', _name, hint: '留空时自动用文件夹名'),
                     ),
                     ...(_local ? local : server),
                     const Padding(
@@ -504,12 +569,18 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                     FormRow(
                       label: '打开目录',
                       help: '点进这个连接时先打开这里，比如 /PC（可选）',
-                      child: field('打开目录', _start, hint: '/'),
+                      child: _withBrowse(
+                        field('打开目录', _start, hint: '/'),
+                        () => _browse(_start, '选择打开目录'),
+                      ),
                     ),
                     FormRow(
                       label: '媒体库',
                       help: '「移动到媒体库」模式下，整理好的文件放到这里（可选）',
-                      child: field('媒体库', _root, hint: '/影视库'),
+                      child: _withBrowse(
+                        field('媒体库', _root, hint: '/影视库'),
+                        () => _browse(_root, '选择媒体库文件夹'),
+                      ),
                     ),
                     if (result != null) ...[
                       const SizedBox(height: 10),

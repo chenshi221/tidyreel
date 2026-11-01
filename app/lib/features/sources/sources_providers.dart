@@ -84,6 +84,22 @@ final connectionTesterProvider =
       };
     });
 
+typedef FolderLister = Future<List<RemoteEntry>> Function(
+  ConnectionConfig config,
+  String password,
+  String dir,
+);
+
+/// Lists folders of an unsaved connection (the dialog's 浏览… pickers).
+final connectionListerProvider = Provider<FolderLister>((ref) {
+  final demo = ref.watch(bootstrapProvider).demo;
+  return (c, password, dir) =>
+      (demo
+              ? ref.read(demoBackendProvider)
+              : createBackend(c, Credentials(password: password)))
+          .list(dir);
+});
+
 // ---- file browser state ----
 
 enum BrowserSort { name, time, size }

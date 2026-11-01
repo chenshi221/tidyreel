@@ -22,7 +22,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('保存'));
     await tester.pumpAndSettle();
-    expect(find.text('必填'), findsNWidgets(2)); // name + host
+    expect(find.text('必填'), findsOneWidget); // host; 名称 is optional
 
     await tester.enterText(find.byKey(const ValueKey('field-名称')), '公司 NAS');
     await tester.enterText(find.byKey(const ValueKey('field-主机')), 'nas');
@@ -60,24 +60,25 @@ void main() {
 
     await tester.tap(find.text('提交为任务'));
     await tester.pumpAndSettle();
+    // The preview comes first; 取消 leaves nothing behind.
+    expect(find.text('提交前预览'), findsOneWidget);
+    await tester.tap(find.text('取消').last);
+    await tester.pumpAndSettle();
+    expect(await tm.watchAll().first, isEmpty);
+    await tester.tap(find.text('提交为任务'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('preview-submit')));
+    await tester.pumpAndSettle();
 
     final tasks = await tm.watchAll().first;
     expect(tasks, hasLength(1));
     expect(tasks.single.paths, hasLength(3));
     expect(tasks.single.mode, OrganizeMode.moveToLibrary);
-    expect(
-      find.textContaining('已提交任务 ${tasks.single.id.value}'),
-      findsOneWidget,
-    );
-
-    await tester.tap(find.text('查看'));
-    await tester.pumpAndSettle();
-    expect(find.text('ROUTE /tasks'), findsOneWidget);
+    // Lands on the new task's detail page.
+    expect(find.text('ROUTE detail ${tasks.single.id.value}'), findsOneWidget);
   });
 
-  testWidgets('hover 整理 submits one item; the toast goes away by itself', (
-    tester,
-  ) async {
+  testWidgets('hover 整理 submits one item and opens its detail', (tester) async {
     final (tm, _) = await pumpPage(tester, const SourcesPage());
     await tester.tap(find.byKey(const ValueKey('fav demo-alist /下载/完成')));
     await tester.pumpAndSettle();
@@ -95,13 +96,13 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    expect(find.text('1'), findsWidgets); // one video in the preview
+    await tester.tap(find.byKey(const ValueKey('preview-submit')));
+    await tester.pumpAndSettle();
 
     final tasks = await tm.watchAll().first;
     expect(tasks.single.paths, ['/下载/完成/Inception.2010.2160p.BluRay.x265.mkv']);
-    expect(find.textContaining('已提交任务'), findsOneWidget);
-    await tester.pump(const Duration(seconds: 5));
-    await tester.pumpAndSettle();
-    expect(find.textContaining('已提交任务'), findsNothing);
+    expect(find.text('ROUTE detail ${tasks.single.id.value}'), findsOneWidget);
   });
 
   testWidgets('clicking a folder opens it', (tester) async {
@@ -112,5 +113,29 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('[Sub] Dorohedoro S01E01 [1080p].mkv'), findsOneWidget);
     expect(find.text('已选 1 项'), findsNothing);
+  });
+
+  testWidgets('right-click a folder: 收藏, then 整理（原地） previews', (tester) async {
+    final (tm, _) = await pumpPage(tester, const SourcesPage());
+    await tester.tap(find.byKey(const ValueKey('fav demo-alist /下载/完成')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('异兽魔都 2020 1080p'), buttons: kSecondaryButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('收藏'));
+    await tester.pumpAndSettle();
+    expect(await tm.watchAll().first, isEmpty); // 收藏 submits nothing
+
+    await tester.tap(find.text('异兽魔都 2020 1080p'), buttons: kSecondaryButton);
+    await tester.pumpAndSettle();
+    expect(find.text('取消收藏'), findsOneWidget);
+    await tester.tap(find.text('整理（原地）'));
+    await tester.pumpAndSettle();
+    expect(find.text('提交前预览'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('preview-submit')));
+    await tester.pumpAndSettle();
+    final tasks = await tm.watchAll().first;
+    expect(tasks.single.mode, OrganizeMode.inPlace);
+    expect(tasks.single.paths.single, endsWith('异兽魔都 2020 1080p'));
   });
 }
