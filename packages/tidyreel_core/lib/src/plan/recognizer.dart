@@ -22,11 +22,14 @@ abstract interface class Recognizer {
 /// Below this, a TMDB hit is not accepted and the group is left for manual matching.
 const matchAcceptScore = 0.6;
 
-/// Folders that never name a title: seasons, specials, extras, subtitle folders.
+/// Folders that never name a title: seasons, specials, extras, subtitle
+/// folders, and quality / version folders ("嫁金钗/4K/01.mkv").
 final _structural = RegExp(
   r'^(season|series)[\s._\-]*\d+.*$|^s\d{1,2}$|^第\s*[0-9一二三四五六七八九十百]+\s*[季部].*$|'
   r'^(specials?|sp|ova|oad|extras?|featurettes?|behind the scenes|bonus|'
-  r'特别篇|特典|花絮|番外|subs?|subtitles?|字幕)$',
+  r'特别篇|特典|花絮|番外|subs?|subtitles?|字幕)$|'
+  r'^(\d{3,4}[pi]|[248]k|uhd|fhd|hdr(10)?\+?|dv|dolby[\s._-]?vision|杜比视界|'
+  r'blu-?ray|web-?dl|remux|高清|超清|蓝光|原盘|国语|粤语|国配|中字|普通话)$',
   caseSensitive: false,
 );
 

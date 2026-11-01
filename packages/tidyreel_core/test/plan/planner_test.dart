@@ -846,4 +846,103 @@ void main() {
       expect(p.ops.last.dst, '/d/谁是谁： 第二季？ (2001)');
     });
   });
+
+  group('real parser: bare numbers and air dates', () {
+    Future<RenamePlan> run(
+      List<String> paths, [
+      PlanOptions options = const PlanOptions(),
+    ]) async {
+      final meta = FakeMetadataProvider();
+      final scan = await AnchorRecognizer(
+        const RuleBasedParser(),
+        meta,
+      ).recognize(conn, ['/下载'], entriesOf(paths));
+      return planner(meta).build(scan, const {}, options);
+    }
+
+    test(
+      '01.mkv … in a show folder (under a 4K folder) are selected episodes',
+      () async {
+        final p = await run([
+          for (final n in ['01', '02', '03']) '/下载/异兽魔都/4K/$n.mkv',
+        ]);
+        final files = p.ops
+            .where(
+              (o) => o.phase == ExecPhase.files && o.kind == OpKind.relocate,
+            )
+            .toList();
+        expect(files, hasLength(3));
+        // 4K is not the show folder, but it holds just this season: files are
+        // renamed in place and 4K itself becomes Season 01.
+        expect(
+          opFor(p, '/下载/异兽魔都/4K/01.mkv').dst,
+          '/下载/异兽魔都/4K/$name.S01E01.mkv',
+        );
+        expect(p.ops.where((o) => o.kind == OpKind.mkdir), isEmpty);
+        final season = opFor(p, '/下载/异兽魔都/4K');
+        expect(season.dst, '/下载/异兽魔都/Season 01');
+        expect(season.phase, ExecPhase.folders);
+        expect(
+          files.every((o) => o.selected && o.warning == null),
+          isTrue,
+          reason: files.map((o) => o.warning).join(','),
+        );
+        expect(opFor(p, '/下载/异兽魔都/4K/02.mkv').dst, endsWith('S01E02.mkv'));
+      },
+    );
+
+    test('a 4K folder with a subfolder is not reused as the season', () async {
+      final p = await run([
+        for (final n in ['01', '02']) '/下载/异兽魔都/4K/$n.mkv',
+        '/下载/异兽魔都/4K/花絮/x.mkv',
+      ]);
+      expect(
+        opFor(p, '/下载/异兽魔都/4K/01.mkv').dst,
+        '/下载/异兽魔都/Season 01/$name.S01E01.mkv',
+      );
+      expect(p.ops.where((o) => o.src == '/下载/异兽魔都/4K'), isEmpty);
+    });
+
+    test('single season without a Season folder when turned off', () async {
+      final p = await run(
+        [
+          for (final n in ['01', '02']) '/下载/异兽魔都/4K/$n.mkv',
+        ],
+        const PlanOptions(
+          naming: NamingProfile(tv: NamingOptions(singleSeasonFolder: false)),
+        ),
+      );
+      // 异兽魔都 has two seasons on TMDB: it keeps its Season folder.
+      expect(opFor(p, '/下载/异兽魔都/4K').dst, '/下载/异兽魔都/Season 01');
+      final one = await run(
+        [
+          for (final n in ['01', '02']) '/下载/海贼王/4K/$n.mkv',
+        ],
+        const PlanOptions(
+          naming: NamingProfile(tv: NamingOptions(singleSeasonFolder: false)),
+        ),
+      );
+      expect(
+        opFor(one, '/下载/海贼王/4K/01.mkv').dst,
+        matches(RegExp(r'^/下载/海贼王/[^/]+S01E01\.mkv$')),
+      );
+    });
+
+    test('a single bare number stays a flagged guess', () async {
+      final p = await run(['/下载/异兽魔都/4K/01.mkv']);
+      expect(opFor(p, '/下载/异兽魔都/4K/01.mkv').selected, isFalse);
+    });
+
+    test(
+      'variety-show file named by air date maps to that TMDB episode',
+      () async {
+        // Fake episodes air weekly from 2020-01-12, so 2020-01-19 is E02.
+        final p = await run(['/下载/异兽魔都/异兽魔都.20200119.mkv']);
+        expect(
+          opFor(p, '/下载/异兽魔都/异兽魔都.20200119.mkv').dst,
+          endsWith('S01E02.mkv'),
+        );
+      },
+    );
+  });
 }
