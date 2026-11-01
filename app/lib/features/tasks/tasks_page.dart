@@ -46,6 +46,13 @@ class _TasksPageState extends ConsumerState<TasksPage> {
       subtitle: '扫描和识别在后台进行，识别完成后在这里确认和执行',
       maxWidth: 1000,
       actions: [
+        if (_finished && finished.isNotEmpty)
+          TextButton.icon(
+            key: const ValueKey('clear-finished'),
+            onPressed: () => confirmDeleteTask(context, ref, finished),
+            icon: const Icon(CupertinoIcons.trash, size: 13),
+            label: const Text('清空'),
+          ),
         Segmented<bool>(
           options: {
             false: '进行中 (${active.length})',
@@ -74,7 +81,10 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                 padding: const EdgeInsets.fromLTRB(28, 14, 28, 28),
                 itemCount: shown.length,
                 separatorBuilder: (_, _) => const SizedBox(height: 10),
-                itemBuilder: (_, i) => TaskCard(task: shown[i]),
+                itemBuilder: (_, i) => FadeIn(
+                  index: i,
+                  child: TaskCard(task: shown[i]),
+                ),
               ),
       ),
     );
@@ -154,177 +164,323 @@ class TaskCard extends ConsumerWidget {
         content: const Text('将只执行高置信、没有冲突的项，其余保持不动。确定执行吗？'),
         confirmLabel: '执行',
       );
-      if (ok) await tm.run(t.id, onlyConfident: true);
+      if (!ok) return;
+      try {
+        await tm.run(t.id, onlyConfident: true);
+      } on StateError catch (e) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(e.message)));
+        }
+      }
     }
 
-    Future<void> undo() async {
-      final ok = await confirmDialog(
-        context,
-        title: '撤销整批',
-        content: const Text('将把这个任务改过的文件恢复成原来的名字和位置。确定撤销吗？'),
-        confirmLabel: '撤销',
-        destructive: true,
-      );
-      if (ok) await tm.undo(t.id);
-    }
+    Future<void> undo() => confirmUndo(context, ref, t.id);
 
-    return Panel(
-      padding: const EdgeInsets.all(14),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _PosterStack(works: works, stage: t.stage),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Flexible(
+    List<MenuAction?> menu() => [
+      MenuAction(
+        '打开详情',
+        () => context.go('/tasks/${t.id.value}'),
+        icon: CupertinoIcons.doc_text,
+      ),
+      if (t.stage == TaskStage.awaitingReview) ...[
+        MenuAction(
+          '去确认',
+          () => context.go('/tasks/${t.id.value}/review'),
+          icon: CupertinoIcons.eye,
+        ),
+        MenuAction('立即执行', runConfident, icon: CupertinoIcons.play),
+      ],
+      if (t.stage == TaskStage.partiallyFailed)
+        MenuAction(
+          '重试失败项',
+          () => tm.retryFailed(t.id),
+          icon: CupertinoIcons.arrow_clockwise,
+        ),
+      if (t.stage == TaskStage.done || t.stage == TaskStage.partiallyFailed)
+        MenuAction('撤销', undo, icon: CupertinoIcons.arrow_uturn_left),
+      if (t.stage.isActive)
+        MenuAction('取消', () => tm.cancel(t.id), icon: CupertinoIcons.stop),
+      null,
+      MenuAction('复制任务 ID', () {
+        Clipboard.setData(ClipboardData(text: t.id.value));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('已复制任务 ID')));
+      }, icon: CupertinoIcons.doc_on_clipboard),
+      if (canDeleteTask(t))
+        MenuAction(
+          '删除记录',
+          () => confirmDeleteTask(context, ref, [t]),
+          icon: CupertinoIcons.trash,
+          destructive: true,
+        ),
+    ];
+
+    // Awaiting review opens the review page; anything else its details.
+    final target = t.stage == TaskStage.awaitingReview
+        ? '/tasks/${t.id.value}/review'
+        : '/tasks/${t.id.value}';
+
+    final running = t.stage.isActive && t.stage != TaskStage.awaitingReview;
+    final body = Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _PosterStack(works: works, stage: t.stage),
+        const SizedBox(width: 16),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Flexible(
+                    child: Text(
+                      title,
+                      style: theme.textTheme.titleMedium,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  StatusPill(
+                    label: stageLabel(t.stage),
+                    color: statusColor,
+                    busy: running,
+                    icon: running ? null : statusIcon,
+                  ),
+                  const Spacer(),
+                  MoreButton(items: menu),
+                ],
+              ),
+              const SizedBox(height: 3),
+              Row(
+                children: [
+                  Tooltip(
+                    message: '点击复制任务 ID',
+                    child: Hoverable(
+                      onTap: () {
+                        Clipboard.setData(ClipboardData(text: t.id.value));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('已复制任务 ID')),
+                        );
+                      },
+                      builder: (context, hover) => Text(
+                        t.id.value,
+                        style: TextStyle(
+                          fontFamily: monoFamily,
+                          fontFamilyFallback: monoFallback,
+                          fontSize: 11.5,
+                          color: hover ? p.accent : p.textMuted,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Tag(t.mode == OrganizeMode.inPlace ? '原地整理' : '移动到媒体库'),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Tooltip(
+                      message: t.paths.join('\n'),
                       child: Text(
-                        title,
-                        style: theme.textTheme.titleMedium,
+                        '${connName ?? t.connection.value} · $where',
+                        style: theme.textTheme.bodySmall,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    Icon(statusIcon, size: 13, color: statusColor),
-                    const SizedBox(width: 4),
-                    Text(
-                      stageLabel(t.stage),
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: statusColor,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 3),
-                Row(
-                  children: [
-                    Tooltip(
-                      message: '点击复制任务 ID',
-                      child: Hoverable(
-                        onTap: () {
-                          Clipboard.setData(ClipboardData(text: t.id.value));
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('已复制任务 ID')),
-                          );
-                        },
-                        builder: (context, hover) => Text(
-                          t.id.value,
-                          style: TextStyle(
-                            fontFamily: monoFamily,
-                            fontFamilyFallback: monoFallback,
-                            fontSize: 11.5,
-                            color: hover ? p.accent : p.textMuted,
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Tag(t.mode == OrganizeMode.inPlace ? '原地整理' : '移动到媒体库'),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Tooltip(
-                        message: t.paths.join('\n'),
-                        child: Text(
-                          '${connName ?? t.connection.value} · $where',
-                          style: theme.textTheme.bodySmall,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                if (works.length > 1) ...[
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: [for (final w in works) _WorkChip(work: w)],
                   ),
                 ],
-                const SizedBox(height: 12),
-                _Stepper(stage: t.stage, progress: t.progress),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          if (t.message.isNotEmpty)
-                            Text(
-                              t.message,
-                              style: TextStyle(fontSize: 12.5, color: p.text),
-                            ),
-                          const SizedBox(height: 4),
-                          Wrap(
-                            spacing: 14,
-                            children: [
-                              _Count(
-                                CupertinoIcons.tray_arrow_down,
-                                '导入',
-                                t.importedCount,
-                              ),
-                              _Count(CupertinoIcons.film, '视频', t.videoCount),
-                              _Count(
-                                CupertinoIcons.folder,
-                                '文件夹',
-                                t.folderCount,
-                              ),
-                              _Count(
-                                CupertinoIcons.captions_bubble,
-                                '字幕',
-                                t.subtitleCount,
-                              ),
-                            ],
+              ),
+              if (works.length > 1) ...[
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [for (final w in works) _WorkChip(work: w)],
+                ),
+              ],
+              const SizedBox(height: 12),
+              _Stepper(stage: t.stage, progress: t.progress),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (t.message.isNotEmpty)
+                          Text(
+                            t.message,
+                            style: TextStyle(fontSize: 12.5, color: p.text),
                           ),
+                        const SizedBox(height: 4),
+                        Wrap(
+                          spacing: 14,
+                          children: [
+                            _Count(
+                              CupertinoIcons.tray_arrow_down,
+                              '导入',
+                              t.importedCount,
+                            ),
+                            _Count(CupertinoIcons.film, '视频', t.videoCount),
+                            _Count(CupertinoIcons.folder, '文件夹', t.folderCount),
+                            _Count(
+                              CupertinoIcons.captions_bubble,
+                              '字幕',
+                              t.subtitleCount,
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (t.stage.isActive)
+                    TextButton(
+                      onPressed: () => tm.cancel(t.id),
+                      child: const Text('取消'),
+                    ),
+                  if (t.stage == TaskStage.awaitingReview) ...[
+                    const SizedBox(width: 4),
+                    OutlinedButton(
+                      onPressed: runConfident,
+                      child: const Text('立即执行'),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton(
+                      onPressed: () =>
+                          context.go('/tasks/${t.id.value}/review'),
+                      child: const Text('去确认'),
+                    ),
+                  ],
+                  if (t.stage == TaskStage.done ||
+                      t.stage == TaskStage.partiallyFailed)
+                    OutlinedButton.icon(
+                      onPressed: undo,
+                      icon: const Icon(
+                        CupertinoIcons.arrow_uturn_left,
+                        size: 13,
+                      ),
+                      label: const Text('撤销'),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+
+    final backdrop = works.map((w) => w.backdropPath).nonNulls.firstOrNull;
+    // Cards that want attention get a coloured edge.
+    final edge = switch (t.stage) {
+      TaskStage.awaitingReview => p.accent,
+      TaskStage.partiallyFailed => p.warning,
+      _ => null,
+    };
+
+    return ContextMenuArea(
+      items: menu,
+      child: Hoverable(
+        key: ValueKey('task ${t.id.value}'),
+        onTap: () => context.go(target),
+        builder: (context, hover) => AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          curve: Curves.easeOutCubic,
+          transform: Matrix4.translationValues(0, hover ? -2 : 0, 0),
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            color: p.panel,
+            borderRadius: BorderRadius.circular(Radii.xl),
+            border: Border.all(
+              color: edge?.withValues(alpha: 0.55) ?? p.line,
+              width: edge == null ? hairline : 1,
+            ),
+            boxShadow: hover ? floatShadow(0.6) : panelShadow(),
+          ),
+          child: Stack(
+            children: [
+              if (backdrop != null) ...[
+                Positioned.fill(
+                  child: Image.network(
+                    tmdbImage(backdrop, 'w780'),
+                    fit: BoxFit.cover,
+                    alignment: Alignment.centerRight,
+                    errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                  ),
+                ),
+                Positioned.fill(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        stops: const [0, 0.55, 1],
+                        colors: [
+                          p.panel,
+                          p.panel.withValues(alpha: 0.95),
+                          p.panel.withValues(alpha: 0.72),
                         ],
                       ),
                     ),
-                    if (t.stage.isActive)
-                      TextButton(
-                        onPressed: () => tm.cancel(t.id),
-                        child: const Text('取消'),
-                      ),
-                    if (t.stage == TaskStage.awaitingReview) ...[
-                      const SizedBox(width: 4),
-                      OutlinedButton(
-                        onPressed: runConfident,
-                        child: const Text('立即执行'),
-                      ),
-                      const SizedBox(width: 8),
-                      FilledButton(
-                        onPressed: () =>
-                            context.go('/tasks/${t.id.value}/review'),
-                        child: const Text('去确认'),
-                      ),
-                    ],
-                    if (t.stage == TaskStage.done ||
-                        t.stage == TaskStage.partiallyFailed)
-                      OutlinedButton.icon(
-                        onPressed: undo,
-                        icon: const Icon(
-                          CupertinoIcons.arrow_uturn_left,
-                          size: 13,
-                        ),
-                        label: const Text('撤销'),
-                      ),
-                  ],
+                  ),
                 ),
               ],
-            ),
+              Padding(padding: const EdgeInsets.all(16), child: body),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
+}
+
+/// Not importing, recognizing or executing (those must be cancelled first).
+bool canDeleteTask(TaskSummary t) =>
+    !t.stage.isActive || t.stage == TaskStage.awaitingReview;
+
+/// Deletes task records after confirmation. Returns whether it did.
+Future<bool> confirmDeleteTask(
+  BuildContext context,
+  WidgetRef ref,
+  List<TaskSummary> tasks,
+) async {
+  final undoable = tasks.any(
+    (t) => t.stage == TaskStage.done || t.stage == TaskStage.partiallyFailed,
+  );
+  final ok = await confirmDialog(
+    context,
+    title: tasks.length == 1 ? '删除任务记录' : '清空 ${tasks.length} 条任务记录',
+    content: Text(
+      '只删除理片里的记录，不会动网盘或磁盘上的文件。'
+      '${undoable ? '\n删除后就不能再撤销这些任务做过的改名了。' : ''}',
+    ),
+    confirmLabel: '删除',
+    destructive: true,
+  );
+  if (!ok) return false;
+  final tm = ref.read(taskManagerProvider);
+  try {
+    for (final t in tasks) {
+      await tm.delete(t.id);
+    }
+  } on StateError catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message)));
+    }
+    return false;
+  }
+  return true;
+}
+
+/// Undo a whole task after confirmation.
+Future<void> confirmUndo(BuildContext context, WidgetRef ref, TaskId id) async {
+  final ok = await confirmDialog(
+    context,
+    title: '撤销整批',
+    content: const Text('将把这个任务改过的文件恢复成原来的名字和位置。确定撤销吗？'),
+    confirmLabel: '撤销',
+    destructive: true,
+  );
+  if (ok) await ref.read(taskManagerProvider).undo(id);
 }
 
 /// Up to three posters fanned out; an icon tile before recognition.
@@ -432,18 +588,25 @@ class _Stepper extends StatelessWidget {
                 ClipRRect(
                   borderRadius: BorderRadius.circular(2),
                   child: SizedBox(
-                    height: 4,
+                    height: 5,
                     width: double.infinity,
-                    child: i == cur && i != 2
+                    child: i == cur && i != 2 && progress != null
+                        ? GradientProgress(
+                            value: progress!,
+                            color: p.accent,
+                            height: 5,
+                          )
+                        : i == cur && i != 2
                         ? LinearProgressIndicator(
-                            value: progress,
-                            minHeight: 4,
+                            minHeight: 5,
                             color: p.accent,
                             backgroundColor: p.accent.withValues(alpha: 0.18),
                           )
                         : ColoredBox(
                             color: dim
                                 ? p.selected
+                                : cur == _steps.length
+                                ? p.success.withValues(alpha: 0.8)
                                 : i < cur
                                 ? p.accent.withValues(alpha: 0.75)
                                 : i == cur

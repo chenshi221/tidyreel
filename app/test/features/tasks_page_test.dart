@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tidyreel/features/tasks/tasks_page.dart';
@@ -19,6 +20,25 @@ void main() {
     await tester.tap(find.text('去确认'));
     await tester.pumpAndSettle();
     expect(find.text('ROUTE review ${id.value}'), findsOneWidget);
+  });
+
+  testWidgets('clicking a finished task card opens its details', (
+    tester,
+  ) async {
+    final (tm, _) = await pumpPage(tester, const TasksPage());
+    final id = await submitAndWait(tester, tm);
+    await tester.tap(find.text('立即执行'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('执行'));
+    await waitForStage(tester, tm, id, TaskStage.done);
+    await tester.tap(find.text('已完成 (1)'));
+    await tester.pumpAndSettle();
+    await tester.tapAt(
+      tester.getTopLeft(find.byKey(ValueKey('task ${id.value}'))) +
+          const Offset(40, 40), // the poster
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('ROUTE detail ${id.value}'), findsOneWidget);
   });
 
   testWidgets('立即执行 confirms, finishes, then 撤销 undoes', (tester) async {
@@ -50,5 +70,29 @@ void main() {
     await tester.tap(find.text('取消'));
     await waitForStage(tester, tm, id, TaskStage.cancelled);
     expect(find.text('进行中 (0)'), findsOneWidget);
+  });
+
+  testWidgets('right-click 删除记录 and 清空 remove finished tasks', (tester) async {
+    final (tm, _) = await pumpPage(tester, const TasksPage());
+    final a = await submitAndWait(tester, tm);
+    await tester.tap(find.text('立即执行'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('执行'));
+    await waitForStage(tester, tm, a, TaskStage.done);
+    await tester.tap(find.text('已完成 (1)'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byKey(ValueKey('task ${a.value}')),
+      buttons: kSecondaryButton,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('删除记录'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('不能再撤销'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, '删除'));
+    await tester.pumpAndSettle();
+    expect(await tm.watchAll().first, isEmpty);
+    expect(find.byKey(const ValueKey('clear-finished')), findsNothing);
   });
 }

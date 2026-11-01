@@ -5,15 +5,24 @@ import 'package:go_router/go_router.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
 import '../data/providers.dart';
+import '../data/settings.dart';
 import '../features/sources/sources_providers.dart';
 import '../features/tasks/tasks_page.dart' show stageLabel;
 import '../ui/tokens.dart';
 import '../ui/widgets.dart';
 import '../widgets/common.dart';
 
-final sidebarCollapsedProvider = NotifierProvider<Val<bool>, bool>(
-  () => Val(false),
+final sidebarCollapsedProvider = NotifierProvider<_Collapsed, bool>(
+  _Collapsed.new,
 );
+
+/// Starts from the 启动时收起侧栏 setting; toggling doesn't change the setting.
+class _Collapsed extends Val<bool> {
+  _Collapsed() : super(false);
+
+  @override
+  bool build() => ref.read(settingsProvider).sidebarCollapsed;
+}
 
 /// Left sidebar: brand, the four destinations, and live background tasks so
 /// import / recognition progress is visible from every page.
@@ -36,6 +45,49 @@ class Sidebar extends ConsumerWidget {
     // macOS: the traffic lights float over the sidebar's top-left corner.
     final mac = Theme.of(context).platform == TargetPlatform.macOS;
 
+    // Toast when a background task finishes recognizing or executing, unless
+    // that task's page is already open.
+    ref.listen(tasksProvider, (prev, next) {
+      final before = {for (final t in prev?.value ?? const []) t.id: t.stage};
+      for (final t in next.value ?? const <TaskSummary>[]) {
+        final was = before[t.id];
+        if (was == null || was == t.stage || location.contains(t.id.value)) {
+          continue;
+        }
+        final (msg, path) = switch (t.stage) {
+          TaskStage.awaitingReview => (
+            '识别完成，等你确认',
+            '/tasks/${t.id.value}/review',
+          ),
+          TaskStage.done => ('整理完成', '/tasks/${t.id.value}'),
+          TaskStage.partiallyFailed => ('整理完成，但有失败项', '/tasks/${t.id.value}'),
+          _ => (null, null),
+        };
+        if (msg == null) continue;
+        final s = ref.read(settingsProvider);
+        if (t.stage == TaskStage.awaitingReview
+            ? !s.notifyRecognized
+            : !s.notifyFinished) {
+          continue;
+        }
+        final name =
+            t.paths.firstOrNull
+                ?.split('/')
+                .where((s) => s.isNotEmpty)
+                .lastOrNull ??
+            t.id.value;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('$name · $msg'),
+            action: SnackBarAction(
+              label: '查看',
+              onPressed: () => context.go(path!),
+            ),
+          ),
+        );
+      }
+    });
+
     void go(String path) {
       // Re-selecting 来源 leaves the file browser and shows the list again.
       if (path == '/sources' && location.startsWith('/sources')) {
@@ -44,16 +96,21 @@ class Sidebar extends ConsumerWidget {
       context.go(path);
     }
 
-    Widget item(String path, IconData icon, String label, {int badge = 0}) =>
-        _NavItem(
-          key: ValueKey('nav-$label'),
-          icon: icon,
-          label: label,
-          selected: location.startsWith(path),
-          badge: badge,
-          collapsed: collapsed,
-          onTap: () => go(path),
-        );
+    Widget item(
+      String path,
+      IconData icon,
+      IconData selectedIcon,
+      String label, {
+      int badge = 0,
+    }) => _NavItem(
+      key: ValueKey('nav-$label'),
+      icon: location.startsWith(path) ? selectedIcon : icon,
+      label: label,
+      selected: location.startsWith(path),
+      badge: badge,
+      collapsed: collapsed,
+      onTap: () => go(path),
+    );
 
     final toggle = IconButton(
       tooltip: collapsed ? '展开侧栏' : '收起侧栏',
@@ -105,14 +162,25 @@ class Sidebar extends ConsumerWidget {
                   sectionTitle('资料库')
                 else
                   const SizedBox(height: 12),
-                item('/sources', CupertinoIcons.folder, '来源'),
+                item(
+                  '/sources',
+                  CupertinoIcons.folder,
+                  CupertinoIcons.folder_fill,
+                  '来源',
+                ),
                 item(
                   '/tasks',
                   CupertinoIcons.square_list,
+                  CupertinoIcons.square_list_fill,
                   '任务',
                   badge: pending,
                 ),
-                item('/naming', CupertinoIcons.textformat, '命名规则'),
+                item(
+                  '/naming',
+                  CupertinoIcons.textformat,
+                  CupertinoIcons.textformat,
+                  '命名规则',
+                ),
                 if (!collapsed && active.isNotEmpty) ...[
                   sectionTitle('后台任务'),
                   Expanded(
@@ -133,7 +201,12 @@ class Sidebar extends ConsumerWidget {
                   ),
                 ] else
                   const Spacer(),
-                item('/settings', CupertinoIcons.gear, '设置'),
+                item(
+                  '/settings',
+                  CupertinoIcons.gear,
+                  CupertinoIcons.gear_solid,
+                  '设置',
+                ),
               ],
             ),
           ),
@@ -239,7 +312,9 @@ class _NavItem extends StatelessWidget {
         margin: const EdgeInsets.only(bottom: 1),
         padding: const EdgeInsets.symmetric(horizontal: 9),
         decoration: BoxDecoration(
-          color: selected ? p.selected : (hover ? p.hover : Colors.transparent),
+          color: selected
+              ? p.accent.withValues(alpha: 0.13)
+              : (hover ? p.hover : Colors.transparent),
           borderRadius: BorderRadius.circular(Radii.md),
         ),
         child: collapsed
@@ -257,7 +332,7 @@ class _NavItem extends StatelessWidget {
                       label,
                       style: TextStyle(
                         fontSize: 13,
-                        color: p.text,
+                        color: selected ? p.accent : p.text,
                         fontWeight: selected
                             ? FontWeight.w600
                             : FontWeight.w400,
@@ -340,8 +415,10 @@ class _TaskItem extends StatelessWidget {
                       child: Padding(
                         padding: const EdgeInsets.all(2),
                         child: CircularProgressIndicator(
-                          strokeWidth: 1.5,
-                          color: p.textMuted,
+                          value: t.progress,
+                          strokeWidth: 1.8,
+                          color: p.accent,
+                          backgroundColor: p.accent.withValues(alpha: 0.15),
                         ),
                       ),
                     ),
@@ -368,7 +445,11 @@ class _TaskItem extends StatelessWidget {
                   ),
                   if (!review && t.progress != null) ...[
                     const SizedBox(height: 5),
-                    LinearProgressIndicator(value: t.progress, minHeight: 3),
+                    GradientProgress(
+                      value: t.progress!,
+                      color: p.accent,
+                      height: 3,
+                    ),
                   ],
                 ],
               ),

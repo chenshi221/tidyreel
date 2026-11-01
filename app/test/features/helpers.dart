@@ -36,6 +36,11 @@ Future<(FakeTaskManager, ProviderContainer)> pumpPage(
             builder: (_, s) =>
                 Scaffold(body: Text('ROUTE review ${s.pathParameters['id']}')),
           ),
+          GoRoute(
+            path: ':id',
+            builder: (_, s) =>
+                Scaffold(body: Text('ROUTE detail ${s.pathParameters['id']}')),
+          ),
         ],
       ),
     ],
