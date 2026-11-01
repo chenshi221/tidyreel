@@ -485,6 +485,21 @@ const chinese = <Case>[
   Case('[最新地址 www.abc.com] 繁花 第01集.mkv', t: '繁花', e: [1]),
   Case('【更多资源请访问xxx.com】繁花 第01集.mp4', t: '繁花', e: [1]),
   Case('(2023)繁花 第01集.mp4', t: '繁花', e: [1]),
+  // Multi-episode ranges (Jellyfin / Sonarr handle these too)
+  Case('繁花 EP01-EP02.mkv', t: '繁花', e: [1, 2]),
+  Case('繁花 第01-03集.mp4', t: '繁花', e: [1, 2, 3]),
+  Case('Show.E01-E02.1080p.mkv', t: 'Show', e: [1, 2]),
+  Case('Show.EP05-06.mkv', t: 'Show', e: [5, 6]),
+  // Variety shows named by air date: an episode looked up by date
+  Case('向往的生活.20240503.mp4', t: '向往的生活', k: _ep, e: []),
+  Case('向往的生活 2024-05-03 1080p.mp4', t: '向往的生活', k: _ep),
+  Case('20240503.mp4', dirs: ['奔跑吧'], t: '奔跑吧', k: _ep),
+  // Mini-series "XofY" (Sonarr)
+  Case('Mini.Series.1of6.720p.mkv', t: 'Mini Series', e: [1], s: none),
+  Case('Show - 03 of 12.mkv', t: 'Show', e: [3]),
+  // Bare numbered files in a show folder, possibly under a quality folder
+  Case('01.mkv', dirs: ['4K', '嫁金钗'], t: '嫁金钗', a: 1, s: none),
+  Case('12.mkv', dirs: ['2160p', 'jiajinchai'], t: 'jiajinchai', a: 12),
 ];
 
 /// Anime / fansub names.

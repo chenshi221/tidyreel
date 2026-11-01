@@ -1,6 +1,6 @@
 # Parser known failures
 
-Fixture pass rate: 395 / 400 (98.8%). The five misses below carry a `known:` reason in
+Fixture pass rate: 406 / 411 (98.8%). The five misses below carry a `known:` reason in
 `fixtures.dart`; the test still runs them and prints them, but does not fail on them.
 A non-`known` miss fails the test.
 
@@ -23,3 +23,9 @@ A non-`known` miss fails the test.
   episode name, so the title is empty and the planner should fall back to the folder.
 - `extraInfo` = resolution + picture (DV/HDR/HDR10+/HLG/IMAX) + audio (Atmos/TrueHD/DTS-HD).
   Source and codec are left out.
+- Rules borrowed from Jellyfin (Emby.Naming) and Sonarr: episode ranges (`EP01-EP02`,
+  `第01-03集`), mini-series `1of6`, and air-dated names (`向往的生活.20240503`) which carry
+  `airDate` and are matched to a TMDB episode by date in the planner.
+- Bare numbered files (`01.mkv`) stay low-confidence on their own; the planner trusts them
+  when a group has a run of two or more distinct numbers. Quality folders (`4K`, `2160p`,
+  `蓝光`…) never count as the show folder.

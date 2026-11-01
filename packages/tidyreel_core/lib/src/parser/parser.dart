@@ -21,6 +21,8 @@ abstract interface class FilenameParser {
 ///   never invented.
 /// * `extraInfo` = resolution + HDR/DV + premium audio (Atmos/TrueHD/DTS-HD), e.g.
 ///   `2160p.DV.Atmos`. Source and codec are left out.
+/// * A date ("向往的生活.20240503") with no episode number is a variety-show
+///   episode identified by [ParsedName.airDate]; the planner looks it up on TMDB.
 /// * Season-0 content (OVA/SP/特别篇, `Specials/`) is kind `special` with season 0;
 ///   NCOP/NCED/花絮/Making/PV/特典 are kind `extra`.
 class RuleBasedParser implements FilenameParser {
@@ -99,7 +101,8 @@ class RuleBasedParser implements FilenameParser {
     } else if (episodes.isNotEmpty ||
         absolute != null ||
         season != null ||
-        a.batch) {
+        a.batch ||
+        (a.airDate != null && title.isNotEmpty)) {
       kind = MediaKind.episode; // season-only = season pack, low confidence
     } else if (year != null || a.hasTech) {
       kind = MediaKind.movie;
@@ -123,6 +126,9 @@ class RuleBasedParser implements FilenameParser {
             : hasTitle
             ? 0.55
             : 0.3,
+      MediaKind.episode
+          when episodes.isEmpty && absolute == null && a.airDate != null =>
+        0.85,
       MediaKind.episode => _episodeConfidence(
         a,
         bareFrom,
@@ -147,6 +153,7 @@ class RuleBasedParser implements FilenameParser {
       lang: a.lang,
       extraInfo: a.extra,
       confidence: double.parse(conf.toStringAsFixed(2)),
+      airDate: kind == MediaKind.episode ? a.airDate : null,
     );
   }
 
