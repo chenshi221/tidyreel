@@ -11,6 +11,10 @@ class _FailingBackend extends MemoryStorageBackend {
 
   @override
   Future<void> ping() async => throw error;
+
+  @override
+  Future<List<RemoteEntry>> list(String dir, {bool refresh = false}) async =>
+      throw error;
 }
 
 void main() {

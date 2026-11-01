@@ -52,14 +52,22 @@ ConnCheck describeConnectionError(ConnectionConfig? c, Object e) {
 /// `ref.invalidate(connectionStatusProvider(id))` re-checks.
 final connectionStatusProvider = FutureProvider.family<ConnCheck, ConnectionId>(
   (ref, id) async {
+    final c = ref
+        .watch(connectionsProvider)
+        .where((c) => c.id == id)
+        .firstOrNull;
+    final be = ref.watch(backendForProvider)(id);
     try {
-      await ref.watch(backendForProvider)(id).ping();
+      // Listing the start folder checks the login too, and leaves it cached so
+      // opening the connection is instant.
+      try {
+        await be.list(normalizeDir(c?.startDir ?? '/'));
+      } on StorageException catch (e) {
+        if (e.code != StorageErrorCode.notFound) rethrow;
+        await be.ping();
+      }
       return (status: ConnStatus.connected, detail: null);
     } catch (e) {
-      final c = ref
-          .watch(connectionsProvider)
-          .where((c) => c.id == id)
-          .firstOrNull;
       return describeConnectionError(c, e);
     }
   },
@@ -168,7 +176,7 @@ final browserEntriesProvider = FutureProvider.autoDispose<List<RemoteEntry>>((
   ref,
 ) async {
   final dir = ref.watch(browserDirProvider);
-  final q = ref.watch(browserSearchProvider).trim().toLowerCase();
+  final q = ref.watch(browserSearchProvider).trim();
   final sort = ref.watch(browserSortProvider);
   final onlyNew = ref.watch(onlyUnorganizedProvider);
   final conn = ref.watch(openConnectionProvider);
@@ -180,7 +188,7 @@ final browserEntriesProvider = FutureProvider.autoDispose<List<RemoteEntry>>((
       .watch(backendForProvider)(conn.id)
       .list(dir, refresh: refresh);
   if (q.isNotEmpty) {
-    list = list.where((e) => e.name.toLowerCase().contains(q)).toList();
+    list = list.where((e) => fuzzyMatch(q, e.name)).toList();
   }
   if (onlyNew) {
     final isOrganized = ref.read(isOrganizedProvider);

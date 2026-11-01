@@ -34,7 +34,7 @@ class ScanPreview {
   final topDirs = <String>[];
 }
 
-/// Walks [paths] breadth-first, at most [maxDepth] levels below each and
+/// Walks [paths] a few folders at a time, at most [maxDepth] levels below each and
 /// [maxDirs] listings overall. A path whose name has a media extension is
 /// counted as a file without listing it.
 Future<ScanPreview> previewScan(
@@ -57,37 +57,38 @@ Future<ScanPreview> previewScan(
     r.bytes += size;
   }
 
-  final queue = <(String, int)>[];
+  final depth = <String, int>{};
   for (final p in paths) {
     final name = p.split('/').last;
     final e = _ext(name);
     if (videoExt.contains(e) || subtitleExt.contains(e)) {
       count(name, 0);
     } else {
-      queue.add((p, 0));
+      depth[p] = 0;
     }
   }
   var listed = 0;
-  while (queue.isNotEmpty) {
-    if (cancelled?.call() ?? false) break;
+  await walkDirs(depth.keys.toList(), (dir) async {
     if (listed >= maxDirs) {
       r.truncated = true;
-      break;
+      return const [];
     }
-    final (dir, depth) = queue.removeAt(0);
     listed++;
+    final d = depth[dir]!;
     final List<RemoteEntry> entries;
     try {
       entries = await backend.list(dir);
     } on StorageException {
-      continue; // unreadable folder: the real scan will report it
+      return const []; // unreadable folder: the real scan will report it
     }
+    final subs = <String>[];
     for (final e in entries) {
       if (e.isDir) {
         r.dirs++;
-        if (depth == 0) r.topDirs.add(e.name);
-        if (depth + 1 < maxDepth) {
-          queue.add((e.path, depth + 1));
+        if (d == 0) r.topDirs.add(e.name);
+        if (d + 1 < maxDepth) {
+          depth[e.path] = d + 1;
+          subs.add(e.path);
         } else {
           r.truncated = true;
         }
@@ -95,7 +96,9 @@ Future<ScanPreview> previewScan(
         count(e.name, e.size);
       }
     }
-  }
+    return subs;
+  }, stop: cancelled);
+  r.topDirs.sort();
   return r;
 }
 

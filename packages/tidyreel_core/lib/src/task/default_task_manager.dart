@@ -12,7 +12,9 @@ import '../model/scan.dart';
 import '../model/task.dart';
 import '../plan/planner.dart';
 import '../plan/recognizer.dart';
+import '../storage/cached_backend.dart';
 import '../storage/storage_backend.dart';
+import '../storage/walk.dart';
 import 'task_manager.dart';
 
 /// Per-task mutable state. Only [DefaultTaskManager] touches it.
@@ -429,26 +431,34 @@ class DefaultTaskManager implements TaskManager {
       }
     }
 
-    Future<void> walk(String dir) async {
-      if (t.cancelled) return;
-      for (final e in await be.list(dir, refresh: true)) {
-        if (t.cancelled) return;
-        e.isDir ? await walk(e.path) : add(e);
-      }
-    }
-
+    // The backend has no stat: find each root in its parent's listing (one
+    // listing per parent, shared when several roots sit side by side).
+    final dirs = <String>[];
+    final parents = <String, Future<List<RemoteEntry>>>{};
     for (final root in t.summary.paths) {
       if (t.cancelled) break;
       if (root == '/') {
-        await walk(root);
+        dirs.add(root);
         continue;
       }
-      // The backend has no stat: find the entry in its parent's listing.
-      final siblings = await be.list(p.posix.dirname(root), refresh: true);
+      final parent = p.posix.dirname(root);
+      final siblings = await parents.putIfAbsent(
+        parent,
+        () => listFresh(be, parent),
+      );
       final entry = siblings.where((e) => e.path == root).firstOrNull;
       if (entry == null) continue;
-      entry.isDir ? await walk(root) : add(entry);
+      entry.isDir ? dirs.add(root) : add(entry);
     }
+    await walkDirs(dirs, (dir) async {
+      final subs = <String>[];
+      for (final e in await listFresh(be, dir)) {
+        e.isDir ? subs.add(e.path) : add(e);
+      }
+      return subs;
+    }, stop: () => t.cancelled);
+    // Parallel listings finish in any order; keep the result stable.
+    out.sort((a, b) => a.path.compareTo(b.path));
     _emit(
       t,
       _with(
@@ -471,14 +481,23 @@ class DefaultTaskManager implements TaskManager {
         if (o.kind == OpKind.relocate && !srcs.contains(o.dst)) o.dst,
     ];
     final be = backendFor(s.connection);
-    final existing = <String>{};
-    for (var i = 0; i < dsts.length; i += 4) {
-      final chunk = dsts.skip(i).take(4).toList();
-      final hits = await Future.wait(chunk.map(be.exists));
-      for (var j = 0; j < chunk.length; j++) {
-        if (hits[j]) existing.add(chunk[j]);
-      }
+    // One listing per target folder instead of one request per target.
+    final byDir = <String, List<String>>{};
+    for (final d in dsts) {
+      (byDir[p.posix.dirname(d)] ??= []).add(d);
     }
+    final existing = <String>{};
+    await walkDirs(byDir.keys, (dir) async {
+      final Set<String> names;
+      try {
+        names = {for (final e in await listFresh(be, dir)) e.path};
+      } on StorageException catch (e) {
+        if (e.code == StorageErrorCode.notFound) return const [];
+        rethrow;
+      }
+      existing.addAll(byDir[dir]!.where(names.contains));
+      return const [];
+    });
     if (existing.isNotEmpty) {
       plan = await planner.build(
         t.scan!,
