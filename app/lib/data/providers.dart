@@ -97,7 +97,7 @@ final connectionsProvider =
       ConnectionsNotifier.new,
     );
 
-/// Connection passwords, kept in the keychain under `conn:<id>`.
+/// Connection passwords, kept in secrets.json under `conn:<id>`.
 class PasswordsNotifier extends Notifier<Map<ConnectionId, String>> {
   Bootstrap get _boot => ref.read(bootstrapProvider);
 
@@ -169,7 +169,14 @@ final metadataProvider = Provider<MetadataProvider>((ref) {
       ? s.tmdbApiKey.trim()
       : ref.watch(builtInTmdbTokenProvider);
   if (key.isEmpty) return const _MissingKeyMetadata();
-  return TmdbProvider(TmdbConfig(apiKey: key, baseUrl: s.tmdbBaseUrl.trim()));
+  return TmdbProvider(
+    TmdbConfig(
+      apiKey: key,
+      baseUrl: s.tmdbBaseUrl.trim(),
+      language: s.tmdbLanguage,
+      fallbackLanguage: s.tmdbLanguage == 'en-US' ? 'zh-CN' : 'en-US',
+    ),
+  );
 });
 
 final historyProvider = Provider<HistoryStore>(
@@ -181,11 +188,17 @@ final taskManagerProvider = Provider<TaskManager>((ref) {
   // changes apply to the next step without rebuilding the manager.
   final metadata = _LiveMetadata(() => ref.read(metadataProvider));
   final history = ref.watch(historyProvider);
+  // Read once: changing these takes effect from the next app start.
+  final s = ref.read(settingsProvider);
   final tm = DefaultTaskManager(
     backendFor: (id) => ref.read(backendForProvider)(id),
     recognizer: AnchorRecognizer(const RuleBasedParser(), metadata),
     planner: DefaultPlanner(metadata),
-    executor: DefaultExecutor(history),
+    executor: DefaultExecutor(
+      history,
+      concurrency: s.concurrency,
+      minInterval: Duration(milliseconds: 1000 ~/ s.requestsPerSecond),
+    ),
     history: history,
     store: DriftTaskStore(ref.watch(bootstrapProvider).db),
     options: (id, mode) => PlanOptions(
@@ -197,6 +210,7 @@ final taskManagerProvider = Provider<TaskManager>((ref) {
           ?.libraryRoot,
       naming: ref.read(namingProfileProvider),
       deleteJunk: ref.read(settingsProvider).autoDeleteJunk,
+      confidenceThreshold: ref.read(settingsProvider).confidenceThreshold,
     ),
   );
   tm.resumeInterrupted();

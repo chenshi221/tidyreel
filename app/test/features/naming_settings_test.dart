@@ -68,20 +68,46 @@ void main() {
       find.byKey(const ValueKey('tmdb-url')),
       'https://tmdb.example.com/3',
     );
-    await tester.tap(find.text('移动到媒体库'));
-    await tester.tap(find.byKey(const ValueKey('auto-junk')));
-    await tester.tap(find.text('深色'));
-    await tester.pumpAndSettle();
+    // The page is a lazy list: scroll each control into view before tapping.
+    Future<void> tap(Finder f) async {
+      await tester.scrollUntilVisible(
+        f,
+        150,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(f);
+      await tester.pumpAndSettle();
+    }
+
+    await tap(find.text('测试连接'));
+    expect(find.textContaining('连接成功：找到「盗梦空间」'), findsOneWidget);
+
+    await tap(find.text('移动到媒体库'));
+    await tap(find.byKey(const ValueKey('auto-junk')));
+    await tap(find.byKey(const ValueKey('scan-preview')));
+    await tap(find.text('繁体'));
+    await tap(find.text('严格'));
+    await tap(find.text('深色'));
+    await tap(find.byKey(const ValueKey('accent-blue')));
+    await tap(find.byKey(const ValueKey('notify-finished')));
     final s = c.read(settingsProvider);
     expect(s.tmdbApiKey, 'abc123');
     expect(s.tmdbBaseUrl, 'https://tmdb.example.com/3');
     expect(s.defaultMode, OrganizeMode.moveToLibrary);
     expect(s.autoDeleteJunk, isTrue);
+    expect(s.scanPreview, isFalse);
+    expect(s.tmdbLanguage, 'zh-TW');
+    expect(s.confidenceThreshold, 0.85);
+    expect(s.accent, AccentChoice.blue);
+    expect(s.notifyFinished, isFalse);
     expect(c.read(themeModeProvider), ThemeMode.dark);
 
-    await tester.tap(find.text('测试连接'));
-    await tester.pumpAndSettle();
-    expect(find.textContaining('连接成功：找到「盗梦空间」'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.textContaining('基于 mnamer (MIT)'),
+      150,
+      scrollable: find.byType(Scrollable).first,
+    );
     expect(find.textContaining('基于 mnamer (MIT)'), findsOneWidget);
   });
 }

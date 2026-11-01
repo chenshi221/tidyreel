@@ -505,6 +505,19 @@ class _OptionsPanel extends ConsumerWidget {
                       _edit(ref, (o) => o.copyWith(seasonFolderTemplate: v)),
                 ),
               ),
+            if (isTv)
+              FormRow(
+                label: '单季剧',
+                help: '打开：只有一季的剧也放进季文件夹。多季剧总是分季文件夹',
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: sw(
+                    'single-season-folder',
+                    o.singleSeasonFolder,
+                    (v) => _edit(ref, (o) => o.copyWith(singleSeasonFolder: v)),
+                  ),
+                ),
+              ),
           ],
         ),
       ),

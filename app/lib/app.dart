@@ -11,6 +11,7 @@ import 'features/naming/naming_page.dart';
 import 'features/review/review_page.dart';
 import 'features/settings/settings_page.dart';
 import 'features/sources/sources_page.dart';
+import 'features/tasks/task_detail_page.dart';
 import 'features/tasks/tasks_page.dart';
 
 final _router = GoRouter(
@@ -28,6 +29,11 @@ final _router = GoRouter(
               path: ':id/review',
               builder: (_, s) => ReviewPage(taskId: s.pathParameters['id']!),
             ),
+            GoRoute(
+              path: ':id',
+              builder: (_, s) =>
+                  TaskDetailPage(taskId: s.pathParameters['id']!),
+            ),
           ],
         ),
         GoRoute(path: '/naming', builder: (_, _) => const NamingPage()),
@@ -41,14 +47,24 @@ class TidyreelApp extends ConsumerWidget {
   const TidyreelApp({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) => MaterialApp.router(
-    title: '理片 Tidyreel',
-    theme: buildTheme(Brightness.light),
-    darkTheme: buildTheme(Brightness.dark),
-    themeMode: ref.watch(themeModeProvider),
-    routerConfig: _router,
-    debugShowCheckedModeBanner: false,
-  );
+  Widget build(BuildContext context, WidgetRef ref) {
+    final accent = ref.watch(settingsProvider.select((s) => s.accent));
+    final still = ref.watch(settingsProvider.select((s) => s.reduceMotion));
+    return MaterialApp.router(
+      title: '理片 Tidyreel',
+      theme: buildTheme(Brightness.light, accent: accent.light),
+      darkTheme: buildTheme(Brightness.dark, accent: accent.dark),
+      themeMode: ref.watch(themeModeProvider),
+      routerConfig: _router,
+      debugShowCheckedModeBanner: false,
+      builder: (context, child) => still
+          ? MediaQuery(
+              data: MediaQuery.of(context).copyWith(disableAnimations: true),
+              child: child!,
+            )
+          : child!,
+    );
+  }
 }
 
 /// Sidebar + content. Destinations map 1:1 to top-level routes.

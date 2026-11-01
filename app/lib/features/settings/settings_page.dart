@@ -1,15 +1,18 @@
+import 'dart:io';
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
 import '../../data/providers.dart';
+import '../../version.dart';
+import '../tasks/tasks_page.dart' show confirmDeleteTask;
 import '../../ui/tokens.dart';
 import '../../ui/widgets.dart';
 import '../../widgets/common.dart';
 import 'settings_providers.dart';
-
-const appVersion = '1.0.0';
 
 /// 设置页（PLAN §5）.
 class SettingsPage extends ConsumerStatefulWidget {
@@ -55,9 +58,25 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     messenger.showSnackBar(SnackBar(content: Text(msg)));
   }
 
+  Future<void> _openDataDir() async {
+    final dir = await getApplicationSupportDirectory();
+    await Process.run(Platform.isWindows ? 'explorer' : 'open', [dir.path]);
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = ref.watch(settingsProvider);
+    final naming = ref.watch(namingProfileProvider);
+    final finished = [
+      for (final t in ref.watch(tasksProvider).value ?? const <TaskSummary>[])
+        if (!t.stage.isActive) t,
+    ];
+    Widget toggle(String key, bool value, AppSettings Function(bool) f) =>
+        MacSwitch(
+          key: ValueKey(key),
+          value: value,
+          onChanged: (v) => _set((_) => f(v)),
+        );
     final p = Palette.of(context);
     final builtIn = ref.watch(builtInTmdbTokenProvider).isNotEmpty;
     return PageScaffold(
@@ -156,22 +175,236 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                         _set((o) => o.copyWith(autoDeleteJunk: v)),
                   ),
                 ),
+                SettingRow(
+                  title: '提交前预览',
+                  caption: '先快速扫一遍，显示文件数量和风险提示，再决定是否提交',
+                  control: toggle(
+                    'scan-preview',
+                    s.scanPreview,
+                    (v) => s.copyWith(scanPreview: v),
+                  ),
+                ),
+                SettingRow(
+                  title: '执行前确认',
+                  caption: '在确认页点「执行」时，再弹一次汇总确认',
+                  control: toggle(
+                    'confirm-execute',
+                    s.confirmBeforeExecute,
+                    (v) => s.copyWith(confirmBeforeExecute: v),
+                  ),
+                ),
+                SettingRow(
+                  title: '单季剧也建 Season 文件夹',
+                  caption: '关闭后只有一季的剧集直接放在剧集文件夹里；多季剧总会建',
+                  control: MacSwitch(
+                    key: const ValueKey('settings-single-season'),
+                    value: naming.tv.singleSeasonFolder,
+                    onChanged: (v) => ref
+                        .read(namingProfileProvider.notifier)
+                        .set(
+                          naming.copyWith(
+                            tv: naming.tv.copyWith(singleSeasonFolder: v),
+                          ),
+                        ),
+                  ),
+                ),
+                SettingRow(
+                  title: '同时处理的文件数',
+                  caption: '越大越快，但网盘更容易限流。重启理片后生效',
+                  control: Segmented<int>(
+                    options: const {1: '1', 2: '2', 4: '4', 8: '8'},
+                    value: s.concurrency,
+                    onChanged: (v) => _set((o) => o.copyWith(concurrency: v)),
+                  ),
+                ),
+                SettingRow(
+                  title: '每秒请求上限',
+                  caption: 'Alist 默认会限流，频繁报错时调小。重启理片后生效',
+                  control: Segmented<int>(
+                    options: const {2: '2', 5: '5', 10: '10'},
+                    value: s.requestsPerSecond,
+                    onChanged: (v) =>
+                        _set((o) => o.copyWith(requestsPerSecond: v)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SectionLabel('识别'),
+          Panel(
+            child: Rows(
+              children: [
+                SettingRow(
+                  title: 'TMDB 语言',
+                  caption: '片名、简介和集标题用哪种语言，找不到时退回英文',
+                  control: Segmented<String>(
+                    options: const {
+                      'zh-CN': '简体',
+                      'zh-TW': '繁体',
+                      'en-US': 'English',
+                    },
+                    value: s.tmdbLanguage,
+                    onChanged: (v) => _set((o) => o.copyWith(tmdbLanguage: v)),
+                  ),
+                ),
+                SettingRow(
+                  title: '「立即执行」的门槛',
+                  caption: '识别分数达到多少，任务卡片上的「立即执行」才会处理它',
+                  control: Segmented<double>(
+                    options: {0.6: '宽松', 0.7: '标准', 0.85: '严格'},
+                    value:
+                        const [0.6, 0.7, 0.85].contains(s.confidenceThreshold)
+                        ? s.confidenceThreshold
+                        : 0.7,
+                    onChanged: (v) =>
+                        _set((o) => o.copyWith(confidenceThreshold: v)),
+                  ),
+                ),
+                SettingRow(
+                  title: '清除 TMDB 缓存',
+                  caption: 'TMDB 上刚更新的信息没显示出来时用',
+                  control: OutlinedButton(
+                    onPressed: () {
+                      ref.invalidate(metadataProvider);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('已清除 TMDB 缓存')),
+                      );
+                    },
+                    child: const Text('清除'),
+                  ),
+                ),
               ],
             ),
           ),
           const SectionLabel('外观'),
           Panel(
-            child: SettingRow(
-              title: '主题',
-              control: Segmented<ThemeMode>(
-                options: const {
-                  ThemeMode.light: '浅色',
-                  ThemeMode.dark: '深色',
-                  ThemeMode.system: '跟随系统',
-                },
-                value: s.themeMode,
-                onChanged: (v) => _set((o) => o.copyWith(themeMode: v)),
-              ),
+            child: Rows(
+              children: [
+                SettingRow(
+                  title: '主题',
+                  control: Segmented<ThemeMode>(
+                    options: const {
+                      ThemeMode.light: '浅色',
+                      ThemeMode.dark: '深色',
+                      ThemeMode.system: '跟随系统',
+                    },
+                    value: s.themeMode,
+                    onChanged: (v) => _set((o) => o.copyWith(themeMode: v)),
+                  ),
+                ),
+                SettingRow(
+                  title: '强调色',
+                  control: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      for (final a in AccentChoice.values)
+                        Tooltip(
+                          message: a.label,
+                          child: Hoverable(
+                            key: ValueKey('accent-${a.name}'),
+                            onTap: () => _set((o) => o.copyWith(accent: a)),
+                            builder: (context, hover) => Container(
+                              width: 22,
+                              height: 22,
+                              margin: const EdgeInsets.only(left: 8),
+                              decoration: BoxDecoration(
+                                color:
+                                    Theme.of(context).brightness ==
+                                        Brightness.dark
+                                    ? a.dark
+                                    : a.light,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: s.accent == a
+                                      ? p.text
+                                      : Colors.transparent,
+                                  width: 2,
+                                ),
+                              ),
+                              child: s.accent == a
+                                  ? const Icon(
+                                      CupertinoIcons.checkmark,
+                                      size: 12,
+                                      color: Colors.white,
+                                    )
+                                  : null,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                SettingRow(
+                  title: '启动时收起侧栏',
+                  control: toggle(
+                    'sidebar-collapsed',
+                    s.sidebarCollapsed,
+                    (v) => s.copyWith(sidebarCollapsed: v),
+                  ),
+                ),
+                SettingRow(
+                  title: '减少动画',
+                  caption: '关闭页面切换和列表浮现动画',
+                  control: toggle(
+                    'reduce-motion',
+                    s.reduceMotion,
+                    (v) => s.copyWith(reduceMotion: v),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SectionLabel('通知'),
+          Panel(
+            child: Rows(
+              children: [
+                SettingRow(
+                  title: '识别完成时提示',
+                  control: toggle(
+                    'notify-recognized',
+                    s.notifyRecognized,
+                    (v) => s.copyWith(notifyRecognized: v),
+                  ),
+                ),
+                SettingRow(
+                  title: '执行完成时提示',
+                  control: toggle(
+                    'notify-finished',
+                    s.notifyFinished,
+                    (v) => s.copyWith(notifyFinished: v),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SectionLabel('数据'),
+          Panel(
+            child: Rows(
+              children: [
+                SettingRow(
+                  title: '清空已结束的任务',
+                  caption: finished.isEmpty
+                      ? '没有已结束的任务'
+                      : '共 ${finished.length} 条。不动文件，但删除后无法再撤销',
+                  control: OutlinedButton(
+                    key: const ValueKey('settings-clear-tasks'),
+                    onPressed: finished.isEmpty
+                        ? null
+                        : () => confirmDeleteTask(context, ref, finished),
+                    child: const Text('清空'),
+                  ),
+                ),
+                SettingRow(
+                  title: '数据目录',
+                  caption: '设置、连接、任务记录和撤销日志都保存在这里',
+                  control: OutlinedButton(
+                    onPressed: _openDataDir,
+                    child: Text(
+                      Platform.isWindows ? '在资源管理器中打开' : '在 Finder 中打开',
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
           const SectionLabel('关于'),

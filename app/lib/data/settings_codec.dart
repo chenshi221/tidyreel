@@ -43,6 +43,7 @@ Map<String, Object?> namingOptionsToJson(NamingOptions o) => {
   'order': [for (final f in o.order) f.name],
   'folderTemplate': o.folderTemplate,
   'seasonFolderTemplate': o.seasonFolderTemplate,
+  'singleSeasonFolder': o.singleSeasonFolder,
   'customTemplate': o.customTemplate,
 };
 
@@ -72,6 +73,8 @@ NamingOptions namingOptionsFromJson(Map<String, Object?> j) {
     folderTemplate: j['folderTemplate'] as String? ?? d.folderTemplate,
     seasonFolderTemplate:
         j['seasonFolderTemplate'] as String? ?? d.seasonFolderTemplate,
+    singleSeasonFolder:
+        j['singleSeasonFolder'] as bool? ?? d.singleSeasonFolder,
     customTemplate: j['customTemplate'] as String?,
   );
 }
