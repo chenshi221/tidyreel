@@ -33,7 +33,7 @@ jobs:
           fi
 
       - name: Checks
-        run: tool/check.sh
+        run: (cd packages/tidyreel_core && dart pub get) && tool/check.sh
 
       - name: Default TMDB key
         env:
