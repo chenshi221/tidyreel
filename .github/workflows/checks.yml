@@ -1,0 +1,31 @@
+# Every PR: the PR title must follow CONTRIBUTING.md (it becomes the squash
+# commit), and tool/check.sh must pass.
+name: Checks
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+  push:
+    branches: [main]
+
+jobs:
+  title:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: PR title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: tool/lint_commit.sh "$TITLE"
+
+  check:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.4
+          cache: true
+      - run: tool/check.sh
