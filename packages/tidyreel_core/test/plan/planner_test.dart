@@ -108,6 +108,45 @@ void main() {
       },
     );
 
+    group('a selected folder named after its only work', () {
+      Future<List<String>> run(String root, List<String> paths) async {
+        final meta = FakeMetadataProvider();
+        final scan = await AnchorRecognizer(
+          const RuleBasedParser(),
+          meta,
+        ).recognize(conn, [root], entriesOf(paths));
+        final backend = MemoryStorageBackend({for (final p in paths) p: 1});
+        final p = await planner(meta).build(
+          scan,
+          const {},
+          const PlanOptions(),
+          existing: {for (final f in backend.files) f},
+        );
+        expect(p.canExecute, isTrue);
+        await applyPlan(p, backend);
+        return backend.files;
+      }
+
+      const inner = '[Sub] Dorohedoro [01-02][1080p]';
+      const out = '/dl/异兽魔都 (2020)/Season 01';
+      test('is renamed, and the inner folder becomes the season', () async {
+        expect(
+          await run('/dl/Dorohedoro', [
+            '/dl/Dorohedoro/$inner/[Sub] Dorohedoro - 01 [1080p].mkv',
+            '/dl/Dorohedoro/$inner/[Sub] Dorohedoro - 02 [1080p].mkv',
+          ]),
+          ['$out/$name.S01E01.mkv', '$out/$name.S01E02.mkv'],
+        );
+      });
+
+      test('a generic container keeps its name', () async {
+        final files = await run('/dl/下载', [
+          '/dl/下载/$inner/[Sub] Dorohedoro - 01 [1080p].mkv',
+        ]);
+        expect(files.single, startsWith('/dl/下载/异兽魔都 (2020)/'));
+      });
+    });
+
     test('盗梦空间 movie moved into the library', () async {
       const src = '/下载/Inception.2010.1080p.BluRay';
       final paths = [
@@ -278,6 +317,36 @@ void main() {
       expect(p.ops, isEmpty);
       expect(p.canExecute, isTrue);
     });
+
+    test(
+      'a TMDB title differing only in punctuation keeps the local one',
+      () async {
+        const d = Demo.dorohedoro;
+        final p = await plan(
+          scanOf([
+            tvGroup(
+              [
+                video(
+                  '/d/异兽魔都 (2020)/Season 01/$name.S01E01.mkv',
+                  season: 1,
+                  episode: 1,
+                ),
+              ],
+              rootDir: '/d/异兽魔都 (2020)',
+              match: Candidate(
+                tmdbId: d.tmdbId,
+                kind: d.kind,
+                title: '异兽魔都！',
+                englishTitle: d.englishTitle,
+                originalTitle: d.originalTitle,
+                year: d.year,
+              ),
+            ),
+          ]),
+        );
+        expect(p.ops, isEmpty);
+      },
+    );
   });
 
   group('season strategies through the planner', () {
@@ -379,7 +448,7 @@ void main() {
       );
     });
     test(
-      'overflow goes to the last season, unselected with a warning',
+      'overflow goes to the last season, still selected, with a warning',
       () async {
         final fs = [
           video('$root/a.mkv', absolute: 23),
@@ -397,7 +466,7 @@ void main() {
         expect(opFor(p, '$root/a.mkv').selected, isTrue);
         final over = opFor(p, '$root/b.mkv');
         expect(over.dst, t(2, 13));
-        expect(over.selected, isFalse);
+        expect(over.selected, isTrue);
         expect(over.warning, contains('超出 TMDB 总集数'));
       },
     );
@@ -697,7 +766,7 @@ void main() {
       // Fake "friends" has one 24-episode season, so 25 overflows within S01.
       final file = opFor(p, '$root/a.mkv');
       expect(file.dst, '$root/Season 01/老友记.Friends.1994.S01E25.mkv');
-      expect(file.selected, isFalse);
+      expect(file.selected, isTrue);
       // The folder still looks like the anchor title, so it is renamed to the new match.
       expect(p.ops.last.dst, '/d/老友记 (1994)');
     });

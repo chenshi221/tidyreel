@@ -10,6 +10,9 @@ import 'strategy.dart';
 import 'template.dart';
 import 'text.dart';
 
+final _punct = RegExp(r'[^\p{L}\p{N}]', unicode: true);
+const _overflowWarning = '超出 TMDB 总集数';
+
 /// Owner: Agent D. Turns a recognized scan + user decisions into ops, with conflict
 /// detection (PLAN §4.3 rule 1). Subtitles follow their video, specials go to
 /// Season 00, extras to Extras/, junk becomes unselected delete ops.
@@ -285,12 +288,15 @@ class _PlanBuilder {
         if (r.episode < 1) {
           pending[i].warnings.add('集号无效');
         } else if (_overflow(d.strategy, r, tmdbCounts)) {
-          pending[i].warnings.add('超出 TMDB 总集数');
+          pending[i].warnings.add(_overflowWarning);
         }
       }
     }
     for (final it in items) {
-      it.selected = it.warnings.isEmpty && !lowMatch;
+      // A download with more episodes than TMDB lists is still named (and
+      // selected); the warning stays visible.
+      it.selected =
+          !lowMatch && it.warnings.every((w) => w == _overflowWarning);
       if (lowMatch) it.warnings.add('片名匹配置信度较低');
     }
 
@@ -304,7 +310,7 @@ class _PlanBuilder {
         : const <EpisodeRef, String>{};
 
     // --- folders
-    final titleVars = _titleVars(match, naming);
+    final titleVars = _titleVars(match, naming, g.anchorTitle);
     final folderVars = {
       ...titleVars,
       if (naming.titleLanguage == TitleLanguage.englishFirst &&
@@ -584,7 +590,14 @@ class _PlanBuilder {
 
   // ---- helpers ------------------------------------------------------------
 
-  Map<String, Object?> _titleVars(Candidate c, NamingOptions o) {
+  /// [local] is the title already on disk: when TMDB's differs only in
+  /// punctuation ("全金属狂潮" vs "全金属狂潮！"), keep it rather than rename
+  /// every file for one character.
+  Map<String, Object?> _titleVars(
+    Candidate c,
+    NamingOptions o, [
+    String? local,
+  ]) {
     var en = c.englishTitle;
     if (en != null && en.trim().isEmpty) en = null;
     final englishOnly =
@@ -596,8 +609,11 @@ class _PlanBuilder {
         normTitle(en) == normTitle(c.title)) {
       en = null;
     }
+    String bare(String s) => s.replaceAll(_punct, '');
+    final keepLocal =
+        local != null && local != c.title && bare(local) == bare(c.title);
     return {
-      'title': c.title,
+      'title': keepLocal ? local : c.title,
       'en_title': en,
       'original_title': c.originalTitle,
       'tmdbid': c.tmdbId,
