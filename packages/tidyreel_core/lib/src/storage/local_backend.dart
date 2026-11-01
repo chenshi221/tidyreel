@@ -37,6 +37,7 @@ class LocalBackend implements StorageBackend {
       final code = switch (e.osError?.errorCode) {
         2 || 3 => StorageErrorCode.notFound, // ENOENT / ERROR_PATH_NOT_FOUND
         17 || 66 || 183 => StorageErrorCode.alreadyExists,
+        16 || 32 => StorageErrorCode.busy, // EBUSY / ERROR_SHARING_VIOLATION
         _ => StorageErrorCode.other,
       };
       throw StorageException(code, '$path: ${e.message}');
@@ -97,6 +98,13 @@ class LocalBackend implements StorageBackend {
       throw StorageException(StorageErrorCode.other, 'bad name: $newName');
     }
     await _relocate(path, _virtual(p.posix.dirname(path), newName));
+  }
+
+  @override
+  Future<void> renameMany(String dir, Map<String, String> names) async {
+    for (final e in names.entries) {
+      await rename(p.posix.join(dir, e.key), e.value);
+    }
   }
 
   @override

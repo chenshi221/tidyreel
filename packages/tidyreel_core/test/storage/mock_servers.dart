@@ -78,6 +78,12 @@ class MockAlist {
 
   final List<Map<String, dynamic>> listRequests = [];
 
+  /// `fs/*` calls in order, e.g. `api/fs/batch_rename`.
+  final List<String> calls = [];
+
+  /// Older servers have no `fs/batch_rename` (HTTP 404).
+  bool batchRename = true;
+
   MockAlist(Map<String, int> files, {this.password = 'pw'})
     : tree = MockTree(files);
 
@@ -108,7 +114,16 @@ class MockAlist {
       return _json(c, m);
     }
     const notFound = 'object not found';
+    calls.add(api);
     switch (api) {
+      case 'api/fs/batch_rename' when batchRename:
+        final dir = body['src_dir'] as String;
+        for (final o in (body['rename_objects'] as List).cast<Map>()) {
+          final from = p.posix.join(dir, o['src_name'] as String);
+          if (!tree.nodes.containsKey(from)) return _json(500, notFound);
+          tree.relocate(from, p.posix.join(dir, o['new_name'] as String));
+        }
+        return _json(200, 'success');
       case 'api/fs/get':
         final path = body['path'] as String;
         return tree.nodes.containsKey(path)

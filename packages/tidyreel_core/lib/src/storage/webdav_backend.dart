@@ -60,6 +60,7 @@ class WebDAVBackend implements StorageBackend {
       404 || 409 => StorageErrorCode.notFound, // 409: parent collection missing
       412 =>
         StorageErrorCode.alreadyExists, // Overwrite: F hit an existing target
+      423 => StorageErrorCode.busy, // Locked
       429 => StorageErrorCode.rateLimited,
       502 || 503 || 504 => StorageErrorCode.network,
       _ => StorageErrorCode.other,
@@ -213,6 +214,14 @@ class WebDAVBackend implements StorageBackend {
   @override
   Future<void> rename(String path, String newName) =>
       _move(path, p.posix.join(p.posix.dirname(path), newName));
+
+  /// WebDAV has no batch rename; each MOVE is one request anyway.
+  @override
+  Future<void> renameMany(String dir, Map<String, String> names) async {
+    for (final e in names.entries) {
+      await rename(p.posix.join(dir, e.key), e.value);
+    }
+  }
 
   @override
   Future<void> move(String srcDir, String dstDir, List<String> names) async {

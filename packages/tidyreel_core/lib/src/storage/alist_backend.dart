@@ -85,6 +85,11 @@ class AlistBackend implements StorageBackend {
       _ when lower.contains('not found') => StorageErrorCode.notFound,
       _ when lower.contains('already exist') => StorageErrorCode.alreadyExists,
       _ when lower.contains('too many') => StorageErrorCode.rateLimited,
+      _
+          when lower.contains('access is denied') ||
+              lower.contains('used by another process') ||
+              lower.contains('resource busy') =>
+        StorageErrorCode.busy,
       _ => StorageErrorCode.other,
     };
     throw StorageException(err, msg);
@@ -167,6 +172,46 @@ class AlistBackend implements StorageBackend {
       throw StorageException(StorageErrorCode.alreadyExists, target);
     }
     await _call('/api/fs/rename', {'path': path, 'name': newName});
+  }
+
+  /// One listing to check names, then `fs/batch_rename` (one request for the
+  /// whole folder); servers without it get one `fs/rename` per file.
+  @override
+  Future<void> renameMany(String dir, Map<String, String> names) async {
+    final have = {for (final e in await list(dir, refresh: true)) e.name};
+    for (final e in names.entries) {
+      if (!have.contains(e.key)) {
+        throw StorageException(
+          StorageErrorCode.notFound,
+          p.posix.join(dir, e.key),
+        );
+      }
+      // Some drivers overwrite silently, so never rely on the server to refuse.
+      if (have.contains(e.value)) {
+        throw StorageException(
+          StorageErrorCode.alreadyExists,
+          p.posix.join(dir, e.value),
+        );
+      }
+    }
+    try {
+      await _call('/api/fs/batch_rename', {
+        'src_dir': dir,
+        'rename_objects': [
+          for (final e in names.entries)
+            {'src_name': e.key, 'new_name': e.value},
+        ],
+      });
+    } on StorageException catch (err) {
+      // Older Alist: the route is missing (HTTP 404); the sources exist (listed above).
+      if (err.code != StorageErrorCode.notFound) rethrow;
+      for (final e in names.entries) {
+        await _call('/api/fs/rename', {
+          'path': p.posix.join(dir, e.key),
+          'name': e.value,
+        });
+      }
+    }
   }
 
   @override

@@ -210,6 +210,35 @@ void main() {
       await expectLater(be.ping(), throwsStorage(StorageErrorCode.network));
     });
 
+    test('renameMany is one batch_rename call', () async {
+      final (mock, be) = await connect(files: {'/d/1': 1, '/d/2': 1});
+      await be.renameMany('/d', {'1': 'a', '2': 'b'});
+      expect(mock.tree.nodes.keys, containsAll(['/d/a', '/d/b']));
+      expect(mock.calls.where((c) => c.contains('rename')), [
+        'api/fs/batch_rename',
+      ]);
+    });
+
+    test('renameMany falls back to fs/rename on older servers', () async {
+      final (mock, be) = await connect(files: {'/d/1': 1, '/d/2': 1});
+      mock.batchRename = false;
+      await be.renameMany('/d', {'1': 'a', '2': 'b'});
+      expect(mock.tree.nodes.keys, containsAll(['/d/a', '/d/b']));
+      expect(mock.calls.where((c) => c == 'api/fs/rename'), hasLength(2));
+    });
+
+    test(
+      'Windows "Access is denied" is busy (retried, then explained)',
+      () async {
+        final (mock, be) = await connect(files: {'/d/1': 1});
+        mock.failNext = (500, r'rename D:\bit\d: Access is denied.');
+        await expectLater(
+          be.rename('/d', 'e'),
+          throwsStorage(StorageErrorCode.busy),
+        );
+      },
+    );
+
     test('rename refuses to overwrite even though the server would', () async {
       final (mock, be) = await connect(files: {'/a': 1, '/b': 2});
       await expectLater(
