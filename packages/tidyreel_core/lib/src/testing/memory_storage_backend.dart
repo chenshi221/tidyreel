@@ -85,6 +85,12 @@ class MemoryStorageBackend implements StorageBackend {
       _relocate(path, p.posix.join(p.posix.dirname(path), newName));
 
   @override
+  Future<void> renameMany(String dir, Map<String, String> names) async =>
+      names.forEach(
+        (from, to) => _relocate(p.posix.join(dir, from), p.posix.join(dir, to)),
+      );
+
+  @override
   Future<void> move(String srcDir, String dstDir, List<String> names) async {
     _requireDir(dstDir);
     for (final n in names) {

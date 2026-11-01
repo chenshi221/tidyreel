@@ -43,6 +43,10 @@ class NamingOptions {
   /// TV only, e.g. "Season {season:02}".
   final String seasonFolderTemplate;
 
+  /// TV only: single-season shows also get a Season folder (multi-season
+  /// shows always do).
+  final bool singleSeasonFolder;
+
   /// Advanced: when set, used verbatim for the file name and the options above are ignored.
   final String? customTemplate;
 
@@ -67,6 +71,7 @@ class NamingOptions {
     ],
     this.folderTemplate = '{title} ({year})',
     this.seasonFolderTemplate = 'Season {season:02}',
+    this.singleSeasonFolder = true,
     this.customTemplate,
   });
 
@@ -85,6 +90,7 @@ class NamingOptions {
     List<NameField>? order,
     String? folderTemplate,
     String? seasonFolderTemplate,
+    bool? singleSeasonFolder,
     String? Function()? customTemplate,
   }) => NamingOptions(
     titleLanguage: titleLanguage ?? this.titleLanguage,
@@ -101,6 +107,7 @@ class NamingOptions {
     order: order ?? this.order,
     folderTemplate: folderTemplate ?? this.folderTemplate,
     seasonFolderTemplate: seasonFolderTemplate ?? this.seasonFolderTemplate,
+    singleSeasonFolder: singleSeasonFolder ?? this.singleSeasonFolder,
     customTemplate: customTemplate != null
         ? customTemplate()
         : this.customTemplate,

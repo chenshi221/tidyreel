@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -5,6 +6,9 @@ import 'package:go_router/go_router.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
 import '../../data/providers.dart';
+import '../../data/settings.dart';
+import '../../ui/tokens.dart';
+import '../../ui/widgets.dart';
 import '../../widgets/common.dart';
 import 'review_logic.dart';
 import 'review_panes.dart';
@@ -19,9 +23,15 @@ class ReviewPage extends ConsumerStatefulWidget {
   ConsumerState<ReviewPage> createState() => _ReviewPageState();
 }
 
-class _ReviewPageState extends ConsumerState<ReviewPage>
-    with SingleTickerProviderStateMixin {
-  late final _tabs = TabController(length: 2, vsync: this);
+class _ReviewPageState extends ConsumerState<ReviewPage> {
+  /// 0 = 可整理, 1 = 待手动识别.
+  var _tab = 0;
+
+  /// Main area shows the files no work claimed instead of a work.
+  var _showUnassigned = false;
+
+  /// Right pane (作品操作) can be hidden to give file names more room.
+  var _showActions = true;
   final _searchFocus = FocusNode();
   final _search = TextEditingController();
   TaskReview? _review;
@@ -36,13 +46,11 @@ class _ReviewPageState extends ConsumerState<ReviewPage>
   @override
   void initState() {
     super.initState();
-    _tabs.addListener(() => setState(() => _selectFirstVisible()));
     _load();
   }
 
   @override
   void dispose() {
-    _tabs.dispose();
     _searchFocus.dispose();
     _search.dispose();
     super.dispose();
@@ -80,7 +88,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage>
     ];
   }
 
-  List<MediaGroup> get _visible => _groups(matched: _tabs.index == 0);
+  List<MediaGroup> get _visible => _groups(matched: _tab == 0);
 
   void _selectFirstVisible() {
     final v = _visible;
@@ -105,13 +113,61 @@ class _ReviewPageState extends ConsumerState<ReviewPage>
       _review!.decisions[id] ?? const GroupDecision();
 
   Future<void> _editRow(MediaGroup g, ReviewRow row) async {
-    final o = await showEditRowDialog(context, g, row);
-    if (o == null) return;
     final d = _decisionOf(g.id);
+    final rows = rowsOf(g, d, _review!);
+    final o = await showEditRowDialog(context, g, row, decision: d, rows: rows);
+    if (o == null) return;
+    final to = o.season != null && o.episode != null
+        ? EpisodeRef(o.season!, o.episode!)
+        : null;
+    final main =
+        !o.ignore && o.kind != MediaKind.special && o.kind != MediaKind.extra;
+    // Moving one episode moves the ones after it too (12 -> S02E01, 13 -> S02E02 …).
+    if (g.kind == MediaKind.episode &&
+        main &&
+        to != null &&
+        to != targetRef(row)) {
+      return _shift(g, row, to, kind: o.kind);
+    }
     await _update(
       g.id,
       d.copyWith(overrides: {...d.overrides, row.file.path: o}),
     );
+  }
+
+  Future<void> _shift(
+    MediaGroup g,
+    ReviewRow row,
+    EpisodeRef to, {
+    MediaKind? kind,
+  }) async {
+    final before = _decisionOf(g.id);
+    final set = shiftFrom(
+      g,
+      before,
+      rowsOf(g, before, _review!),
+      row,
+      to,
+      kind: kind ?? row.override?.kind,
+    );
+    await _update(
+      g.id,
+      before.copyWith(overrides: {...before.overrides, ...set}),
+    );
+    if (!mounted || set.length < 2) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text('后面 ${set.length - 1} 个文件已依次顺延'),
+          persist: false,
+          duration: const Duration(seconds: 6),
+          action: SnackBarAction(
+            label: '撤销',
+            onPressed: () => _update(g.id, before),
+          ),
+        ),
+      );
   }
 
   Future<void> _checkRow(MediaGroup g, ReviewRow row, bool on) {
@@ -138,35 +194,42 @@ class _ReviewPageState extends ConsumerState<ReviewPage>
       context,
       initial: effectiveMatch(g, _decisionOf(g.id))?.title ?? g.anchorTitle,
       kind: g.kind == MediaKind.unknown ? null : g.kind,
+      year: effectiveMatch(g, _decisionOf(g.id))?.year ?? g.anchorYear,
     );
-    if (c != null) await _update(g.id, _decisionOf(g.id).copyWith(match: c));
+    // Picking a match means "organize this": an unmatched group starts unchecked.
+    if (c != null) {
+      await _update(g.id, _decisionOf(g.id).copyWith(match: c, selected: true));
+    }
   }
 
   Future<void> _execute() async {
     final r = _review;
     if (r == null || r.preview.conflicts.isNotEmpty) return;
     final ops = r.preview.ops.where((o) => o.selected).toList();
+    if (ops.isEmpty) return;
     int n(ExecPhase p) => ops.where((o) => o.phase == p).length;
     final groups = r.decisions.values.where((d) => d.selected).length;
-    final ok = await confirmDialog(
-      context,
-      title: '执行任务',
-      content: Text(
-        '将处理 $groups 个作品：\n'
-        '· 重命名/移动文件 ${n(ExecPhase.files)} 项\n'
-        '· 整理文件夹 ${n(ExecPhase.folders)} 项\n'
-        '· 清理 ${n(ExecPhase.cleanup)} 项\n'
-        '执行后可在任务页撤销。',
-      ),
-      confirmLabel: '执行',
-    );
+    final ok =
+        !ref.read(settingsProvider).confirmBeforeExecute ||
+        await confirmDialog(
+          context,
+          title: '执行任务',
+          content: Text(
+            '将处理 $groups 个作品：\n'
+            '· 重命名/移动文件 ${n(ExecPhase.files)} 项\n'
+            '· 整理文件夹 ${n(ExecPhase.folders)} 项\n'
+            '· 清理 ${n(ExecPhase.cleanup)} 项\n'
+            '执行后可在任务页撤销。',
+          ),
+          confirmLabel: '执行',
+        );
     if (!ok || !mounted) return;
     final router = GoRouter.of(context);
     await _tm.run(_id);
-    router.go('/tasks');
+    router.go('/tasks/${_id.value}');
   }
 
-  // ---- keyboard: ↑↓ groups, space toggles, ⌘F search, ⌘↩ execute
+  // ---- keyboard: ↑↓ groups, ←→ seasons, space toggles, ⌘F search, ⌘↩ execute
 
   KeyEventResult _onKey(FocusNode _, KeyEvent e) {
     if (e is KeyUpEvent) return KeyEventResult.ignored;
@@ -196,6 +259,25 @@ class _ReviewPageState extends ConsumerState<ReviewPage>
       }
       return KeyEventResult.handled;
     }
+    final g = _selectedGroup;
+    if (g != null &&
+        (k == LogicalKeyboardKey.arrowLeft ||
+            k == LogicalKeyboardKey.arrowRight)) {
+      // Same tab order as DetailPane: seasons ascending, then 文件夹.
+      final tabs = [
+        ...({
+          for (final row in rowsOf(g, _decisionOf(g.id), _review!)) row.season,
+        }.toList()..sort()),
+        folderTab,
+      ];
+      final at = tabs.indexOf(_detailTab);
+      final next =
+          (at < 0 ? 0 : at) + (k == LogicalKeyboardKey.arrowRight ? 1 : -1);
+      if (next >= 0 && next < tabs.length) {
+        setState(() => _detailTab = tabs[next]);
+      }
+      return KeyEventResult.handled;
+    }
     if (k == LogicalKeyboardKey.space && i >= 0) {
       final d = _decisionOf(v[i].id);
       _update(v[i].id, d.copyWith(selected: !d.selected));
@@ -207,25 +289,70 @@ class _ReviewPageState extends ConsumerState<ReviewPage>
   @override
   Widget build(BuildContext context) {
     final r = _review;
+    final paths = ref
+        .watch(tasksProvider)
+        .asData
+        ?.value
+        .where((t) => t.id == _id)
+        .firstOrNull
+        ?.paths;
     return PageScaffold(
-      title: '识别结果 · ${widget.taskId}',
+      title: '识别结果',
+      subtitle: [
+        widget.taskId,
+        if (paths != null && paths.length == 1) paths.single,
+        if (paths != null && paths.length > 1) '${paths.length} 个文件夹',
+      ].join('  ·  '),
+      actions: [
+        if (paths != null && paths.length > 1)
+          Tooltip(
+            message: paths.join('\n'),
+            child: Icon(
+              CupertinoIcons.folder,
+              size: 16,
+              color: Palette.of(context).textMuted,
+            ),
+          ),
+        const Tooltip(
+          message:
+              '快捷键\n↑ ↓  切换作品\n← →  切换季 / 文件夹\n空格  勾选或取消作品\n⌘F  搜索\n⌘↩  执行',
+          child: Padding(
+            padding: EdgeInsets.all(8),
+            child: Icon(CupertinoIcons.keyboard, size: 16),
+          ),
+        ),
+        IconButton(
+          key: const ValueKey('toggle-actions'),
+          tooltip: _showActions ? '隐藏作品操作' : '显示作品操作',
+          icon: const Icon(CupertinoIcons.sidebar_right),
+          onPressed: () => setState(() => _showActions = !_showActions),
+        ),
+      ],
       leading: IconButton(
         tooltip: '返回任务',
-        icon: const Icon(Icons.arrow_back),
+        icon: const Icon(CupertinoIcons.chevron_left),
         onPressed: () => context.go('/tasks'),
       ),
       child: _error != null
-          ? Center(child: Text('无法读取识别结果：$_error'))
+          ? EmptyState(
+              icon: CupertinoIcons.exclamationmark_triangle,
+              title: '无法读取识别结果',
+              message: '$_error',
+            )
           : r == null
           ? const Center(child: CircularProgressIndicator())
           : Focus(
               autofocus: true,
               onKeyEvent: _onKey,
-              child: Column(
+              child: Stack(
                 children: [
-                  const Divider(height: 1),
-                  Expanded(child: _body(r)),
-                  _bottomBar(r),
+                  Positioned.fill(child: _body(r)),
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 18,
+                    child: Center(child: _bottomBar(r)),
+                  ),
                 ],
               ),
             ),
@@ -234,85 +361,139 @@ class _ReviewPageState extends ConsumerState<ReviewPage>
 
   Widget _body(TaskReview r) {
     final g = _selectedGroup;
-    return Row(
-      children: [
-        SizedBox(
-          width: 360,
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
-                child: TextField(
-                  key: const ValueKey('review-search'),
-                  controller: _search,
-                  focusNode: _searchFocus,
-                  decoration: const InputDecoration(
-                    isDense: true,
-                    prefixIcon: Icon(Icons.search),
-                    hintText: '搜索作品 (⌘F)',
-                    border: OutlineInputBorder(),
+    final p = Palette.of(context);
+    final hairlineSide = BorderSide(color: p.line, width: hairline);
+    return DecoratedBox(
+      decoration: BoxDecoration(border: Border(top: hairlineSide)),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            width: 312,
+            decoration: BoxDecoration(
+              color: p.sidebar.withValues(alpha: 0.5),
+              border: Border(right: hairlineSide),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+                  child: TextField(
+                    key: const ValueKey('review-search'),
+                    controller: _search,
+                    focusNode: _searchFocus,
+                    style: const TextStyle(fontSize: 13),
+                    decoration: const InputDecoration(
+                      prefixIcon: Icon(CupertinoIcons.search, size: 14),
+                      hintText: '搜索作品  ⌘F',
+                    ),
+                    onChanged: (_) => setState(_selectFirstVisible),
                   ),
-                  onChanged: (_) => setState(_selectFirstVisible),
                 ),
-              ),
-              TabBar(
-                controller: _tabs,
-                tabs: [
-                  Tab(text: '可整理 (${_groups(matched: true).length})'),
-                  Tab(text: '待手动识别 (${_groups(matched: false).length})'),
-                ],
-              ),
-              Expanded(
-                child: GroupList(
-                  groups: _visible,
-                  review: r,
-                  selected: _selected,
-                  onSelect: (id) => setState(() {
-                    _selected = id;
-                    _detailTab = folderTab - 1;
-                  }),
-                  onCheck: (id, v) =>
-                      _update(id, _decisionOf(id).copyWith(selected: v)),
-                  onPick: (grp, c) =>
-                      _update(grp.id, _decisionOf(grp.id).copyWith(match: c)),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                  child: Segmented<int>(
+                    options: {
+                      0: '可整理 (${_groups(matched: true).length})',
+                      1: '待手动识别 (${_groups(matched: false).length})',
+                    },
+                    value: _tab,
+                    onChanged: (v) => setState(() {
+                      _tab = v;
+                      _selectFirstVisible();
+                    }),
+                  ),
                 ),
-              ),
-            ],
+                Expanded(
+                  child: GroupList(
+                    groups: _visible,
+                    review: r,
+                    selected: _selected,
+                    onSelect: (id) => setState(() {
+                      _selected = id;
+                      _showUnassigned = false;
+                      _detailTab = folderTab - 1;
+                    }),
+                    onCheck: (id, v) =>
+                        _update(id, _decisionOf(id).copyWith(selected: v)),
+                    onPick: (grp, c) => _update(
+                      grp.id,
+                      _decisionOf(grp.id).copyWith(match: c, selected: true),
+                    ),
+                  ),
+                ),
+                if (r.scan.unassigned.isNotEmpty)
+                  Material(
+                    type: MaterialType.transparency,
+                    child: ListTile(
+                      key: const ValueKey('unassigned-link'),
+                      dense: true,
+                      selected: _showUnassigned,
+                      leading: const Icon(CupertinoIcons.tray, size: 16),
+                      title: Text('未归类 ${r.scan.unassigned.length} 个文件'),
+                      subtitle: const Text('没归进任何作品，不会被整理'),
+                      trailing: const Icon(
+                        CupertinoIcons.chevron_right,
+                        size: 12,
+                      ),
+                      onTap: () => setState(() => _showUnassigned = true),
+                    ),
+                  ),
+                const SizedBox(height: 64),
+              ],
+            ),
           ),
-        ),
-        const VerticalDivider(width: 1),
-        Expanded(
-          child: g == null
-              ? const Center(child: Text('选择左侧的作品查看明细'))
-              : DetailPane(
-                  group: g,
-                  decision: r.decisions[g.id],
-                  review: r,
-                  tab: _detailTab,
-                  onTab: (t) => setState(() => _detailTab = t),
-                  onEdit: (row) => _editRow(g, row),
-                  onCheck: (row, v) => _checkRow(g, row, v),
-                ),
-        ),
-        const VerticalDivider(width: 1),
-        SizedBox(
-          width: 300,
-          child: g == null
-              ? const SizedBox.shrink()
-              : ActionPane(
-                  key: ValueKey(g.id),
-                  group: g,
-                  decision: _decisionOf(g.id),
-                  onChange: (d) => _update(g.id, d),
-                  onCorrect: () => _correct(g),
-                ),
-        ),
-      ],
+          Expanded(
+            child: _showUnassigned
+                ? Padding(
+                    padding: const EdgeInsets.only(top: 12, bottom: 64),
+                    child: UnassignedPane(files: r.scan.unassigned),
+                  )
+                : g == null
+                ? const EmptyState(
+                    icon: CupertinoIcons.rectangle_stack,
+                    title: '选择左侧的作品查看明细',
+                  )
+                : Padding(
+                    padding: const EdgeInsets.only(top: 12, bottom: 64),
+                    child: DetailPane(
+                      group: g,
+                      decision: r.decisions[g.id],
+                      review: r,
+                      tab: _detailTab,
+                      onTab: (t) => setState(() => _detailTab = t),
+                      onEdit: (row) => _editRow(g, row),
+                      onCheck: (row, v) => _checkRow(g, row, v),
+                      onShift: (row, to) => _shift(g, row, to),
+                    ),
+                  ),
+          ),
+          if (_showActions && !_showUnassigned)
+            Container(
+              width: 284,
+              decoration: BoxDecoration(border: Border(left: hairlineSide)),
+              padding: const EdgeInsets.only(bottom: 64),
+              child: g == null
+                  ? const SizedBox.shrink()
+                  // Own layer: stale strips were seen here while scrolling.
+                  : RepaintBoundary(
+                      child: ActionPane(
+                        key: ValueKey(g.id),
+                        group: g,
+                        decision: _decisionOf(g.id),
+                        onChange: (d) => _update(g.id, d),
+                        onCorrect: () => _correct(g),
+                      ),
+                    ),
+            ),
+        ],
+      ),
     );
   }
 
   Widget _bottomBar(TaskReview r) {
-    final scheme = Theme.of(context).colorScheme;
+    final p = Palette.of(context);
     final conflicts = r.preview.conflicts.length;
     final mode = ref
         .watch(tasksProvider)
@@ -321,44 +502,60 @@ class _ReviewPageState extends ConsumerState<ReviewPage>
         .where((t) => t.id == _id)
         .map((t) => t.mode)
         .firstOrNull;
-    return Material(
-      elevation: 3,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-        child: Row(
-          children: [
-            SegmentedButton<OrganizeMode>(
-              segments: const [
-                ButtonSegment(value: OrganizeMode.inPlace, label: Text('原地整理')),
-                ButtonSegment(
-                  value: OrganizeMode.moveToLibrary,
-                  label: Text('移动到媒体库'),
-                ),
-              ],
-              selected: {mode ?? OrganizeMode.inPlace},
-              onSelectionChanged: (v) async {
-                final nr = await _tm.setMode(_id, v.first);
-                if (mounted) setState(() => _review = nr);
-              },
+    final ops = r.preview.ops.where((o) => o.selected).length;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
+      decoration: BoxDecoration(
+        color: p.panel,
+        borderRadius: BorderRadius.circular(Radii.xl),
+        border: Border.all(color: p.line, width: hairline),
+        boxShadow: floatShadow(),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Segmented<OrganizeMode>(
+            options: const {
+              OrganizeMode.inPlace: '原地整理',
+              OrganizeMode.moveToLibrary: '移动到媒体库',
+            },
+            value: mode ?? OrganizeMode.inPlace,
+            onChanged: (v) async {
+              final nr = await _tm.setMode(_id, v);
+              if (mounted) setState(() => _review = nr);
+            },
+          ),
+          const SizedBox(width: 16),
+          Icon(
+            conflicts == 0
+                ? CupertinoIcons.checkmark_seal_fill
+                : CupertinoIcons.exclamationmark_triangle_fill,
+            size: 14,
+            color: conflicts == 0 ? p.success : p.danger,
+          ),
+          const SizedBox(width: 6),
+          Text(
+            conflicts == 0 ? '没有冲突' : '$conflicts 处冲突，需处理后才能执行',
+            key: const ValueKey('conflict-count'),
+            style: TextStyle(
+              fontSize: 12.5,
+              color: conflicts == 0 ? p.textMuted : p.danger,
+              fontWeight: conflicts == 0 ? null : FontWeight.w600,
             ),
-            const SizedBox(width: 24),
-            Text(
-              conflicts == 0 ? '没有冲突' : '$conflicts 处冲突，需处理后才能执行',
-              key: const ValueKey('conflict-count'),
-              style: TextStyle(
-                color: conflicts == 0 ? scheme.onSurfaceVariant : scheme.error,
-                fontWeight: conflicts == 0 ? null : FontWeight.bold,
-              ),
-            ),
-            const Spacer(),
-            FilledButton.icon(
-              key: const ValueKey('execute-button'),
-              onPressed: conflicts == 0 ? _execute : null,
-              icon: const Icon(Icons.play_arrow),
-              label: const Text('执行任务 (⌘↩)'),
-            ),
-          ],
-        ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            '· $ops 项操作',
+            style: TextStyle(fontSize: 12.5, color: p.textFaint),
+          ),
+          const SizedBox(width: 18),
+          FilledButton.icon(
+            key: const ValueKey('execute-button'),
+            onPressed: conflicts == 0 && ops > 0 ? _execute : null,
+            icon: const Icon(CupertinoIcons.play_fill, size: 12),
+            label: const Text('执行任务  ⌘↩'),
+          ),
+        ],
       ),
     );
   }

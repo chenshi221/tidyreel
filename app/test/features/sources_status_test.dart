@@ -11,6 +11,10 @@ class _FailingBackend extends MemoryStorageBackend {
 
   @override
   Future<void> ping() async => throw error;
+
+  @override
+  Future<List<RemoteEntry>> list(String dir, {bool refresh = false}) async =>
+      throw error;
 }
 
 void main() {
@@ -36,7 +40,7 @@ void main() {
         type: ConnectionType.webdav,
         endpoint: 'http://127.0.0.1:5244',
       ),
-      const StorageException(StorageErrorCode.other, 'PROPFIND / -> 405'),
+      const StorageException(StorageErrorCode.other, 'PROPFIND /: HTTP 405'),
     );
     expect(s.status, ConnStatus.offline);
     expect(s.detail, contains('405'));
@@ -57,7 +61,26 @@ void main() {
       );
       expect(s.status, ConnStatus.authFailed);
       expect(s.detail, contains('区分大小写'));
-      expect(s.detail, isNot(contains('/dav 结尾')));
+      expect(s.detail, isNot(contains('WebDAV 路径是 /dav')));
     },
   );
+
+  test('other WebDAV servers on any path get no /dav hint', () async {
+    for (final err in [
+      'PROPFIND /: HTTP 500',
+      'PROPFIND /: Connection refused',
+    ]) {
+      final s = await statusFor(
+        const ConnectionConfig(
+          id: ConnectionId('w'),
+          name: 'w',
+          type: ConnectionType.webdav,
+          endpoint: 'https://nas:5006/webdav',
+        ),
+        StorageException(StorageErrorCode.other, err),
+      );
+      expect(s.status, ConnStatus.offline);
+      expect(s.detail, err);
+    }
+  });
 }

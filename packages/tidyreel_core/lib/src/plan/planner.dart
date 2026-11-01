@@ -10,6 +10,9 @@ import 'strategy.dart';
 import 'template.dart';
 import 'text.dart';
 
+final _punct = RegExp(r'[^\p{L}\p{N}]', unicode: true);
+const _overflowWarning = '超出 TMDB 总集数';
+
 /// Owner: Agent D. Turns a recognized scan + user decisions into ops, with conflict
 /// detection (PLAN §4.3 rule 1). Subtitles follow their video, specials go to
 /// Season 00, extras to Extras/, junk becomes unselected delete ops.
@@ -66,6 +69,11 @@ class _PlanBuilder {
   final mkdirs = <String, GroupId?>{};
   final fileOps = <RenameOp>[];
   final folderOps = <RenameOp>[];
+
+  /// Season folders made by renaming a subfolder; they run before the
+  /// group-folder renames since their paths are inside the old folder.
+  final seasonOps = <RenameOp>[];
+  final renamedSeasons = <String, String>{};
   final deleteOps = <RenameOp>[];
   final renamedRoots = <String, String>{};
   final knownDirs = <String>{};
@@ -119,11 +127,37 @@ class _PlanBuilder {
           final db = '/'.allMatches(b.dst).length;
           return da != db ? da.compareTo(db) : a.dst.compareTo(b.dst);
         });
-    final ops = [...mkdirOps, ...fileOps, ...folderOps, ...deleteOps];
+    final ops = [
+      ...mkdirOps,
+      ...fileOps,
+      ...seasonOps,
+      ...folderOps,
+      ...deleteOps,
+    ];
     return RenamePlan(ops: ops, conflicts: _conflicts(ops));
   }
 
   // ---- one group ----------------------------------------------------------
+
+  /// Air date -> episode across the show's regular seasons; the first episode
+  /// wins when two air the same day.
+  Future<Map<DateTime, EpisodeRef>> _episodesByDate(
+    int tmdbId,
+    ShowDetail show,
+  ) async {
+    final out = <DateTime, EpisodeRef>{};
+    for (final s in show.seasons.where((s) => s.number > 0)) {
+      for (final e in await metadata.season(tmdbId, s.number)) {
+        final d = e.airDate;
+        if (d == null) continue;
+        out.putIfAbsent(
+          DateTime.utc(d.year, d.month, d.day),
+          () => EpisodeRef(s.number, e.number),
+        );
+      }
+    }
+    return out;
+  }
 
   Future<void> _group(MediaGroup g, GroupDecision d, Candidate match) async {
     final isTv = g.kind == MediaKind.episode;
@@ -160,6 +194,23 @@ class _PlanBuilder {
             });
     }
 
+    // Air-dated files (variety shows): TMDB episode by date.
+    final byDate = isTv && videos.any((v) => v.parsed?.airDate != null)
+        ? await _episodesByDate(match.tmdbId, show!)
+        : const <DateTime, EpisodeRef>{};
+
+    // "01.mkv … 12.mkv" in a matched show folder: each bare number alone is a
+    // guess, but a run of distinct numbers is the usual layout (Jellyfin and
+    // Sonarr read these as episodes too), so it is not flagged.
+    final bare = [
+      for (final v in videos)
+        if (v.parsed case final p?
+            when p.episodes.isEmpty && p.absolute != null)
+          p.absolute!,
+    ];
+    final bareRun =
+        isTv && bare.length >= 2 && bare.toSet().length == bare.length;
+
     // --- resolve every video
     final items = <_Item>[];
     final pending = <_Item>[];
@@ -172,7 +223,9 @@ class _PlanBuilder {
       final p = v.parsed;
       final kind = ov?.kind ?? p?.kind ?? MediaKind.unknown;
       final it = _Item(v);
-      final lowParse = p == null || p.confidence < opts.confidenceThreshold;
+      final lowParse =
+          (p == null || p.confidence < opts.confidenceThreshold) &&
+          !(bareRun && p != null && p.episodes.isEmpty && p.absolute != null);
       if (kind == MediaKind.extra) {
         it.extra = true;
         items.add(it);
@@ -190,6 +243,8 @@ class _PlanBuilder {
         if (ep == null) continue;
         it.ref = EpisodeRef(ov.season ?? (isSpecial ? 0 : p?.season ?? 1), ep);
         it.manual = true;
+      } else if (n == null && byDate.containsKey(p?.airDate)) {
+        it.ref = byDate[p!.airDate];
       } else if (n == null) {
         continue; // no episode number to name it by: leave the file alone
       } else if (isSpecial) {
@@ -233,12 +288,15 @@ class _PlanBuilder {
         if (r.episode < 1) {
           pending[i].warnings.add('集号无效');
         } else if (_overflow(d.strategy, r, tmdbCounts)) {
-          pending[i].warnings.add('超出 TMDB 总集数');
+          pending[i].warnings.add(_overflowWarning);
         }
       }
     }
     for (final it in items) {
-      it.selected = it.warnings.isEmpty && !lowMatch;
+      // A download with more episodes than TMDB lists is still named (and
+      // selected); the warning stays visible.
+      it.selected =
+          !lowMatch && it.warnings.every((w) => w == _overflowWarning);
       if (lowMatch) it.warnings.add('片名匹配置信度较低');
     }
 
@@ -252,7 +310,7 @@ class _PlanBuilder {
         : const <EpisodeRef, String>{};
 
     // --- folders
-    final titleVars = _titleVars(match, naming);
+    final titleVars = _titleVars(match, naming, g.anchorTitle);
     final folderVars = {
       ...titleVars,
       if (naming.titleLanguage == TitleLanguage.englishFirst &&
@@ -301,14 +359,18 @@ class _PlanBuilder {
     }
 
     // --- name every video
+    // Single-season shows may skip the Season folder; multi-season never do.
+    final flat =
+        isTv &&
+        !naming.singleSeasonFolder &&
+        tmdbCounts.where((c) => c > 0).length <= 1 &&
+        items.every((it) => it.extra || it.ref!.season == 1);
     for (final it in items) {
       final v = it.file;
       final ext = extOf(v.name);
       if (it.extra) {
         it.dstDir = joinPath(curBase, 'Extras');
         it.newBase = stem(v.name);
-        _mkdir(it.dstDir, g.id);
-        _emit(it, v.name, g.id);
         continue;
       }
       final p = v.parsed;
@@ -337,18 +399,34 @@ class _PlanBuilder {
                   ?.year ??
               match.year;
         }
-        it.dstDir = joinPath(
-          curBase,
-          sanitizeName(
-            renderTemplate(naming.seasonFolderTemplate, {'season': r.season}),
-          ),
-        );
-        _mkdir(it.dstDir, g.id);
+        it.dstDir = flat
+            ? curBase
+            : joinPath(
+                curBase,
+                sanitizeName(
+                  renderTemplate(naming.seasonFolderTemplate, {
+                    'season': r.season,
+                  }),
+                ),
+              );
       } else {
         it.dstDir = curBase;
       }
       it.newBase = sanitizeName(renderTemplate(template, vars));
-      _emit(it, ext.isEmpty ? it.newBase : '${it.newBase}.$ext', g.id);
+    }
+    if (isTv) _reuseSeasonFolders(g, items, curBase);
+    for (final it in items) {
+      _mkdir(it.dstDir, g.id);
+      final ext = extOf(it.file.name);
+      _emit(
+        it,
+        it.extra
+            ? it.file.name
+            : ext.isEmpty
+            ? it.newBase
+            : '${it.newBase}.$ext',
+        g.id,
+      );
     }
 
     // --- subtitles and sidecars follow their video
@@ -377,6 +455,60 @@ class _PlanBuilder {
     final raw = f.parsed?.lang;
     if (raw == null || raw.isEmpty) return null;
     return normalizeLang(raw) ?? raw;
+  }
+
+  /// A season's files that all sit in one subfolder with no folders inside
+  /// (e.g. "4K/01.mkv …") are renamed in place and that folder becomes the
+  /// season folder, instead of creating it and moving every file.
+  void _reuseSeasonFolders(MediaGroup g, List<_Item> items, String curBase) {
+    final bySeason = <String, List<_Item>>{};
+    for (final it in items) {
+      if (!it.extra && it.dstDir != curBase) {
+        (bySeason[it.dstDir] ??= []).add(it);
+      }
+    }
+    final taken = <String>{};
+    for (final MapEntry(key: season, value: its) in bySeason.entries) {
+      final dirs = {for (final it in its) dirOf(it.file.path)};
+      if (dirs.length != 1) continue;
+      final src = dirs.single;
+      final inside = '$src/';
+      final ok =
+          src.startsWith('${g.rootDir}/') &&
+          src != season &&
+          !taken.contains(src) &&
+          !knownDirs.contains(season) &&
+          !mkdirs.containsKey(season) &&
+          !knownDirs.any((d) => d.startsWith(inside)) &&
+          // every video there goes to this season (nothing else stays behind)
+          g.files.every(
+            (f) =>
+                f.role != FileRole.video ||
+                dirOf(f.path) != src ||
+                its.any((it) => it.file.path == f.path),
+          ) &&
+          !scan.groups.any(
+            (o) =>
+                !identical(o, g) &&
+                o.files.any((f) => f.path.startsWith(inside)),
+          );
+      if (!ok) continue;
+      taken.add(src);
+      for (final it in its) {
+        it.dstDir = src;
+      }
+      renamedSeasons[src] = season;
+      seasonOps.add(
+        RenameOp(
+          id: OpId('s-${stableHash(src)}'),
+          kind: OpKind.relocate,
+          phase: ExecPhase.folders,
+          src: src,
+          dst: season,
+          group: g.id,
+        ),
+      );
+    }
   }
 
   /// Adds a relocate op for [src] (default: the item's video) to `item.dstDir/name`.
@@ -431,6 +563,12 @@ class _PlanBuilder {
       if (f.role != FileRole.junk) continue;
       if (under(f.path, skipped) && !under(f.path, processed)) continue;
       var path = f.path;
+      for (final e in renamedSeasons.entries) {
+        if (path.startsWith('${e.key}/')) {
+          path = '${e.value}${path.substring(e.key.length)}';
+          break;
+        }
+      }
       for (final e in renamedRoots.entries) {
         if (path.startsWith('${e.key}/')) {
           path = '${e.value}${path.substring(e.key.length)}';
@@ -452,7 +590,14 @@ class _PlanBuilder {
 
   // ---- helpers ------------------------------------------------------------
 
-  Map<String, Object?> _titleVars(Candidate c, NamingOptions o) {
+  /// [local] is the title already on disk: when TMDB's differs only in
+  /// punctuation ("全金属狂潮" vs "全金属狂潮！"), keep it rather than rename
+  /// every file for one character.
+  Map<String, Object?> _titleVars(
+    Candidate c,
+    NamingOptions o, [
+    String? local,
+  ]) {
     var en = c.englishTitle;
     if (en != null && en.trim().isEmpty) en = null;
     final englishOnly =
@@ -464,8 +609,11 @@ class _PlanBuilder {
         normTitle(en) == normTitle(c.title)) {
       en = null;
     }
+    String bare(String s) => s.replaceAll(_punct, '');
+    final keepLocal =
+        local != null && local != c.title && bare(local) == bare(c.title);
     return {
-      'title': c.title,
+      'title': keepLocal ? local : c.title,
       'en_title': en,
       'original_title': c.originalTitle,
       'tmdbid': c.tmdbId,

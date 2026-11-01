@@ -18,6 +18,15 @@ class Candidate {
   final String? originCountry;
   final double? voteAverage;
 
+  /// zh-CN synopsis.
+  final String? overview;
+
+  /// 16:9 artwork for the review header.
+  final String? backdropPath;
+
+  /// zh-CN genre names; only filled by detail calls (search returns ids).
+  final List<String> genres;
+
   const Candidate({
     required this.tmdbId,
     required this.kind,
@@ -28,6 +37,9 @@ class Candidate {
     this.posterPath,
     this.originCountry,
     this.voteAverage,
+    this.overview,
+    this.backdropPath,
+    this.genres = const [],
   });
 }
 
@@ -68,11 +80,19 @@ class Episode {
   final String? title;
   final DateTime? airDate;
 
+  /// 16:9 frame from the episode.
+  final String? stillPath;
+  final String? overview;
+  final int? runtimeMinutes;
+
   const Episode({
     required this.season,
     required this.number,
     this.title,
     this.airDate,
+    this.stillPath,
+    this.overview,
+    this.runtimeMinutes,
   });
 }
 

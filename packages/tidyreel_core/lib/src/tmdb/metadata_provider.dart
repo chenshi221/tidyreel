@@ -6,7 +6,7 @@ import 'scoring.dart';
 import 'tmdb_client.dart';
 
 export 'scoring.dart' show scoreCandidate, normalizeQuery;
-export 'tmdb_client.dart' show TmdbException;
+export 'tmdb_client.dart' show TmdbException, TmdbResponseCache;
 
 /// Owner: Agent B. PLAN §4.6.
 abstract interface class MetadataProvider {
@@ -40,11 +40,12 @@ class TmdbProvider implements MetadataProvider {
   final TmdbClient _http;
 
   /// [dio] is for tests / custom adapters; defaults to a fresh [Dio].
-  TmdbProvider(this.config, {Dio? dio})
+  TmdbProvider(this.config, {Dio? dio, TmdbResponseCache? cache})
     : _http = TmdbClient(
         apiKey: config.apiKey,
         baseUrl: config.baseUrl,
         dio: dio,
+        store: cache,
       );
 
   static const _en = 'en-US';
@@ -154,6 +155,9 @@ class TmdbProvider implements MetadataProvider {
           number: e['episode_number'] as int,
           title: _str(e['name']),
           airDate: _date(e['air_date']),
+          stillPath: _str(e['still_path']),
+          overview: _str(e['overview']),
+          runtimeMinutes: e['runtime'] as int?,
         ),
     ];
   }
@@ -245,6 +249,9 @@ class TmdbProvider implements MetadataProvider {
       posterPath: _str(r['poster_path']),
       originCountry: country,
       voteAverage: (r['vote_average'] as num?)?.toDouble(),
+      overview: _str(r['overview']),
+      backdropPath: _str(r['backdrop_path']),
+      genres: [for (final g in _list(r['genres'])) ?_str(g['name'])],
     );
   }
 }

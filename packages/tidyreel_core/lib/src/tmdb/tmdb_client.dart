@@ -15,6 +15,12 @@ class TmdbException implements Exception {
       'TmdbException(${statusCode ?? 'network'} $path): $message';
 }
 
+/// Keeps TMDB replies across app runs. Keys never contain the API key.
+abstract interface class TmdbResponseCache {
+  Map<String, dynamic>? read(String key);
+  void write(String key, Map<String, dynamic> value);
+}
+
 /// Cached, rate-limited, retrying JSON GET against the TMDB v3 API.
 class TmdbClient {
   final Dio _dio;
@@ -23,25 +29,33 @@ class TmdbClient {
   static const _minInterval = Duration(milliseconds: 50); // 20 req/s
   static const _maxRetries = 3;
   final _cache = <String, Future<Map<String, dynamic>>>{};
+  final TmdbResponseCache? store;
   DateTime _nextSlot = DateTime.fromMillisecondsSinceEpoch(0);
 
-  TmdbClient({required String apiKey, required String baseUrl, Dio? dio})
-    : _dio = dio ?? Dio(),
-      _apiKey = apiKey.trim(),
-      _bearer = apiKey.trim().startsWith('eyJ') {
+  TmdbClient({
+    required String apiKey,
+    required String baseUrl,
+    Dio? dio,
+    this.store,
+  }) : _dio = dio ?? Dio(),
+       _apiKey = apiKey.trim(),
+       _bearer = apiKey.trim().startsWith('eyJ') {
     _dio.options.baseUrl = baseUrl;
     _dio.options.validateStatus = (_) => true; // handled in _fetch
   }
 
-  /// GET [path] with [query]; identical calls are served from memory.
+  /// GET [path] with [query]; identical calls are served from memory, then [store].
   Future<Map<String, dynamic>> get(String path, [Map<String, String>? query]) {
     final q = Map<String, String>.of(query ?? {});
     final key =
         '$path?${(q.entries.toList()..sort((a, b) => a.key.compareTo(b.key))).map((e) => '${e.key}=${e.value}').join('&')}';
     final hit = _cache[key];
     if (hit != null) return hit;
+    final stored = store?.read(key);
+    if (stored != null) return _cache[key] = Future.value(stored);
     final f = _fetch(path, q);
     _cache[key] = f;
+    f.then((v) => store?.write(key, v), onError: (Object _) {});
     // Never cache failures.
     f.catchError((_) {
       _cache.remove(key);

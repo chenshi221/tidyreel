@@ -14,6 +14,7 @@ Map<String, Object?> connectionToJson(ConnectionConfig c) => {
   'username': c.username,
   'libraryRoot': c.libraryRoot,
   'favorites': c.favorites,
+  'startDir': c.startDir,
 };
 
 ConnectionConfig connectionFromJson(Map<String, Object?> j) => ConnectionConfig(
@@ -24,6 +25,7 @@ ConnectionConfig connectionFromJson(Map<String, Object?> j) => ConnectionConfig(
   username: j['username'] as String?,
   libraryRoot: j['libraryRoot'] as String?,
   favorites: [...?(j['favorites'] as List?)?.cast<String>()],
+  startDir: j['startDir'] as String? ?? '/',
 );
 
 Map<String, Object?> namingOptionsToJson(NamingOptions o) => {
@@ -41,6 +43,7 @@ Map<String, Object?> namingOptionsToJson(NamingOptions o) => {
   'order': [for (final f in o.order) f.name],
   'folderTemplate': o.folderTemplate,
   'seasonFolderTemplate': o.seasonFolderTemplate,
+  'singleSeasonFolder': o.singleSeasonFolder,
   'customTemplate': o.customTemplate,
 };
 
@@ -70,6 +73,8 @@ NamingOptions namingOptionsFromJson(Map<String, Object?> j) {
     folderTemplate: j['folderTemplate'] as String? ?? d.folderTemplate,
     seasonFolderTemplate:
         j['seasonFolderTemplate'] as String? ?? d.seasonFolderTemplate,
+    singleSeasonFolder:
+        j['singleSeasonFolder'] as bool? ?? d.singleSeasonFolder,
     customTemplate: j['customTemplate'] as String?,
   );
 }

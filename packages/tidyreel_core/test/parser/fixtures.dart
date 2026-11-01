@@ -485,6 +485,21 @@ const chinese = <Case>[
   Case('[最新地址 www.abc.com] 繁花 第01集.mkv', t: '繁花', e: [1]),
   Case('【更多资源请访问xxx.com】繁花 第01集.mp4', t: '繁花', e: [1]),
   Case('(2023)繁花 第01集.mp4', t: '繁花', e: [1]),
+  // Multi-episode ranges (Jellyfin / Sonarr handle these too)
+  Case('繁花 EP01-EP02.mkv', t: '繁花', e: [1, 2]),
+  Case('繁花 第01-03集.mp4', t: '繁花', e: [1, 2, 3]),
+  Case('Show.E01-E02.1080p.mkv', t: 'Show', e: [1, 2]),
+  Case('Show.EP05-06.mkv', t: 'Show', e: [5, 6]),
+  // Variety shows named by air date: an episode looked up by date
+  Case('向往的生活.20240503.mp4', t: '向往的生活', k: _ep, e: []),
+  Case('向往的生活 2024-05-03 1080p.mp4', t: '向往的生活', k: _ep),
+  Case('20240503.mp4', dirs: ['奔跑吧'], t: '奔跑吧', k: _ep),
+  // Mini-series "XofY" (Sonarr)
+  Case('Mini.Series.1of6.720p.mkv', t: 'Mini Series', e: [1], s: none),
+  Case('Show - 03 of 12.mkv', t: 'Show', e: [3]),
+  // Bare numbered files in a show folder, possibly under a quality folder
+  Case('01.mkv', dirs: ['4K', '嫁金钗'], t: '嫁金钗', a: 1, s: none),
+  Case('12.mkv', dirs: ['2160p', 'jiajinchai'], t: 'jiajinchai', a: 12),
 ];
 
 /// Anime / fansub names.
@@ -1145,6 +1160,28 @@ const extras = <Case>[
   Case('01.mkv', dirs: ['Featurettes', 'Movie (2019)'], k: _ex),
   Case('01.mkv', dirs: ['花絮', 'Show'], k: _ex),
   Case('01.mkv', dirs: ['SPs', 'Show'], k: _sp),
+  // An extras keyword inside the title is not an extra.
+  Case(
+    "卫宫家今天的饭.Today's Menu for the Emiya Family.2018.S01E01.mkv",
+    t: '卫宫家今天的饭',
+    s: 1,
+    e: [1],
+    k: 'episode',
+  ),
+  Case(
+    "Today's Menu for the Emiya Family - 03 [1080p].mkv",
+    t: "Today's Menu for the Emiya Family",
+    a: 3,
+    k: 'episode',
+  ),
+  Case('Show.S01.Menu.01.mkv', t: 'Show', k: _ex),
+  Case(
+    '[LoliHouse] Futsutsuka na Akujo dewa Gozaimasu ga - 09 [WebRip 1080p HEVC-10bit AAC ASSx2].mkv',
+    t: 'Futsutsuka na Akujo dewa Gozaimasu ga',
+    a: 9,
+    g: 'LoliHouse',
+    k: 'episode',
+  ),
 ];
 
 const parseCases = <Case>[
@@ -1218,5 +1255,5 @@ const classifyCases = <String, String>{
   'noextension': 'other',
   'Show.S01E01.1080p': 'other',
   'Show.part1.rar': 'other',
-  'a.mka': 'other',
+  'a.mka': 'sidecar',
 };

@@ -74,13 +74,25 @@ class FixtureAdapter implements HttpClientAdapter {
   void close({bool force = false}) {}
 }
 
-(TmdbProvider, FixtureAdapter) make({String key = 'v3key', String? baseUrl}) {
+class _MapCache implements TmdbResponseCache {
+  final data = <String, Map<String, dynamic>>{};
+  @override
+  Map<String, dynamic>? read(String key) => data[key];
+  @override
+  void write(String key, Map<String, dynamic> value) => data[key] = value;
+}
+
+(TmdbProvider, FixtureAdapter) make({
+  String key = 'v3key',
+  String? baseUrl,
+  TmdbResponseCache? cache,
+}) {
   final adapter = FixtureAdapter();
   final dio = Dio()..httpClientAdapter = adapter;
   final cfg = baseUrl == null
       ? TmdbConfig(apiKey: key)
       : TmdbConfig(apiKey: key, baseUrl: baseUrl);
-  return (TmdbProvider(cfg, dio: dio), adapter);
+  return (TmdbProvider(cfg, dio: dio, cache: cache), adapter);
 }
 
 void main() {
@@ -298,6 +310,15 @@ void main() {
       final n = a.requests.length;
       await p.show(1668);
       expect(a.requests.length, n);
+    });
+
+    test('a persistent cache serves a new provider without requests', () async {
+      final cache = _MapCache();
+      await make(cache: cache).$1.show(1668);
+      expect(cache.data.keys.join(), isNot(contains('v3key')));
+      final (p, a) = make(cache: cache);
+      await p.show(1668);
+      expect(a.requests, isEmpty);
     });
 
     test('429 is retried honoring Retry-After', () async {

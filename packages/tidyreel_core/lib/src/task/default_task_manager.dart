@@ -12,7 +12,9 @@ import '../model/scan.dart';
 import '../model/task.dart';
 import '../plan/planner.dart';
 import '../plan/recognizer.dart';
+import '../storage/cached_backend.dart';
 import '../storage/storage_backend.dart';
+import '../storage/walk.dart';
 import 'task_manager.dart';
 
 /// Per-task mutable state. Only [DefaultTaskManager] touches it.
@@ -212,6 +214,10 @@ class DefaultTaskManager implements TaskManager {
     var plan = t.plan ??= await _plan(t);
     if (onlyConfident) plan = _confidentOnly(t, plan);
     if (!plan.canExecute) throw StateError('存在冲突，无法执行');
+    // Never report "整理完成" for a run that would touch nothing.
+    if (!plan.ops.any((o) => o.selected)) {
+      throw StateError('没有可执行的操作：请先勾选要整理的作品');
+    }
     await _set(
       t,
       _with(
@@ -232,6 +238,51 @@ class DefaultTaskManager implements TaskManager {
       ),
       null,
     );
+  }
+
+  @override
+  Future<void> retryFailed(TaskId id) async {
+    final t = await _get(id);
+    final batch = t.summary.batch;
+    if (batch == null || t.summary.stage != TaskStage.partiallyFailed) {
+      throw StateError('任务没有失败的操作');
+    }
+    for (final r in await history.records(batch)) {
+      if (r.status == OpStatus.failed || r.status == OpStatus.skipped) {
+        await history.mark(batch, r.op.id, OpStatus.pending);
+      }
+    }
+    t.cancelled = false;
+    await _set(
+      t,
+      _with(
+        t.summary,
+        stage: TaskStage.renamingFiles,
+        message: '正在重试失败的操作',
+        progress: () => 0,
+      ),
+      force: true,
+    );
+    await _drive(
+      t,
+      executor.resume(batch, backendFor(t.summary.connection)),
+      batch,
+    );
+  }
+
+  @override
+  Future<void> delete(TaskId id) async {
+    final t = await _get(id);
+    if (t.summary.stage.isActive &&
+        t.summary.stage != TaskStage.awaitingReview) {
+      throw StateError('任务正在进行，先取消再删除');
+    }
+    _tasks.remove(id);
+    _changes.add(_snapshot());
+    // Let a pending summary write land first so it can't resurrect the row.
+    await t.persistQueue;
+    await store.delete(id);
+    await history.deleteTask(id);
   }
 
   @override
@@ -380,26 +431,34 @@ class DefaultTaskManager implements TaskManager {
       }
     }
 
-    Future<void> walk(String dir) async {
-      if (t.cancelled) return;
-      for (final e in await be.list(dir, refresh: true)) {
-        if (t.cancelled) return;
-        e.isDir ? await walk(e.path) : add(e);
-      }
-    }
-
+    // The backend has no stat: find each root in its parent's listing (one
+    // listing per parent, shared when several roots sit side by side).
+    final dirs = <String>[];
+    final parents = <String, Future<List<RemoteEntry>>>{};
     for (final root in t.summary.paths) {
       if (t.cancelled) break;
       if (root == '/') {
-        await walk(root);
+        dirs.add(root);
         continue;
       }
-      // The backend has no stat: find the entry in its parent's listing.
-      final siblings = await be.list(p.posix.dirname(root), refresh: true);
+      final parent = p.posix.dirname(root);
+      final siblings = await parents.putIfAbsent(
+        parent,
+        () => listFresh(be, parent),
+      );
       final entry = siblings.where((e) => e.path == root).firstOrNull;
       if (entry == null) continue;
-      entry.isDir ? await walk(root) : add(entry);
+      entry.isDir ? dirs.add(root) : add(entry);
     }
+    await walkDirs(dirs, (dir) async {
+      final subs = <String>[];
+      for (final e in await listFresh(be, dir)) {
+        e.isDir ? subs.add(e.path) : add(e);
+      }
+      return subs;
+    }, stop: () => t.cancelled);
+    // Parallel listings finish in any order; keep the result stable.
+    out.sort((a, b) => a.path.compareTo(b.path));
     _emit(
       t,
       _with(
@@ -422,14 +481,23 @@ class DefaultTaskManager implements TaskManager {
         if (o.kind == OpKind.relocate && !srcs.contains(o.dst)) o.dst,
     ];
     final be = backendFor(s.connection);
-    final existing = <String>{};
-    for (var i = 0; i < dsts.length; i += 4) {
-      final chunk = dsts.skip(i).take(4).toList();
-      final hits = await Future.wait(chunk.map(be.exists));
-      for (var j = 0; j < chunk.length; j++) {
-        if (hits[j]) existing.add(chunk[j]);
-      }
+    // One listing per target folder instead of one request per target.
+    final byDir = <String, List<String>>{};
+    for (final d in dsts) {
+      (byDir[p.posix.dirname(d)] ??= []).add(d);
     }
+    final existing = <String>{};
+    await walkDirs(byDir.keys, (dir) async {
+      final Set<String> names;
+      try {
+        names = {for (final e in await listFresh(be, dir)) e.path};
+      } on StorageException catch (e) {
+        if (e.code == StorageErrorCode.notFound) return const [];
+        rethrow;
+      }
+      existing.addAll(byDir[dir]!.where(names.contains));
+      return const [];
+    });
     if (existing.isNotEmpty) {
       plan = await planner.build(
         t.scan!,

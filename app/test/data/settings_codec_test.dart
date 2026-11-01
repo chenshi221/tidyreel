@@ -29,10 +29,15 @@ void main() {
       type: ConnectionType.alist,
       endpoint: 'http://nas:5244',
       favorites: ['/下载'],
+      startDir: '/PC',
     );
     final c2 = connectionFromJson(connectionToJson(c));
     expect((c2.name, c2.type), ('家里 NAS', ConnectionType.alist));
     expect(c2.favorites, ['/下载']);
+    expect(c2.startDir, '/PC');
+    // Configs saved before startDir existed open at the root.
+    final old = connectionToJson(c)..remove('startDir');
+    expect(connectionFromJson(old).startDir, '/');
   });
 
   test('unknown enum names fall back to defaults', () {

@@ -56,6 +56,32 @@ void main() {
     );
   });
 
+  // Non-/dav mounts: server root, a nested path, Chinese + space, full-URL hrefs.
+  // `redirect`: Apache-style 301 for collections without a trailing slash.
+  for (final (label, mount, endpointPath, absolute, redirect) in [
+    ('root', '', '', false, false),
+    ('root, trailing slash', '', '/', false, false),
+    ('nested', '/remote.php/webdav', '/remote.php/webdav', false, false),
+    ('unicode', '/网盘 1', '/网盘 1/', true, false),
+    ('apache-style redirects', '/webdav', '/webdav', false, true),
+  ]) {
+    storageContract('WebDAV mount $label', (files) async {
+      final server = await MockServer.start(
+        MockWebDav(
+          files,
+          mount: mount,
+          absoluteHrefs: absolute,
+          redirectCollections: redirect,
+        ).handle,
+      );
+      addTearDown(server.close);
+      return createBackend(
+        cfg(ConnectionType.webdav, '${server.url}$endpointPath'),
+        const Credentials(password: 'pw'),
+      );
+    });
+  }
+
   group('Local', () {
     test('refuses paths that escape the root', () async {
       final be = await makeLocal({'/a.txt': 1});
@@ -183,6 +209,35 @@ void main() {
       );
       await expectLater(be.ping(), throwsStorage(StorageErrorCode.network));
     });
+
+    test('renameMany is one batch_rename call', () async {
+      final (mock, be) = await connect(files: {'/d/1': 1, '/d/2': 1});
+      await be.renameMany('/d', {'1': 'a', '2': 'b'});
+      expect(mock.tree.nodes.keys, containsAll(['/d/a', '/d/b']));
+      expect(mock.calls.where((c) => c.contains('rename')), [
+        'api/fs/batch_rename',
+      ]);
+    });
+
+    test('renameMany falls back to fs/rename on older servers', () async {
+      final (mock, be) = await connect(files: {'/d/1': 1, '/d/2': 1});
+      mock.batchRename = false;
+      await be.renameMany('/d', {'1': 'a', '2': 'b'});
+      expect(mock.tree.nodes.keys, containsAll(['/d/a', '/d/b']));
+      expect(mock.calls.where((c) => c == 'api/fs/rename'), hasLength(2));
+    });
+
+    test(
+      'Windows "Access is denied" is busy (retried, then explained)',
+      () async {
+        final (mock, be) = await connect(files: {'/d/1': 1});
+        mock.failNext = (500, r'rename D:\bit\d: Access is denied.');
+        await expectLater(
+          be.rename('/d', 'e'),
+          throwsStorage(StorageErrorCode.busy),
+        );
+      },
+    );
 
     test('rename refuses to overwrite even though the server would', () async {
       final (mock, be) = await connect(files: {'/a': 1, '/b': 2});

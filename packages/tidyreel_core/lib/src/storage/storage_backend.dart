@@ -16,6 +16,10 @@ abstract interface class StorageBackend {
   /// Rename within the same directory.
   Future<void> rename(String path, String newName);
 
+  /// Renames several children of [dir] at once (old name -> new name). Never
+  /// overwrites; a failure part-way may leave some renamed.
+  Future<void> renameMany(String dir, Map<String, String> names);
+
   /// Move [names] (children of [srcDir]) into [dstDir], keeping their names.
   Future<void> move(String srcDir, String dstDir, List<String> names);
 
@@ -44,6 +48,10 @@ enum StorageErrorCode {
   unauthorized,
   rateLimited,
   network,
+
+  /// The server's OS refused because something holds the file or folder open
+  /// (Windows "Access is denied", e.g. a torrent client still seeding).
+  busy,
   other,
 }
 

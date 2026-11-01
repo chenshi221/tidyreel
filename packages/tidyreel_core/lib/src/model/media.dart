@@ -48,6 +48,10 @@ class ParsedName {
   /// 0..1. Below the planner's threshold the UI asks the user.
   final double confidence;
 
+  /// Air date in the name ("向往的生活.20240503"): variety shows are matched to
+  /// a TMDB episode by date.
+  final DateTime? airDate;
+
   const ParsedName({
     this.title,
     this.year,
@@ -60,5 +64,6 @@ class ParsedName {
     this.lang,
     this.extraInfo,
     this.confidence = 0,
+    this.airDate,
   });
 }

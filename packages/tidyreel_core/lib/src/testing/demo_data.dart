@@ -16,6 +16,10 @@ abstract final class Demo {
     year: 2020,
     originCountry: 'JP',
     voteAverage: 8.1,
+    overview:
+        '在魔法使用者肆意横行的混沌之地「洞穴」，被魔法变成蜥蜴头的男人开曼失去了记忆。'
+        '他和好友二阶堂一起，猎杀魔法使，寻找把自己变成这样的人。',
+    genres: ['动画', '动作冒险', 'Sci-Fi & Fantasy'],
   );
   static const dorohedoroShow = ShowDetail(
     info: dorohedoro,
@@ -33,6 +37,10 @@ abstract final class Demo {
     year: 2010,
     originCountry: 'US',
     voteAverage: 8.4,
+    overview:
+        '道姆·柯布是一名经验老到的窃贼，擅长在人们精神最脆弱的梦境中潜入潜意识，'
+        '窃取有价值的秘密。这一次，他要完成的不是盗取，而是植入一个想法。',
+    genres: ['动作', '科幻', '冒险'],
   );
   static const friends = Candidate(
     tmdbId: 1668,
@@ -56,6 +64,10 @@ abstract final class Demo {
   );
 
   static const candidates = [dorohedoro, inception, friends, onePiece];
+
+  /// Placeholder episode titles for the fake provider (real TMDB has names).
+  static String episodeTitle(int tmdbId, int season, int episode) =>
+      tmdbId == dorohedoro.tmdbId ? '第 $episode 话' : '第 $episode 集';
 
   /// A review with one TV show, one movie, one unmatched group and one junk file.
   static TaskReview review(TaskId id, ConnectionId connection, String root) {

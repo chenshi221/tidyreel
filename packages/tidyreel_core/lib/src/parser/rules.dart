@@ -21,6 +21,8 @@ const _videoExt = {
 const _subExt = {'srt', 'ass', 'ssa', 'sub', 'idx', 'sup', 'vtt', 'smi', 'lrc'};
 const _sidecarExt = {
   'nfo', 'jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'tbn', 'xml', 'svg', //
+  // External audio tracks follow their video like subtitles do.
+  'mka', 'ac3', 'eac3', 'dts', 'dtshd', 'truehd',
 };
 const _junkExt = {
   'txt',
@@ -121,6 +123,7 @@ class Info {
   bool explicitEp = false;
   bool sxe = false;
   bool batch = false; // "全39集": a whole-season pack, not one episode
+  DateTime? airDate; // "20240503" / "2024-05-03"
   bool specialKw = false, extraKw = false, movieKw = false, hasTech = false;
   String? res, group, lang, extra;
 }
@@ -188,10 +191,17 @@ final _seRe = RegExp(
   caseSensitive: false,
 );
 final _xRe = RegExp(r'(?<![A-Za-z0-9])(\d{1,2})x(\d{2,3})(?![A-Za-z0-9])');
-final _cnEpRe = RegExp('第 ?($_cnNum) ?[集话話期回]');
+// "第01集", "第01-02集"
+final _cnEpRe = RegExp('第 ?($_cnNum)(?: ?[-~] ?($_cnNum))? ?[集话話期回]');
 final _batchRe = RegExp(r'[全共] ?\d+ ?[集话期]|更新?至 ?\d+ ?[集话期]');
+// "EP01", "E01", "Episode 1", ranges "EP01-EP02" / "E01-02"
 final _epRe = RegExp(
-  r'(?<![A-Za-z0-9])(?:(?:EP|Episode) ?|E)(\d{1,4})(?![A-Za-z0-9])',
+  r'(?<![A-Za-z0-9])(?:(?:EP|Episode) ?|E)(\d{1,4})(?: ?[-~] ?(?:(?:EP|Episode) ?|E)?(\d{1,4}))?(?![A-Za-z0-9])',
+  caseSensitive: false,
+);
+// Mini-series "1of6" / "1 of 6" (Sonarr): episode 1.
+final _ofRe = RegExp(
+  r'(?<![A-Za-z0-9])(\d{1,2}) ?of ?(\d{1,2})(?![A-Za-z0-9])',
   caseSensitive: false,
 );
 final _hashRe = RegExp(r'#(\d{1,4})(?![0-9])');
@@ -199,7 +209,7 @@ final _dashRe = RegExp(r'(?:^| )- ?(\d{1,4})(?:v\d{1,2})?(?![A-Za-z0-9])');
 final _seasonRes = <RegExp>[
   RegExp(r'(?<![A-Za-z0-9])S(\d{1,2})(?![A-Za-z0-9])', caseSensitive: false),
   RegExp(
-    r'(?<![A-Za-z])(?:Season|Saison|Series) ?(\d{1,2})(?![0-9])',
+    r'(?<![A-Za-z])(?:Season|Saison|Series) ?(\d{1,2})(?![0-9]| ?of)',
     caseSensitive: false,
   ),
   RegExp(r'(\d{1,2})(?:st|nd|rd|th) Season', caseSensitive: false),
@@ -288,6 +298,13 @@ String _normalize(String s) {
 
 int _seasonNum(RegExpMatch m) => chineseToInt(m[1]!) ?? 0;
 
+/// [first]..[last] for "EP01-EP03"; just [first] when [last] is absent or
+/// not a plausible range end.
+List<int> _range(int first, int? last) =>
+    last == null || last <= first || last - first > 200
+    ? [first]
+    : [for (var i = first; i <= last; i++) i];
+
 Info analyze(String raw, {required bool file}) {
   final a = Info();
   var s = fold(raw);
@@ -300,6 +317,15 @@ Info analyze(String raw, {required bool file}) {
     }
   }
   s = s.replaceAll(_wwwRe, ' ').replaceFirst(_leadDomainRe, '');
+  final dm = _dateRe.firstMatch(s);
+  if (dm != null) {
+    final d = dm[0]!.replaceAll(RegExp(r'[-._ ]'), '');
+    a.airDate = DateTime.utc(
+      int.parse(d.substring(0, 4)),
+      int.parse(d.substring(4, 6)),
+      int.parse(d.substring(6, 8)),
+    );
+  }
   s = s.replaceAll(_dateRe, ' \u0001 ');
 
   // Leading brackets: first non-noise one is the group; noise is kept for
@@ -403,15 +429,26 @@ Info analyze(String raw, {required bool file}) {
   if (a.episodes.isEmpty && (m = _cnEpRe.firstMatch(s)) != null) {
     final n = chineseToInt(m![1]!);
     if (n != null) {
-      a.episodes = [n];
+      a.episodes = _range(n, m[2] == null ? null : chineseToInt(m[2]!));
       a.explicitEp = true;
       mark(m.start);
     }
   }
   if (a.episodes.isEmpty && (m = _epRe.firstMatch(s)) != null) {
-    a.episodes = [int.parse(m![1]!)];
+    a.episodes = _range(
+      int.parse(m![1]!),
+      m[2] == null ? null : int.parse(m[2]!),
+    );
     a.explicitEp = true;
     mark(m.start);
+  }
+  if (a.episodes.isEmpty && (m = _ofRe.firstMatch(s)) != null) {
+    final n = int.parse(m![1]!);
+    if (n >= 1 && n <= int.parse(m[2]!)) {
+      a.episodes = [n];
+      a.explicitEp = true;
+      mark(m.start);
+    }
   }
   if (a.episodes.isEmpty && (m = _hashRe.firstMatch(s)) != null) {
     a.episodes = [int.parse(m![1]!)];
@@ -433,7 +470,13 @@ Info analyze(String raw, {required bool file}) {
 
   // ---- special / extra / movie keywords
   final em = _extraRe.firstMatch(s) ?? _extraCi.firstMatch(s);
-  if (em != null) {
+  // A keyword before an explicit episode, or one running on into more words
+  // ("Today's Menu for the Emiya Family S01E01"), is part of the title.
+  final inTitle =
+      em != null &&
+      ((a.explicitEp && em.start < cut) ||
+          RegExp(r'^ [a-z]').hasMatch(s.substring(em.end)));
+  if (em != null && !inTitle) {
     a.extraKw = true;
     mark(em.start);
   }

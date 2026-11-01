@@ -78,6 +78,22 @@ void storageContract(
       expect(await sizes(be, '/'), containsPair('b.txt', 7));
     });
 
+    test('renameMany renames several and never overwrites', () async {
+      await be.renameMany('/剧集/示例 [1080p]', {
+        '第01集.mkv': 'S01E01.mkv',
+        'S01E02 (final).mkv': 'S01E02.mkv',
+      });
+      expect(await sizes(be, '/剧集/示例 [1080p]'), {
+        'S01E01.mkv': 10,
+        'S01E02.mkv': 20,
+      });
+      await expectLater(
+        be.renameMany('/', {'a.txt': 'b.txt'}),
+        throwsStorage(StorageErrorCode.alreadyExists),
+      );
+      expect(await sizes(be, '/'), containsPair('b.txt', 7));
+    });
+
     test('rename a missing path is notFound', () {
       expect(
         be.rename('/nope.txt', 'x.txt'),

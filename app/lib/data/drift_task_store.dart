@@ -47,6 +47,10 @@ class DriftTaskStore implements TaskStore {
   );
 
   @override
+  Future<void> delete(TaskId id) =>
+      (db.delete(db.tasks)..where((t) => t.id.equals(id.value))).go();
+
+  @override
   Future<List<StoredTask>> loadAll() async => [
     for (final r in await db.select(db.tasks).get())
       StoredTask(

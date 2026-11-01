@@ -41,15 +41,16 @@ class WebDAVBackend implements StorageBackend {
   List<String> _segs(String path) =>
       path.split('/').where((s) => s.isNotEmpty).toList();
 
-  /// Percent-encoded absolute URL (Uri encodes each segment: Chinese, spaces, brackets).
-  Uri _uri(String path) {
+  /// Percent-encoded absolute URL (Uri encodes each segment: Chinese, spaces,
+  /// brackets). [dir] adds the trailing slash collections should be addressed
+  /// with: Apache / nginx / Synology answer 301 without it.
+  Uri _uri(String path, {bool dir = false}) {
     final segs = [
       ..._base.pathSegments.where((s) => s.isNotEmpty),
       ..._segs(path),
     ];
-    return segs.isEmpty
-        ? _base.replace(path: '/')
-        : _base.replace(pathSegments: segs);
+    if (segs.isEmpty) return _base.replace(path: '/');
+    return _base.replace(pathSegments: [...segs, if (dir) '']);
   }
 
   StorageException _fail(Response<dynamic> r, String path) {
@@ -59,6 +60,7 @@ class WebDAVBackend implements StorageBackend {
       404 || 409 => StorageErrorCode.notFound, // 409: parent collection missing
       412 =>
         StorageErrorCode.alreadyExists, // Overwrite: F hit an existing target
+      423 => StorageErrorCode.busy, // Locked
       429 => StorageErrorCode.rateLimited,
       502 || 503 || 504 => StorageErrorCode.network,
       _ => StorageErrorCode.other,
@@ -66,18 +68,36 @@ class WebDAVBackend implements StorageBackend {
     return StorageException(code, '${r.requestOptions.method} $path: HTTP $s');
   }
 
+  /// dart:io only follows redirects for GET/HEAD, so a 301/302/307/308 on
+  /// PROPFIND etc. is followed here, once, to the same server.
   Future<Response<dynamic>> _send(
     String method,
     String path, {
     Map<String, String>? headers,
     String? body,
+    bool dir = false,
   }) async {
+    var uri = _uri(path, dir: dir);
     try {
-      return await _dio.requestUri<dynamic>(
-        _uri(path),
-        data: body,
-        options: Options(method: method, headers: headers),
-      );
+      for (var hop = 0; ; hop++) {
+        final r = await _dio.requestUri<dynamic>(
+          uri,
+          data: body,
+          options: Options(
+            method: method,
+            headers: headers,
+            followRedirects: false,
+          ),
+        );
+        final location = r.headers.value('location');
+        const redirects = {301, 302, 307, 308};
+        if (hop > 0 || !redirects.contains(r.statusCode) || location == null) {
+          return r;
+        }
+        final next = uri.resolve(location);
+        if (next.host != uri.host || next.port != uri.port) return r;
+        uri = next;
+      }
     } on DioException catch (e) {
       throw StorageException(
         StorageErrorCode.network,
@@ -86,11 +106,16 @@ class WebDAVBackend implements StorageBackend {
     }
   }
 
-  Future<Response<dynamic>> _propfind(String path, int depth) => _send(
+  Future<Response<dynamic>> _propfind(
+    String path,
+    int depth, {
+    bool dir = false,
+  }) => _send(
     'PROPFIND',
     path,
     headers: {'Depth': '$depth', 'Content-Type': 'application/xml'},
     body: _propfindBody,
+    dir: dir,
   );
 
   // Namespace prefixes vary by server (D:, d:, none), so match them loosely.
@@ -121,7 +146,7 @@ class WebDAVBackend implements StorageBackend {
 
   @override
   Future<List<RemoteEntry>> list(String dir, {bool refresh = false}) async {
-    final r = await _propfind(dir, 1);
+    final r = await _propfind(dir, 1, dir: true);
     if (r.statusCode != 207) throw _fail(r, dir);
     final self = _relative(_uri(dir).path);
     final out = <RemoteEntry>[];
@@ -190,6 +215,14 @@ class WebDAVBackend implements StorageBackend {
   Future<void> rename(String path, String newName) =>
       _move(path, p.posix.join(p.posix.dirname(path), newName));
 
+  /// WebDAV has no batch rename; each MOVE is one request anyway.
+  @override
+  Future<void> renameMany(String dir, Map<String, String> names) async {
+    for (final e in names.entries) {
+      await rename(p.posix.join(dir, e.key), e.value);
+    }
+  }
+
   @override
   Future<void> move(String srcDir, String dstDir, List<String> names) async {
     for (final n in names) {
@@ -209,7 +242,7 @@ class WebDAVBackend implements StorageBackend {
 
   @override
   Future<void> ping() async {
-    final r = await _propfind('/', 0);
+    final r = await _propfind('/', 0, dir: true);
     if (r.statusCode != 207) throw _fail(r, '/');
   }
 }

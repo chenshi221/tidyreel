@@ -29,6 +29,9 @@ abstract interface class TaskStore {
 
   /// All stored tasks, any order.
   Future<List<StoredTask>> loadAll();
+
+  /// Forgets [id] (summary and review). No-op if it isn't stored.
+  Future<void> delete(TaskId id);
 }
 
 class MemoryTaskStore implements TaskStore {
@@ -45,6 +48,12 @@ class MemoryTaskStore implements TaskStore {
     ScanResult scan,
     Map<GroupId, GroupDecision> decisions,
   ) async => _reviews[id] = (scan, Map.of(decisions));
+
+  @override
+  Future<void> delete(TaskId id) async {
+    _summaries.remove(id);
+    _reviews.remove(id);
+  }
 
   @override
   Future<List<StoredTask>> loadAll() async => [

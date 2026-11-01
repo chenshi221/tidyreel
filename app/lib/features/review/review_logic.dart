@@ -15,8 +15,9 @@ int seasonOf(MediaGroup g, ScanFile f, FileOverride? o) =>
     ? (o?.season ?? f.parsed?.season ?? 1)
     : noSeason;
 
+/// Like the planner: a bare number ("01.mkv") counts as the episode.
 int? episodeOf(ScanFile f, FileOverride? o) =>
-    o?.episode ?? f.parsed?.episodes.firstOrNull;
+    o?.episode ?? f.parsed?.episodes.firstOrNull ?? f.parsed?.absolute;
 
 class Completeness {
   final int localSeasons;
@@ -117,4 +118,146 @@ String seasonCountLabel(MediaGroup g, List<ReviewRow> rows, int season) {
   }.length;
   final tmdb = g.show?.seasons.where((s) => s.number == season).firstOrNull;
   return tmdb == null ? '$local' : '$local/${tmdb.episodeCount}';
+}
+
+const _parser = RuleBasedParser();
+
+/// Season/episode the file ends up as: parsed back from the planned new name
+/// (so strategies and offsets are reflected), falling back to the source.
+EpisodeRef? targetRef(ReviewRow r) {
+  final name = r.newName;
+  if (name != null) {
+    final p = _parser.parse(name);
+    final e = p.episodes.firstOrNull;
+    if (p.season != null && e != null) return EpisodeRef(p.season!, e);
+  }
+  final e = episodeOf(r.file, r.override);
+  if (r.season == noSeason || e == null) return null;
+  return EpisodeRef(r.season, e);
+}
+
+/// TMDB episode numbers of [season] with no local video, when local numbering
+/// maps 1:1 onto TMDB (default strategy, no offset); empty otherwise.
+List<int> missingEpisodes(
+  MediaGroup g,
+  GroupDecision? d,
+  List<ReviewRow> rows,
+  int season,
+) {
+  if (d != null &&
+      (d.strategy != SeasonStrategy.asParsed ||
+          d.episodeOffset != 0 ||
+          d.episodeGroupId != null)) {
+    return const [];
+  }
+  final total = g.show?.seasons
+      .where((s) => s.number == season)
+      .firstOrNull
+      ?.episodeCount;
+  if (total == null || season == noSeason) return const [];
+  final have = {
+    for (final r in rows)
+      if (r.season == season && r.file.role == FileRole.video && !r.ignored)
+        ?episodeOf(r.file, r.override),
+  };
+  return [
+    for (var e = 1; e <= total; e++)
+      if (!have.contains(e)) e,
+  ];
+}
+
+/// Episodes per regular season from TMDB, when [g.show] is the show the group
+/// is matched to and no episode group reshapes the seasons; empty otherwise.
+Map<int, int> seasonSizes(MediaGroup g, GroupDecision? d) {
+  final show = g.show;
+  if (show == null ||
+      d?.episodeGroupId != null ||
+      show.info.tmdbId != effectiveMatch(g, d)?.tmdbId) {
+    return const {};
+  }
+  return {
+    for (final s in show.seasons)
+      if (s.number > 0) s.number: s.episodeCount,
+  };
+}
+
+/// The file's own number ("12.mkv" -> 12), ignoring any correction.
+int? _localEpisode(ScanFile f) =>
+    f.parsed?.episodes.firstOrNull ?? f.parsed?.absolute;
+
+bool _isMainVideo(ReviewRow r) =>
+    r.file.role == FileRole.video &&
+    !r.ignored &&
+    r.override?.kind != MediaKind.special &&
+    r.override?.kind != MediaKind.extra;
+
+/// Puts [from] at [to] and numbers every later file of the same local season
+/// after it (by the files' own numbers), moving into the next season when
+/// TMDB says one is full. Returns the overrides to set, [from]'s included.
+Map<String, FileOverride> shiftFrom(
+  MediaGroup g,
+  GroupDecision? d,
+  List<ReviewRow> rows,
+  ReviewRow from,
+  EpisodeRef to, {
+  MediaKind? kind,
+}) {
+  final out = {
+    from.file.path: FileOverride(
+      season: to.season,
+      episode: to.episode,
+      kind: kind,
+    ),
+  };
+  final start = _localEpisode(from.file);
+  if (start == null || to.season < 1) return out;
+  final localSeason = from.file.parsed?.season ?? 1;
+  final later = [
+    for (final r in rows)
+      if (_isMainVideo(r) &&
+          r.file.path != from.file.path &&
+          (r.file.parsed?.season ?? 1) == localSeason &&
+          (_localEpisode(r.file) ?? 0) > start)
+        r,
+  ]..sort((a, b) => _localEpisode(a.file)!.compareTo(_localEpisode(b.file)!));
+  final sizes = seasonSizes(g, d);
+  var s = to.season, e = to.episode;
+  for (final r in later) {
+    e++;
+    final size = sizes[s];
+    if (size != null && e > size && sizes.containsKey(s + 1)) {
+      s++;
+      e = 1;
+    }
+    out[r.file.path] = FileOverride(
+      season: s,
+      episode: e,
+      kind: r.override?.kind,
+    );
+  }
+  return out;
+}
+
+/// The first file planned past the end of its TMDB season while a next
+/// season exists, e.g. "12.mkv" -> S01E12 when season 1 has 11 episodes.
+({ReviewRow row, EpisodeRef target, int size})? seasonOverflow(
+  MediaGroup g,
+  GroupDecision? d,
+  List<ReviewRow> rows,
+) {
+  final sizes = seasonSizes(g, d);
+  ({ReviewRow row, EpisodeRef target, int size})? best;
+  for (final r in rows) {
+    if (!_isMainVideo(r) || r.op == null) continue;
+    final t = targetRef(r);
+    final size = t == null ? null : sizes[t.season];
+    if (t == null || size == null || t.episode <= size) continue;
+    if (!sizes.containsKey(t.season + 1)) continue;
+    if (best == null ||
+        t.season < best.target.season ||
+        (t.season == best.target.season && t.episode < best.target.episode)) {
+      best = (row: r, target: t, size: size);
+    }
+  }
+  return best;
 }

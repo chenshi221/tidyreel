@@ -22,8 +22,18 @@ jobs:
           flutter-version: 3.47.4
           cache: true
 
+      - name: Tag matches pubspec
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          want="${GITHUB_REF_NAME#v}"
+          have=$(sed -n 's/^version: \([0-9.]*\).*/\1/p' app/pubspec.yaml)
+          if [ "$want" != "$have" ]; then
+            echo "::error::标签 $GITHUB_REF_NAME 和 app/pubspec.yaml 的版本 $have 不一致，请用 tool/release.sh 发版"
+            exit 1
+          fi
+
       - name: Checks
-        run: tool/check.sh
+        run: (cd packages/tidyreel_core && dart pub get) && tool/check.sh
 
       - name: Default TMDB key
         env:
@@ -52,10 +62,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Release notes: this version's CHANGELOG section plus the unsigned-app hint.
+          awk -v v="${GITHUB_REF_NAME#v}" '
+            /^## \[/ { on = index($0, "## [" v "]") == 1; next }
+            on' CHANGELOG.md > notes.md
+          printf '\n---\n未签名的测试版：首次打开请右键 tidyreel.app →「打开」，或在终端执行 `xattr -dr com.apple.quarantine tidyreel.app`\n' >> notes.md
           gh release create "$GITHUB_REF_NAME" "$ZIP" \
             --title "理片 Tidyreel $GITHUB_REF_NAME" \
-            --generate-notes \
-            --notes "未签名的测试版：首次打开请右键 tidyreel.app →「打开」，或在终端执行 xattr -dr com.apple.quarantine tidyreel.app"
+            --notes-file notes.md
 
       - name: Upload build (manual runs)
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}

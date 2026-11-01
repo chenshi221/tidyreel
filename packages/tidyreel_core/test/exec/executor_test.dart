@@ -28,6 +28,12 @@ class HookBackend implements StorageBackend {
   Future<void> rename(String path, String newName) =>
       _c('rename', [path, newName], () => inner.rename(path, newName));
   @override
+  Future<void> renameMany(String dir, Map<String, String> names) => _c(
+    'renameMany',
+    [dir, for (final e in names.entries) '${e.key}>${e.value}'],
+    () => inner.renameMany(dir, names),
+  );
+  @override
   Future<void> move(String srcDir, String dstDir, List<String> names) => _c(
     'move',
     [srcDir, dstDir, ...names],
@@ -198,10 +204,9 @@ void main() {
           phase: ExecPhase.folders,
         ),
       ];
-      var moves = 0;
       final be = HookBackend(fs, (m, a) {
-        // fail the 2nd move, and the folder rename
-        if (m == 'move' && ++moves == 2) {
+        // fail b's move (batched with a's, then on its own), and the folder rename
+        if (m == 'move' && a.contains('Show.S01E02.mkv')) {
           throw const StorageException(StorageErrorCode.other, 'boom');
         }
         if (m == 'rename' && a.first == '/d/Show.S01') {
@@ -294,6 +299,30 @@ void main() {
     expect(events, hasLength(6));
     expect(events.every((e) => e.error == null), isTrue);
     expect((await history.batches()).first.undone, isTrue);
+  });
+
+  test('undo moves a folder of files back in a few batch requests', () async {
+    final mem = MemoryStorageBackend({
+      for (var i = 1; i <= 12; i++) '/s/raw/ep$i.mkv': i,
+    });
+    final before = mem.files;
+    final ops = [
+      mkdir('/s/raw/Season 01'),
+      for (var i = 1; i <= 12; i++)
+        reloc('/s/raw/ep$i.mkv', '/s/raw/Season 01/Show.S01E$i.mkv'),
+      reloc('/s/raw', '/s/Show (2026)', phase: ExecPhase.folders),
+    ];
+    final ex = executor(history);
+    await run(ex.execute(task, conn, RenamePlan(ops: ops), mem));
+    final b = await theBatch(history);
+    final hook = HookBackend(mem);
+    await run(ex.undo(b, hook));
+    expect(mem.files, before);
+    expect(statusCounts(await history.records(b)), {OpStatus.undone: 14});
+    // Not ~4 requests per file: one move for all twelve, no per-file
+    // exists() (renames are one fs/batch_rename on Alist).
+    expect(hook.calls.where((c) => c.startsWith('move')), hasLength(1));
+    expect(hook.calls.where((c) => c.startsWith('exists')).length, lessThan(4));
   });
 
   test('undo skips deletes and leaves non-empty mkdir folders', () async {
@@ -432,10 +461,11 @@ void main() {
       expect(delays, isEmpty);
     });
 
-    test('at most 2 ops in flight', () async {
+    test('at most 4 ops in flight', () async {
       var inFlight = 0, peak = 0;
+      // One file per folder, so nothing is batched.
       final be = HookBackend(
-        MemoryStorageBackend({for (var i = 0; i < 6; i++) '/d/f$i': 1}),
+        MemoryStorageBackend({for (var i = 0; i < 6; i++) '/d$i/f': 1}),
         (m, a) async {
           if (m != 'rename') return;
           peak = peak < ++inFlight ? inFlight : peak;
@@ -443,21 +473,42 @@ void main() {
           inFlight--;
         },
       );
-      final ops = [for (var i = 0; i < 6; i++) reloc('/d/f$i', '/d/g$i')];
+      final ops = [for (var i = 0; i < 6; i++) reloc('/d$i/f', '/d$i/g')];
       await run(
         executor(history).execute(task, conn, RenamePlan(ops: ops), be),
       );
-      expect(peak, 2);
+      expect(peak, 4);
     });
+  });
+
+  test('files of one folder go in one batch rename and one move', () async {
+    final f = MemoryStorageBackend({
+      for (var i = 1; i <= 3; i++) '/s/4K/0$i.mkv': 1,
+    });
+    final be = HookBackend(f);
+    final ops = [
+      for (var i = 1; i <= 3; i++)
+        reloc('/s/4K/0$i.mkv', '/s/Season 01/S.S01E0$i.mkv'),
+    ];
+    await run(executor(history).execute(task, conn, RenamePlan(ops: ops), be));
+    // Paced per file on non-Alist backends; Alist gets one batch_rename.
+    expect(be.calls.where((c) => c.startsWith('rename ')), hasLength(3));
+    expect(be.calls.where((c) => c.startsWith('move')), hasLength(1));
+    expect(be.calls.where((c) => c.startsWith('exists')), isEmpty);
+    expect(f.files, [
+      for (var i = 1; i <= 3; i++) '/s/Season 01/S.S01E0$i.mkv',
+    ]);
+    final recs = await history.records(await theBatch(history));
+    expect(statusCounts(recs)[OpStatus.done], 3);
   });
 
   test(
     'cancelling the stream stops before the next op but records in-flight ones',
     () async {
       final f = MemoryStorageBackend({
-        for (var i = 0; i < 10; i++) '/d/f$i': 1,
+        for (var i = 0; i < 10; i++) '/d$i/f': 1,
       });
-      final ops = [for (var i = 0; i < 10; i++) reloc('/d/f$i', '/d/g$i')];
+      final ops = [for (var i = 0; i < 10; i++) reloc('/d$i/f', '/d$i/g')];
       final sub = executor(history)
           .execute(task, conn, RenamePlan(ops: ops), f)
           .listen(null);
@@ -468,7 +519,7 @@ void main() {
       final recs = await history.records(await theBatch(history));
       final done = recs.where((r) => r.status == OpStatus.done).length;
       expect(done, inInclusiveRange(1, 9));
-      expect(f.files.where((p) => p.startsWith('/d/g')), hasLength(done));
+      expect(f.files.where((p) => p.endsWith('/g')), hasLength(done));
     },
   );
 }

@@ -175,6 +175,22 @@ class Rig {
   }
 }
 
+/// Refuses to rename [path] while [locked], like a folder held open on Windows.
+class LockedFolder extends MemoryStorageBackend {
+  final String path;
+  bool locked = true;
+
+  LockedFolder(super.files, this.path);
+
+  @override
+  Future<void> rename(String p, String newName) async {
+    if (locked && p == path) {
+      throw StorageException(StorageErrorCode.other, 'Access is denied: $p');
+    }
+    return super.rename(p, newName);
+  }
+}
+
 void main() {
   test('full lifecycle: import, recognize, review, run, undo', () async {
     final before = library();
@@ -227,6 +243,51 @@ void main() {
     expect((await rig.store.loadAll()).single.summary.stage, TaskStage.undone);
   });
 
+  test(
+    'retryFailed runs the failed ops again once the folder is free',
+    () async {
+      final fs = LockedFolder(library(), '/in/Good');
+      final rig = Rig(fs);
+      final id = await rig.submitReady();
+      await rig.tm.run(id);
+      final partial = await rig.waitFor(
+        id,
+        (t) => t.stage == TaskStage.partiallyFailed,
+      );
+      expect(fs.files, isNot(contains('/in/Good_done/ok_a.mkv')));
+
+      fs.locked = false;
+      await rig.tm.retryFailed(id);
+      final done = await rig.waitFor(id, (t) => t.stage == TaskStage.done);
+      expect(done.batch, partial.batch);
+      expect(fs.files, contains('/in/Good_done/ok_a.mkv'));
+    },
+  );
+
+  test('delete forgets a finished task and its undo log, files stay', () async {
+    final rig = Rig(MemoryStorageBackend(library()));
+    final id = await rig.submitReady();
+    await rig.tm.run(id);
+    await rig.waitFor(id, (t) => t.stage == TaskStage.done);
+    final files = Set.of(rig.fs.files);
+    expect(await rig.history.batches(), hasLength(1));
+
+    await rig.tm.delete(id);
+    expect(await rig.tm.watchAll().first, isEmpty);
+    expect(await rig.store.loadAll(), isEmpty);
+    expect(await rig.history.batches(), isEmpty);
+    expect(rig.fs.files, files);
+  });
+
+  test('delete refuses a task that is still scanning', () async {
+    final rig = Rig(MemoryStorageBackend(library()));
+    rig.recognizer.gate = Completer();
+    final id = await rig.tm.submit(conn, ['/in/Good'], OrganizeMode.inPlace);
+    await rig.waitFor(id, (t) => t.stage.isActive);
+    await expectLater(rig.tm.delete(id), throwsStateError);
+    rig.recognizer.gate!.complete();
+  });
+
   test('two tasks run concurrently', () async {
     final rig = Rig(MemoryStorageBackend(library()));
     rig.recognizer.gate = Completer();
@@ -263,6 +324,26 @@ void main() {
     expect(rig.recognizer.calls, 0);
     await expectLater(rig.tm.review(id), throwsStateError);
   });
+
+  test(
+    'a run with nothing selected is refused, not reported as done',
+    () async {
+      final rig = Rig(MemoryStorageBackend(library()));
+      final id = await rig.submitReady();
+      for (final g in (await rig.tm.review(id)).scan.groups) {
+        await rig.tm.updateDecision(
+          id,
+          g.id,
+          const GroupDecision(selected: false),
+        );
+      }
+      await expectLater(rig.tm.run(id), throwsStateError);
+      expect(
+        (await rig.tm.watchAll().first).single.stage,
+        TaskStage.awaitingReview,
+      );
+    },
+  );
 
   test('cancel while awaiting review', () async {
     final rig = Rig(MemoryStorageBackend(library()));

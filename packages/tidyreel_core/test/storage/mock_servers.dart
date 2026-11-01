@@ -78,6 +78,12 @@ class MockAlist {
 
   final List<Map<String, dynamic>> listRequests = [];
 
+  /// `fs/*` calls in order, e.g. `api/fs/batch_rename`.
+  final List<String> calls = [];
+
+  /// Older servers have no `fs/batch_rename` (HTTP 404).
+  bool batchRename = true;
+
   MockAlist(Map<String, int> files, {this.password = 'pw'})
     : tree = MockTree(files);
 
@@ -108,7 +114,16 @@ class MockAlist {
       return _json(c, m);
     }
     const notFound = 'object not found';
+    calls.add(api);
     switch (api) {
+      case 'api/fs/batch_rename' when batchRename:
+        final dir = body['src_dir'] as String;
+        for (final o in (body['rename_objects'] as List).cast<Map>()) {
+          final from = p.posix.join(dir, o['src_name'] as String);
+          if (!tree.nodes.containsKey(from)) return _json(500, notFound);
+          tree.relocate(from, p.posix.join(dir, o['new_name'] as String));
+        }
+        return _json(200, 'success');
       case 'api/fs/get':
         final path = body['path'] as String;
         return tree.nodes.containsKey(path)
@@ -170,12 +185,25 @@ class MockAlist {
   }
 }
 
-/// Minimal WebDAV server mounted under `/dav`, Basic auth admin:pw.
+/// Minimal WebDAV server mounted under [mount] (default `/dav`, '' = root),
+/// Basic auth admin:pw. [absoluteHrefs] answers hrefs as full URLs.
 class MockWebDav {
   final MockTree tree;
-  static const mount = '/dav';
+  final String mount;
+  final bool absoluteHrefs;
 
-  MockWebDav(Map<String, int> files) : tree = MockTree(files);
+  /// Like Apache / nginx: collections addressed without a trailing slash get
+  /// a 301 to the slashed URL.
+  final bool redirectCollections;
+
+  MockWebDav(
+    Map<String, int> files, {
+    this.mount = '/dav',
+    this.absoluteHrefs = false,
+    this.redirectCollections = false,
+  }) : tree = MockTree(files);
+
+  Uri? _origin;
 
   String _decode(Uri u) {
     final segs = u.pathSegments.where((s) => s.isNotEmpty).toList();
@@ -185,15 +213,23 @@ class MockWebDav {
   /// `/dav/a/b` -> `/a/b`; null when outside the mount.
   String? _local(Uri u) {
     final full = _decode(u);
+    if (mount.isEmpty) return full;
     if (full != mount && !full.startsWith('$mount/')) return null;
     final rest = full.substring(mount.length);
     return rest.isEmpty ? '/' : rest;
   }
 
   String _href(String path) {
-    final segs = ['dav', ...path.split('/').where((s) => s.isNotEmpty)];
-    final h = "/${segs.map(Uri.encodeComponent).join("/")}";
-    return tree.isDir(path) ? '$h/' : h;
+    final segs = [
+      ...mount.split('/').where((s) => s.isNotEmpty),
+      ...path.split('/').where((s) => s.isNotEmpty),
+    ];
+    var h = "/${segs.map(Uri.encodeComponent).join("/")}";
+    if (tree.isDir(path) && h != '/') h = '$h/';
+    if (absoluteHrefs && _origin != null) {
+      h = '${_origin!.scheme}://${_origin!.authority}$h';
+    }
+    return h;
   }
 
   String _entry(String path) {
@@ -209,8 +245,15 @@ class MockWebDav {
     if (req.headers['authorization'] != auth) {
       return Response(401, headers: {'www-authenticate': 'Basic realm="x"'});
     }
+    _origin = req.requestedUri;
     final path = _local(req.requestedUri);
     if (path == null) return Response.notFound('');
+    if (redirectCollections &&
+        req.method == 'PROPFIND' &&
+        tree.isDir(path) &&
+        !req.requestedUri.path.endsWith('/')) {
+      return Response(301, headers: {'location': '${req.requestedUri.path}/'});
+    }
     switch (req.method) {
       case 'PROPFIND':
         if (!tree.nodes.containsKey(path)) return Response.notFound('');
