@@ -32,6 +32,28 @@ String fmtSize(int bytes) {
   return '${v.toStringAsFixed(i == 0 ? 0 : 1)} ${units[i]}';
 }
 
+final _fuzzyStrip = RegExp(r'[^\p{L}\p{N}]', unicode: true);
+
+/// Search-box matching that forgives case, spaces, dots and brackets: every
+/// word of [query] appears in [text], or (3+ characters) its letters appear
+/// in order ("卫宫饭" finds "卫宫家今天的饭", "akujodewa" finds "Akujo de wa").
+bool fuzzyMatch(String query, String text) {
+  String norm(String s) => s.toLowerCase().replaceAll(_fuzzyStrip, '');
+  final t = norm(text);
+  final words = query
+      .split(RegExp(r'\s+'))
+      .map(norm)
+      .where((w) => w.isNotEmpty);
+  if (words.isEmpty || words.every(t.contains)) return true;
+  final q = norm(query).runes.toList();
+  if (q.length < 3) return false;
+  var i = 0;
+  for (final c in t.runes) {
+    if (i < q.length && c == q[i]) i++;
+  }
+  return i == q.length;
+}
+
 String fmtDate(DateTime? d) => d == null
     ? ''
     : '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';

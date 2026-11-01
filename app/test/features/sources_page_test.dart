@@ -55,6 +55,30 @@ void main() {
     await tester.tap(find.text('全选'));
     await tester.pumpAndSettle();
     expect(find.text('已选 3 项'), findsOneWidget);
+    // 已选 opens the list; removing one updates the count.
+    await tester.tap(find.byKey(const ValueKey('show-selected')));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(
+          const ValueKey('selected /下载/完成/更多资源请访问 www.example.com.txt'),
+        ),
+        matching: find.byTooltip('移出选择'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(TextButton, '完成').last);
+    await tester.pumpAndSettle();
+    expect(find.text('已选 2 项'), findsOneWidget);
+    await tester.tap(find.text('全选'));
+    await tester.pumpAndSettle();
+    expect(find.text('已选 3 项'), findsOneWidget);
+    // fuzzy search: words in any order, punctuation ignored
+    await tester.enterText(find.byType(TextField).first, '2160p inception');
+    await tester.pumpAndSettle();
+    expect(find.text('Inception.2010.2160p.BluRay.x265.mkv'), findsOneWidget);
+    await tester.enterText(find.byType(TextField).first, '');
+    await tester.pumpAndSettle();
     await tester.tap(find.text('移动到媒体库'));
     await tester.pumpAndSettle();
 

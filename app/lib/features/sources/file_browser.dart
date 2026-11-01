@@ -39,6 +39,61 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
     ref.read(browserDirProvider.notifier).set(path);
   }
 
+  /// The selection, which may span folders: remove items or jump to one.
+  Future<void> _showSelected() => showDialog<void>(
+    context: context,
+    builder: (ctx) => Consumer(
+      builder: (ctx, ref, _) {
+        final sel = ref.watch(browserSelectionProvider).toList()..sort();
+        if (sel.isEmpty) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (ctx.mounted) Navigator.of(ctx).pop();
+          });
+        }
+        return AlertDialog(
+          title: Text('已选 ${sel.length} 项'),
+          content: SizedBox(
+            width: 520,
+            height: 360,
+            child: ListView(
+              children: [
+                for (final path in sel)
+                  ListTile(
+                    key: ValueKey('selected $path'),
+                    dense: true,
+                    title: Text(path.substring(path.lastIndexOf('/') + 1)),
+                    subtitle: Text(
+                      path,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    onTap: () {
+                      Navigator.of(ctx).pop();
+                      final i = path.lastIndexOf('/');
+                      _goto(i <= 0 ? '/' : path.substring(0, i));
+                    },
+                    trailing: IconButton(
+                      tooltip: '移出选择',
+                      icon: const Icon(CupertinoIcons.xmark, size: 14),
+                      onPressed: () => ref
+                          .read(browserSelectionProvider.notifier)
+                          .toggle(path),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('完成'),
+            ),
+          ],
+        );
+      },
+    ),
+  );
+
   /// Submits [only] (one row's 整理 button) or the current selection.
   Future<void> _submit([String? only, OrganizeMode? mode]) async {
     final paths = only != null
@@ -320,6 +375,13 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
                               .read(browserSelectionProvider.notifier)
                               .clear,
                           onSubmit: _submit,
+                          onShowSelected: _showSelected,
+                          hint: ref.watch(
+                            settingsProvider.select((s) => s.mediaHint),
+                          ),
+                          onHint: (h) => ref
+                              .read(settingsProvider.notifier)
+                              .update((o) => o.copyWith(mediaHint: h)),
                         ),
                       ),
                     ),
@@ -340,6 +402,9 @@ class _SelectionBar extends StatelessWidget {
   final void Function(OrganizeMode) onMode;
   final VoidCallback onCancel;
   final VoidCallback onSubmit;
+  final VoidCallback onShowSelected;
+  final MediaHint hint;
+  final void Function(MediaHint) onHint;
 
   const _SelectionBar({
     required this.count,
@@ -347,14 +412,17 @@ class _SelectionBar extends StatelessWidget {
     required this.onMode,
     required this.onCancel,
     required this.onSubmit,
+    required this.onShowSelected,
+    required this.hint,
+    required this.onHint,
   });
 
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
     return Container(
-      constraints: const BoxConstraints(maxWidth: 680),
-      padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+      constraints: const BoxConstraints(maxWidth: 860),
+      padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
       decoration: BoxDecoration(
         color: p.panel,
         borderRadius: BorderRadius.circular(Radii.xl),
@@ -364,30 +432,68 @@ class _SelectionBar extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Container(
-            constraints: const BoxConstraints(minWidth: 22),
-            height: 22,
-            padding: const EdgeInsets.symmetric(horizontal: 6),
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: p.accent,
-              borderRadius: BorderRadius.circular(11),
+          TextButton.icon(
+            key: const ValueKey('show-selected'),
+            onPressed: onShowSelected,
+            style: TextButton.styleFrom(foregroundColor: p.text),
+            icon: Container(
+              constraints: const BoxConstraints(minWidth: 22),
+              height: 22,
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: p.accent,
+                borderRadius: BorderRadius.circular(11),
+              ),
+              child: Text(
+                '$count',
+                style: TextStyle(
+                  color: p.onAccent,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
             ),
-            child: Text(
-              '$count',
-              style: TextStyle(
-                color: p.onAccent,
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
+            label: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '已选 $count 项',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(width: 2),
+                const Icon(CupertinoIcons.chevron_up, size: 11),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          PopupMenuButton<MediaHint>(
+            key: const ValueKey('media-hint'),
+            tooltip: '内容类型（也可在设置里改）',
+            initialValue: hint,
+            onSelected: onHint,
+            itemBuilder: (_) => [
+              for (final e in mediaHintLabels.entries)
+                PopupMenuItem(value: e.key, child: Text(e.value)),
+            ],
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '类型：${mediaHintLabels[hint]}',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                  const Icon(CupertinoIcons.chevron_down, size: 11),
+                ],
               ),
             ),
           ),
           const SizedBox(width: 8),
-          Text(
-            '已选 $count 项',
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(width: 14),
           Segmented<OrganizeMode>(
             options: const {
               OrganizeMode.inPlace: '原地整理',
