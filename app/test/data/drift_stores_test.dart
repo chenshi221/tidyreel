@@ -136,6 +136,17 @@ void main() {
         '/d/Show (2020)/S01/E02.mkv',
       ]);
       expect((await history.batches()).single.done, 4);
+      expect(
+        await history.isOrganized(conn, '/d/Show (2020)/S01/E01.mkv'),
+        isTrue,
+      );
+      expect(
+        await history.areOrganized(conn, [
+          '/d/Show (2020)/S01/E01.mkv',
+          '/d/Show (2020)/S01/E02.mkv',
+        ]),
+        {'/d/Show (2020)/S01/E01.mkv', '/d/Show (2020)/S01/E02.mkv'},
+      );
 
       await ex.undo(batch, fs).drain<void>();
       expect(fs.files, before);
@@ -226,6 +237,9 @@ void main() {
         );
         expect(a.match?.tmdbId, b.match?.tmdbId);
         expect(a.match?.englishTitle, b.match?.englishTitle);
+        expect(a.match?.overview, b.match?.overview);
+        expect(a.match?.backdropPath, b.match?.backdropPath);
+        expect(a.match?.genres, b.match?.genres);
         expect(
           a.show?.seasons.map((s) => s.episodeCount),
           b.show?.seasons.map((s) => s.episodeCount),

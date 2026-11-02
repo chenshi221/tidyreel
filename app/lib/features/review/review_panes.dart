@@ -118,12 +118,28 @@ class _TmdbSearchBoxState extends ConsumerState<TmdbSearchBox> {
   late var _kind = widget.kind ?? MediaKind.unknown;
   List<Candidate>? _results;
   var _busy = false;
+  var _searchSeq = 0;
   String? _error;
 
   @override
   void initState() {
     super.initState();
     if (widget.autoSearch) _search();
+  }
+
+  @override
+  void didUpdateWidget(TmdbSearchBox oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.initial != widget.initial ||
+        oldWidget.kind != widget.kind ||
+        oldWidget.year != widget.year) {
+      _c.text = widget.initial;
+      _yearC.text = widget.year?.toString() ?? '';
+      _kind = widget.kind ?? MediaKind.unknown;
+      _results = null;
+      _error = null;
+      if (widget.autoSearch) _search();
+    }
   }
 
   @override
@@ -146,6 +162,7 @@ class _TmdbSearchBoxState extends ConsumerState<TmdbSearchBox> {
   Future<void> _search() async {
     final q = _c.text.trim();
     if (q.isEmpty) return;
+    final seq = ++_searchSeq;
     setState(() {
       _busy = true;
       _error = null;
@@ -158,11 +175,11 @@ class _TmdbSearchBoxState extends ConsumerState<TmdbSearchBox> {
             kind: _kind == MediaKind.unknown ? null : _kind,
             year: _year,
           );
-      if (mounted) setState(() => _results = r);
+      if (mounted && seq == _searchSeq) setState(() => _results = r);
     } catch (e) {
-      if (mounted) setState(() => _error = '搜索失败：$e');
+      if (mounted && seq == _searchSeq) setState(() => _error = '搜索失败：$e');
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted && seq == _searchSeq) setState(() => _busy = false);
     }
   }
 

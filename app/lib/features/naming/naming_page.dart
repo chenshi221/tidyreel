@@ -638,6 +638,18 @@ class _TextOptionState extends State<_TextOption> {
   late final _c = TextEditingController(text: widget.value);
 
   @override
+  void didUpdateWidget(_TextOption oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.value != _c.text) {
+      _c.value = _c.value.copyWith(
+        text: widget.value,
+        selection: TextSelection.collapsed(offset: widget.value.length),
+        composing: TextRange.empty,
+      );
+    }
+  }
+
+  @override
   void dispose() {
     _c.dispose();
     super.dispose();

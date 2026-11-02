@@ -60,5 +60,8 @@ void main() {
     file.writeAsStringSync('{not json');
     expect(JsonStore.load(file).read('k'), isNull);
     expect(File('${file.path}.broken').existsSync(), isTrue);
+
+    file.writeAsStringSync('[1, 2, 3]');
+    expect(JsonStore.load(file).read('k'), isNull);
   });
 }

@@ -151,8 +151,9 @@ class DriftHistoryStore implements HistoryStore {
     await (db.delete(db.batches)..where((b) => b.id.isIn(ids))).go();
   });
 
-  @override
-  Future<bool> isOrganized(ConnectionId connection, String path) async {
+  Future<Map<String, List<({String src, String dst})>>> _folderMoves(
+    ConnectionId connection,
+  ) async {
     final q =
         db.selectOnly(db.historyRecords).join([
             innerJoin(
@@ -160,14 +161,48 @@ class DriftHistoryStore implements HistoryStore {
               db.batches.id.equalsExp(db.historyRecords.batchId),
             ),
           ])
-          ..addColumns([db.historyRecords.opId])
+          ..addColumns([
+            db.historyRecords.batchId,
+            db.historyRecords.src,
+            db.historyRecords.dst,
+            db.historyRecords.seq,
+          ])
           ..where(
             db.batches.connectionId.equals(connection.value) &
-                db.historyRecords.dst.equals(path) &
+                db.historyRecords.phase.equals(ExecPhase.folders.name) &
+                db.historyRecords.kind.equals(OpKind.relocate.name) &
                 db.historyRecords.status.equals(OpStatus.done.name),
           )
-          ..limit(1);
-    return (await q.get()).isNotEmpty;
+          ..orderBy([OrderingTerm.asc(db.historyRecords.seq)]);
+    final byBatch = <String, List<({String src, String dst})>>{};
+    for (final row in await q.get()) {
+      final b = row.read(db.historyRecords.batchId)!;
+      (byBatch[b] ??= []).add((
+        src: row.read(db.historyRecords.src)!,
+        dst: row.read(db.historyRecords.dst)!,
+      ));
+    }
+    return byBatch;
+  }
+
+  static String _reverseMap(
+    String path,
+    List<({String src, String dst})> moves,
+  ) {
+    var cur = path;
+    for (final m in moves.reversed) {
+      if (cur == m.dst) {
+        cur = m.src;
+      } else if (cur.startsWith('${m.dst}/')) {
+        cur = '${m.src}${cur.substring(m.dst.length)}';
+      }
+    }
+    return cur;
+  }
+
+  @override
+  Future<bool> isOrganized(ConnectionId connection, String path) async {
+    return (await areOrganized(connection, [path])).contains(path);
   }
 
   @override
@@ -177,12 +212,26 @@ class DriftHistoryStore implements HistoryStore {
   ) async {
     final list = paths.toSet().toList();
     if (list.isEmpty) return const {};
+    final folderMoves = await _folderMoves(connection);
+    // Candidate pre-folder-rename paths for each batch that renamed folders:
+    // original queried path -> {(batchId, preFolderDst)}.
+    final preFolderToOrig = <String, List<(String?, String)>>{};
+    for (final p in list) {
+      (preFolderToOrig[p] ??= []).add((null, p));
+      for (final MapEntry(key: batchId, value: moves) in folderMoves.entries) {
+        final pre = _reverseMap(p, moves);
+        if (pre != p) {
+          (preFolderToOrig[pre] ??= []).add((batchId, p));
+        }
+      }
+    }
+    final queryList = preFolderToOrig.keys.toList();
     const chunkSize = 500;
     final out = <String>{};
-    for (var i = 0; i < list.length; i += chunkSize) {
-      final chunk = list.sublist(
+    for (var i = 0; i < queryList.length; i += chunkSize) {
+      final chunk = queryList.sublist(
         i,
-        i + chunkSize > list.length ? list.length : i + chunkSize,
+        i + chunkSize > queryList.length ? queryList.length : i + chunkSize,
       );
       final q =
           db.selectOnly(db.historyRecords).join([
@@ -191,7 +240,7 @@ class DriftHistoryStore implements HistoryStore {
                 db.batches.id.equalsExp(db.historyRecords.batchId),
               ),
             ])
-            ..addColumns([db.historyRecords.dst])
+            ..addColumns([db.historyRecords.batchId, db.historyRecords.dst])
             ..where(
               db.batches.connectionId.equals(connection.value) &
                   db.historyRecords.dst.isIn(chunk) &
@@ -199,7 +248,14 @@ class DriftHistoryStore implements HistoryStore {
             );
       final rows = await q.get();
       for (final r in rows) {
-        out.add(r.read(db.historyRecords.dst)!);
+        final b = r.read(db.historyRecords.batchId)!;
+        final dst = r.read(db.historyRecords.dst)!;
+        for (final (reqBatch, origPath)
+            in preFolderToOrig[dst] ?? const <(String?, String)>[]) {
+          if (reqBatch == null || reqBatch == b) {
+            out.add(origPath);
+          }
+        }
       }
     }
     return out;

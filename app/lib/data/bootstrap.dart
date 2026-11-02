@@ -68,12 +68,18 @@ class JsonStore {
       return JsonStore._(
         file,
         file.existsSync()
-            ? (jsonDecode(file.readAsStringSync()) as Map<String, Object?>)
+            ? Map<String, Object?>.of(
+                jsonDecode(file.readAsStringSync()) as Map<String, Object?>,
+              )
             : {},
       );
-    } on FormatException {
+    } on Object {
       // A corrupt prefs file must not brick the app; keep it aside for inspection.
-      file.renameSync('${file.path}.broken');
+      try {
+        if (file.existsSync()) file.renameSync('${file.path}.broken');
+      } on Object {
+        // Ignore rename failure if locked or missing.
+      }
       return JsonStore._(file, {});
     }
   }
@@ -107,12 +113,12 @@ class SecretStore {
         final old = await const FlutterSecureStorage().readAll();
         old.forEach(s._store.write);
       } catch (_) {}
-      if (!file.existsSync()) file.writeAsStringSync('{}');
-      if (!Platform.isWindows) {
-        try {
-          Process.runSync('chmod', ['600', file.path]);
-        } catch (_) {}
-      }
+    }
+    if (!file.existsSync()) file.writeAsStringSync('{}');
+    if (!Platform.isWindows) {
+      try {
+        Process.runSync('chmod', ['600', file.path]);
+      } catch (_) {}
     }
     return s;
   }
