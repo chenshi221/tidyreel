@@ -134,15 +134,28 @@ class WebDAVBackend implements StorageBackend {
       .replaceAll('&apos;', "'")
       .replaceAll('&amp;', '&');
 
+  /// Converts a resolved URI to a connection-relative path (`/`-rooted).
+  String _toRelativePath(Uri resolved) {
+    final full = resolved.pathSegments.where((s) => s.isNotEmpty).toList();
+    final base = _base.pathSegments.where((s) => s.isNotEmpty).toList();
+    var matchesBase = full.length >= base.length;
+    if (matchesBase) {
+      for (var i = 0; i < base.length; i++) {
+        if (full[i] != base[i]) {
+          matchesBase = false;
+          break;
+        }
+      }
+    }
+    final relSegs = matchesBase ? full.sublist(base.length) : full;
+    return relSegs.isEmpty ? '/' : '/${relSegs.join('/')}';
+  }
+
   /// href (absolute URL, path, or relative URI, percent-encoded) -> connection-relative path.
   String _relative(String href, {Uri? scope}) {
     final parsed = Uri.parse(_unxml(href.trim()));
     final resolved = (scope ?? _base).resolveUri(parsed);
-    final full = resolved.pathSegments.where((s) => s.isNotEmpty).join('/');
-    final base = _base.pathSegments.where((s) => s.isNotEmpty).join('/');
-    var rel = full.startsWith(base) ? full.substring(base.length) : full;
-    rel = rel.replaceFirst(RegExp(r'^/+'), '').replaceFirst(RegExp(r'/+$'), '');
-    return rel.isEmpty ? '/' : '/$rel';
+    return _toRelativePath(resolved);
   }
 
   @override
@@ -150,7 +163,7 @@ class WebDAVBackend implements StorageBackend {
     final r = await _propfind(dir, 1, dir: true);
     if (r.statusCode != 207) throw _fail(r, dir);
     final reqUri = _uri(dir, dir: true);
-    final self = _relative(reqUri.path, scope: reqUri);
+    final self = _toRelativePath(reqUri);
     final out = <RemoteEntry>[];
     for (final m in _responseRe.allMatches('${r.data}')) {
       final block = m.group(1)!;

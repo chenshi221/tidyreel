@@ -278,7 +278,7 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
                   value: ref.watch(browserSortProvider),
                   onChanged: ref.read(browserSortProvider.notifier).set,
                 ),
-                // Hook: browserEntriesProvider applies isOrganizedProvider.
+                // Hook: browserEntriesProvider filters via HistoryStore.areOrganized.
                 FilterChip(
                   label: const Text('只看未整理的'),
                   selected: ref.watch(onlyUnorganizedProvider),

@@ -26,7 +26,9 @@ Future<void> walkDirs(
       visit(dir).then(
         (subs) {
           active--;
-          queue.addAll(subs);
+          for (final s in subs) {
+            if (!visited.contains(s)) queue.add(s);
+          }
           pump();
         },
         onError: (Object e, StackTrace s) {

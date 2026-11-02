@@ -168,17 +168,10 @@ final browserModeProvider = NotifierProvider<_ModeNotifier, OrganizeMode>(
   _ModeNotifier.new,
 );
 
+/// Entries of the current folder after search / filter / sort.
 /// 只看未整理的: a path counts as organized once a done op produced it.
 /// shortcut: doesn't yet check "name already matches the naming rules"; add when
 /// users report already-tidy folders showing up.
-final isOrganizedProvider = Provider<Future<bool> Function(String path)>((ref) {
-  final conn = ref.watch(openConnectionProvider);
-  final history = ref.watch(historyProvider);
-  return (path) async =>
-      conn != null && await history.isOrganized(conn.id, path);
-});
-
-/// Entries of the current folder after search / filter / sort.
 final browserEntriesProvider = FutureProvider.autoDispose<List<RemoteEntry>>((
   ref,
 ) async {

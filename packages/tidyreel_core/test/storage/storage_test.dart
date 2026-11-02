@@ -111,6 +111,18 @@ void main() {
         throwsStorage(StorageErrorCode.other),
       );
       await expectLater(
+        be.rename('/a.txt', '.'),
+        throwsStorage(StorageErrorCode.other),
+      );
+      await expectLater(
+        be.rename('/a.txt', ''),
+        throwsStorage(StorageErrorCode.other),
+      );
+      await expectLater(
+        be.rename('/missing.txt', 'missing.txt'),
+        throwsStorage(StorageErrorCode.notFound),
+      );
+      await expectLater(
         be.move('/', '/..', ['a.txt']),
         throwsStorage(StorageErrorCode.other),
       );
@@ -293,6 +305,40 @@ void main() {
       );
       await be.rename('/电影 [1].mkv', '电影 (2020).mkv');
       expect(seen.single, '/dav/%E7%94%B5%E5%BD%B1%20%5B1%5D.mkv');
+    });
+
+    test('resolves relative hrefs and percent signs in filenames', () async {
+      final server = await MockServer.start((Request r) {
+        if (r.method == 'PROPFIND') {
+          return Response(
+            207,
+            body:
+                '<?xml version="1.0"?><D:multistatus xmlns:D="DAV:">'
+                '<D:response><D:href>/dav/sub/</D:href><D:propstat><D:prop>'
+                '<D:resourcetype><D:collection/></D:resourcetype>'
+                '</D:prop></D:propstat></D:response>'
+                '<D:response><D:href>100%25%20Love.mkv</D:href><D:propstat><D:prop>'
+                '<D:resourcetype/><D:getcontentlength>42</D:getcontentlength>'
+                '</D:prop></D:propstat></D:response>'
+                '<D:response><D:href>nested/</D:href><D:propstat><D:prop>'
+                '<D:resourcetype><D:collection/></D:resourcetype>'
+                '</D:prop></D:propstat></D:response>'
+                '</D:multistatus>',
+            headers: {'content-type': 'application/xml; charset=utf-8'},
+          );
+        }
+        return Response.notFound('');
+      });
+      addTearDown(server.close);
+      final be = createBackend(
+        cfg(ConnectionType.webdav, '${server.url}/dav'),
+        const Credentials(password: 'pw'),
+      );
+      final entries = await be.list('/sub');
+      expect(entries.map((e) => (e.path, e.name, e.isDir, e.size)).toList(), [
+        ('/sub/100% Love.mkv', '100% Love.mkv', false, 42),
+        ('/sub/nested', 'nested', true, 0),
+      ]);
     });
   });
 }

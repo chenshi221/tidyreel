@@ -86,13 +86,13 @@ class LocalBackend implements StorageBackend {
 
   Future<void> _relocate(String from, String to) async {
     final src = _real(from), dst = _real(to);
-    if (from == to) return;
     if (!_present(src)) throw StorageException(StorageErrorCode.notFound, from);
-    // On case-insensitive file systems (APFS / NTFS), _present(dst) returns
-    // true for case-only changes because src matches dst case-insensitively.
-    final isCaseOnly = from.toLowerCase() == to.toLowerCase();
-    // rename(2) silently overwrites, so check first.
-    if (!isCaseOnly && _present(dst)) {
+    if (from == to) return;
+    // rename(2) silently overwrites, so check first. On case-insensitive file
+    // systems (APFS / NTFS), dst resolves to the same underlying file as src
+    // for case-only renames; identicalSync distinguishes that from a distinct
+    // existing target on case-sensitive file systems (ext4).
+    if (_present(dst) && !FileSystemEntity.identicalSync(src, dst)) {
       throw StorageException(StorageErrorCode.alreadyExists, to);
     }
     await _io(from, () async {
@@ -106,7 +106,8 @@ class LocalBackend implements StorageBackend {
 
   @override
   Future<void> rename(String path, String newName) async {
-    if (newName.contains('/') ||
+    if (newName.isEmpty ||
+        newName.contains('/') ||
         newName.contains('\\') ||
         newName == '..' ||
         newName == '.') {
