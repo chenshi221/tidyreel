@@ -134,27 +134,29 @@ class WebDAVBackend implements StorageBackend {
       .replaceAll('&apos;', "'")
       .replaceAll('&amp;', '&');
 
-  /// href (absolute URL or path, percent-encoded) -> connection-relative path.
-  String _relative(String href) {
-    final full = Uri.decodeComponent(Uri.parse(_unxml(href.trim())).path);
-    final base = Uri.decodeComponent(_base.path)
-        .replaceFirst(RegExp(r'/+$'), '');
+  /// href (absolute URL, path, or relative URI, percent-encoded) -> connection-relative path.
+  String _relative(String href, {Uri? scope}) {
+    final parsed = Uri.parse(_unxml(href.trim()));
+    final resolved = (scope ?? _base).resolveUri(parsed);
+    final full = resolved.pathSegments.where((s) => s.isNotEmpty).join('/');
+    final base = _base.pathSegments.where((s) => s.isNotEmpty).join('/');
     var rel = full.startsWith(base) ? full.substring(base.length) : full;
-    rel = rel.replaceFirst(RegExp(r'/+$'), '');
-    return rel.isEmpty ? '/' : (rel.startsWith('/') ? rel : '/$rel');
+    rel = rel.replaceFirst(RegExp(r'^/+'), '').replaceFirst(RegExp(r'/+$'), '');
+    return rel.isEmpty ? '/' : '/$rel';
   }
 
   @override
   Future<List<RemoteEntry>> list(String dir, {bool refresh = false}) async {
     final r = await _propfind(dir, 1, dir: true);
     if (r.statusCode != 207) throw _fail(r, dir);
-    final self = _relative(_uri(dir).path);
+    final reqUri = _uri(dir, dir: true);
+    final self = _relative(reqUri.path, scope: reqUri);
     final out = <RemoteEntry>[];
     for (final m in _responseRe.allMatches('${r.data}')) {
       final block = m.group(1)!;
       final href = _hrefRe.firstMatch(block)?.group(1);
       if (href == null) continue;
-      final path = _relative(href);
+      final path = _relative(href, scope: reqUri);
       // PROPFIND Depth 1 includes the collection itself.
       if (path == self) continue;
       final isDir = _collectionRe.hasMatch(block);

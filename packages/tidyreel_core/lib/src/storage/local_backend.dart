@@ -13,14 +13,22 @@ class LocalBackend implements StorageBackend {
 
   /// Maps a '/'-rooted path to a real path, refusing anything that escapes [root].
   String _real(String path) {
-    final segs = path.split('/').where((s) => s.isNotEmpty && s != '.');
+    final normalized = path.replaceAll('\\', '/');
+    final segs = normalized.split('/').where((s) => s.isNotEmpty && s != '.');
     if (segs.contains('..')) {
       throw StorageException(
         StorageErrorCode.other,
         'path escapes root: $path',
       );
     }
-    return p.joinAll([root, ...segs]);
+    final resolved = p.joinAll([root, ...segs]);
+    if (!p.isWithin(root, resolved) && resolved != root) {
+      throw StorageException(
+        StorageErrorCode.other,
+        'path escapes root: $path',
+      );
+    }
+    return resolved;
   }
 
   String _virtual(String dir, String name) =>
@@ -78,9 +86,13 @@ class LocalBackend implements StorageBackend {
 
   Future<void> _relocate(String from, String to) async {
     final src = _real(from), dst = _real(to);
+    if (from == to) return;
     if (!_present(src)) throw StorageException(StorageErrorCode.notFound, from);
+    // On case-insensitive file systems (APFS / NTFS), _present(dst) returns
+    // true for case-only changes because src matches dst case-insensitively.
+    final isCaseOnly = from.toLowerCase() == to.toLowerCase();
     // rename(2) silently overwrites, so check first.
-    if (_present(dst)) {
+    if (!isCaseOnly && _present(dst)) {
       throw StorageException(StorageErrorCode.alreadyExists, to);
     }
     await _io(from, () async {
@@ -94,7 +106,10 @@ class LocalBackend implements StorageBackend {
 
   @override
   Future<void> rename(String path, String newName) async {
-    if (newName.contains('/') || newName.contains('\\') || newName == '..') {
+    if (newName.contains('/') ||
+        newName.contains('\\') ||
+        newName == '..' ||
+        newName == '.') {
       throw StorageException(StorageErrorCode.other, 'bad name: $newName');
     }
     await _relocate(path, _virtual(p.posix.dirname(path), newName));

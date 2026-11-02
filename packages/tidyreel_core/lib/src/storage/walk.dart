@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 
 /// Visits folders [parallel] at a time, starting from [roots]. [visit] lists one
 /// folder and returns the subfolders to descend into. Remote listings take
@@ -10,7 +11,8 @@ Future<void> walkDirs(
   int parallel = 6,
   bool Function()? stop,
 }) {
-  final queue = [...roots];
+  final queue = Queue<String>()..addAll(roots);
+  final visited = <String>{};
   final done = Completer<void>();
   var active = 0;
 
@@ -18,7 +20,8 @@ Future<void> walkDirs(
     if (done.isCompleted) return;
     if (stop?.call() ?? false) queue.clear();
     while (active < parallel && queue.isNotEmpty) {
-      final dir = queue.removeAt(0);
+      final dir = queue.removeFirst();
+      if (!visited.add(dir)) continue;
       active++;
       visit(dir).then(
         (subs) {
@@ -32,7 +35,7 @@ Future<void> walkDirs(
         },
       );
     }
-    if (active == 0 && queue.isEmpty) done.complete();
+    if (active == 0 && queue.isEmpty && !done.isCompleted) done.complete();
   }
 
   pump();

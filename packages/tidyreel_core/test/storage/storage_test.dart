@@ -85,7 +85,13 @@ void main() {
   group('Local', () {
     test('refuses paths that escape the root', () async {
       final be = await makeLocal({'/a.txt': 1});
-      for (final bad in ['/../x', '/a/../../x', '/..']) {
+      for (final bad in [
+        '/../x',
+        '/a/../../x',
+        '/..',
+        r'/..\evil',
+        r'/a\..\..\evil',
+      ]) {
         await expectLater(be.list(bad), throwsStorage(StorageErrorCode.other));
         await expectLater(
           be.exists(bad),
@@ -101,6 +107,10 @@ void main() {
         throwsStorage(StorageErrorCode.other),
       );
       await expectLater(
+        be.rename('/a.txt', r'..\evil'),
+        throwsStorage(StorageErrorCode.other),
+      );
+      await expectLater(
         be.move('/', '/..', ['a.txt']),
         throwsStorage(StorageErrorCode.other),
       );
@@ -108,6 +118,12 @@ void main() {
         be.remove('/..', ['x']),
         throwsStorage(StorageErrorCode.other),
       );
+    });
+
+    test('allows case-only rename on local files', () async {
+      final be = await makeLocal({'/test.txt': 5});
+      await be.rename('/test.txt', 'Test.txt');
+      expect(await be.exists('/Test.txt'), isTrue);
     });
   });
 

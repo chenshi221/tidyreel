@@ -50,8 +50,9 @@ void main() {
       if (bad.isEmpty) {
         passed++;
         // ignore: avoid_print
-        if (c.known != null)
+        if (c.known != null) {
           print('  NOTE  now passes, drop `known`: ${c.name}');
+        }
         continue;
       }
       final line =

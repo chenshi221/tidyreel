@@ -87,6 +87,19 @@ void main() {
         isFalse,
       );
       expect(await history.isOrganized(conn, '/d/nope'), isFalse);
+
+      // areOrganized batch check
+      final batchResult = await history.areOrganized(conn, [
+        '/d/New/a.mkv',
+        '/d/nope',
+      ]);
+      expect(batchResult, {'/d/New/a.mkv'});
+      expect(
+        await history.areOrganized(const ConnectionId('other'), [
+          '/d/New/a.mkv',
+        ]),
+        isEmpty,
+      );
     });
 
     test('executor round trip: crash, resume, undo through drift', () async {

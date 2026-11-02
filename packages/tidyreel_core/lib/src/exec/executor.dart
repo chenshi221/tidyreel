@@ -25,6 +25,12 @@ abstract interface class HistoryStore {
   /// For the 只看未整理的 filter: was [path] produced by a done op on [connection]?
   Future<bool> isOrganized(ConnectionId connection, String path);
 
+  /// Batch check for 只看未整理的: returns all paths from [paths] that are organized.
+  Future<Set<String>> areOrganized(
+    ConnectionId connection,
+    Iterable<String> paths,
+  );
+
   /// Drops every batch (and its records) of [task]; it can't be undone after.
   Future<void> deleteTask(TaskId task);
 }

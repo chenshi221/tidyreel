@@ -50,11 +50,21 @@ final _urlRe = RegExp(
   caseSensitive: false,
 );
 final _anyBracket = RegExp(r'\[[^\]]*\]|\([^)]*\)');
+final _httpUrlRe = RegExp(r'www\.|https?://', caseSensitive: false);
+final _tldDomainRe = RegExp(
+  '\\.(?:$_tld)(?![A-Za-z0-9])',
+  caseSensitive: false,
+);
+final _urlCheckRe = RegExp(
+  r'www\.|https?://|^[^ ]*\.(?:com|net|org|cn|cc)$',
+  caseSensitive: false,
+);
+final _letterOrDigitRe = RegExp(r'[\p{L}\p{N}]', unicode: true);
+final _sampleRe = RegExp(r'^sample$|[-._ \[(]sample[\])]?$|^sample[-._ ]');
+final _extRe = RegExp(r'^[a-z0-9!]+$');
 
 bool _isAd(String c) =>
-    _adKw.hasMatch(c) ||
-    RegExp(r'www\.|https?://', caseSensitive: false).hasMatch(c) ||
-    RegExp('\\.(?:$_tld)(?![A-Za-z0-9])', caseSensitive: false).hasMatch(c);
+    _adKw.hasMatch(c) || _httpUrlRe.hasMatch(c) || _tldDomainRe.hasMatch(c);
 
 FileRole classifyFile(String fileName) {
   final base = fold(fileName.split('/').last.split('\\').last);
@@ -75,19 +85,14 @@ FileRole classifyFile(String fileName) {
     _anyBracket,
     (m) => _isAd(m[0]!) ? ' ' : m[0]!,
   );
-  final hadUrl =
-      _urlRe.hasMatch(rest) &&
-      RegExp(
-        r'www\.|https?://|^[^ ]*\.(?:com|net|org|cn|cc)$',
-        caseSensitive: false,
-      ).hasMatch(rest);
+  final hadUrl = _urlRe.hasMatch(rest) && _urlCheckRe.hasMatch(rest);
   final hadAd = hadUrl || _adKw.hasMatch(rest) || rest != stem;
   rest = rest.replaceAll(_urlRe, ' ').replaceAll(_adKw, ' ');
-  final empty = !RegExp(r'[\p{L}\p{N}]', unicode: true).hasMatch(rest);
+  final empty = !_letterOrDigitRe.hasMatch(rest);
 
   if (_videoExt.contains(ext)) {
     final s = stem.toLowerCase();
-    if (RegExp(r'^sample$|[-._ \[(]sample[\])]?$|^sample[-._ ]').hasMatch(s)) {
+    if (_sampleRe.hasMatch(s)) {
       return FileRole.junk;
     }
     return empty ? FileRole.junk : FileRole.video;
@@ -100,7 +105,7 @@ String? extOf(String name) {
   final i = name.lastIndexOf('.');
   if (i <= 0 || name.length - i - 1 > 8) return null;
   final e = name.substring(i + 1).toLowerCase();
-  return RegExp(r'^[a-z0-9!]+$').hasMatch(e) ? e : null;
+  return _extRe.hasMatch(e) ? e : null;
 }
 
 // ----------------------------------------------------------------- analyze
@@ -128,6 +133,19 @@ class Info {
   String? res, group, lang, extra;
 }
 
+const _cjkQuotes = {
+  0x300A, // 《
+  0x300B, // 》
+  0x300C, // 「
+  0x300D, // 」
+  0x300E, // 『
+  0x300F, // 』
+  0x3008, // 〈
+  0x3009, // 〉
+  0x201C, // “
+  0x201D, // ”
+};
+
 /// Fullwidth → ASCII, CJK brackets → [], quotes removed.
 String fold(String s) {
   final b = StringBuffer();
@@ -140,7 +158,7 @@ String fold(String s) {
       b.write(']');
     } else if (r >= 0xFF01 && r <= 0xFF5E) {
       b.writeCharCode(r - 0xFEE0);
-    } else if ('《》「」『』〈〉“”'.runes.contains(r)) {
+    } else if (_cjkQuotes.contains(r)) {
       b.write(' ');
     } else {
       b.writeCharCode(r);
@@ -239,19 +257,21 @@ final _langRe = RegExp(
   caseSensitive: false,
 );
 
+final _fourDigitYearRe = RegExp(r'^(?:19|20)\d\d$');
+final _cnNoiseTagRe = RegExp(r'[一-鿿]{0,2}(?:字幕|画质|版|语|字)(?![一-鿿])');
+final _splitNoiseRe = RegExp(r'[\s,&+/_.-]+');
+
 /// Words that, alone in a leading bracket, mean "not a group".
 bool _noiseBracket(String c) {
   if (c.isEmpty) return true;
   if (_crcRe.hasMatch(c)) return true;
-  if (RegExp(r'^(?:19|20)\d\d$').hasMatch(c)) return true;
+  if (_fourDigitYearRe.hasMatch(c)) return true;
   final stripped = c
       .replaceAll(_cnNoise, ' ')
-      .replaceAll(RegExp(r'[一-鿿]{0,2}(?:字幕|画质|版|语|字)(?![一-鿿])'), ' ')
+      .replaceAll(_cnNoiseTagRe, ' ')
       .trim();
   if (stripped.isEmpty) return true;
-  final toks = stripped
-      .split(RegExp(r'[\s,&+/_.-]+'))
-      .where((t) => t.isNotEmpty);
+  final toks = stripped.split(_splitNoiseRe).where((t) => t.isNotEmpty);
   return toks.every((t) => _techOnlyRe.hasMatch(t));
 }
 
@@ -264,36 +284,30 @@ bool _hasEpisodeMarker(String c) =>
     _extraRe.hasMatch(c) ||
     _seasonRes.any((r) => r.hasMatch(c));
 
+final _webdlRe = RegExp(r'web[-. _]?dl', caseSensitive: false);
+final _blurayRe = RegExp(r'blu[-. ]?ray', caseSensitive: false);
+final _h26xRe = RegExp(
+  r'(?<![A-Za-z0-9])h[. ]?26([45])(?![0-9])',
+  caseSensitive: false,
+);
+final _hdr10PlusRe = RegExp(r'(hdr10|ddp?|eac3)\+', caseSensitive: false);
+final _audioChRe = RegExp(
+  r'(?<![A-Za-z0-9])(dd|ddp|ddplus|aac|ac3|eac3|dts|flac|truehd|atmos|opus|lpcm)[ .]?(\d)\.(\d)',
+  caseSensitive: false,
+);
+final _chDigitRe = RegExp(r'(?<![0-9.])([2567])\.([01])(?![0-9])');
+final _dotsUnderscoresRe = RegExp(r'[._]');
+final _whitespaceRe = RegExp(r'[ \t]+');
+
 String _normalize(String s) {
-  s = s.replaceAllMapped(
-    RegExp(r'web[-. _]?dl', caseSensitive: false),
-    (m) => 'WEBDL',
-  );
-  s = s.replaceAllMapped(
-    RegExp(r'blu[-. ]?ray', caseSensitive: false),
-    (m) => 'BluRay',
-  );
-  s = s.replaceAllMapped(
-    RegExp(r'(?<![A-Za-z0-9])h[. ]?26([45])(?![0-9])', caseSensitive: false),
-    (m) => 'H26${m[1]}',
-  );
-  s = s.replaceAllMapped(
-    RegExp(r'(hdr10|ddp?|eac3)\+', caseSensitive: false),
-    (m) => '${m[1]}plus',
-  );
-  s = s.replaceAllMapped(
-    RegExp(
-      r'(?<![A-Za-z0-9])(dd|ddp|ddplus|aac|ac3|eac3|dts|flac|truehd|atmos|opus|lpcm)[ .]?(\d)\.(\d)',
-      caseSensitive: false,
-    ),
-    (m) => '${m[1]}${m[2]}${m[3]}',
-  );
-  s = s.replaceAllMapped(
-    RegExp(r'(?<![0-9.])([2567])\.([01])(?![0-9])'),
-    (m) => 'ch${m[1]}${m[2]}',
-  );
-  s = s.replaceAll(RegExp(r'[._]'), ' ');
-  return s.replaceAll(RegExp(r'[ \t]+'), ' ').trim();
+  s = s.replaceAllMapped(_webdlRe, (m) => 'WEBDL');
+  s = s.replaceAllMapped(_blurayRe, (m) => 'BluRay');
+  s = s.replaceAllMapped(_h26xRe, (m) => 'H26${m[1]}');
+  s = s.replaceAllMapped(_hdr10PlusRe, (m) => '${m[1]}plus');
+  s = s.replaceAllMapped(_audioChRe, (m) => '${m[1]}${m[2]}${m[3]}');
+  s = s.replaceAllMapped(_chDigitRe, (m) => 'ch${m[1]}${m[2]}');
+  s = s.replaceAll(_dotsUnderscoresRe, ' ');
+  return s.replaceAll(_whitespaceRe, ' ').trim();
 }
 
 int _seasonNum(RegExpMatch m) => chineseToInt(m[1]!) ?? 0;
@@ -304,6 +318,31 @@ List<int> _range(int first, int? last) =>
     last == null || last <= first || last - first > 200
     ? [first]
     : [for (var i = first; i <= last; i++) i];
+
+final _dashDateRe = RegExp(r'[-._ ]');
+final _numWithVRe = RegExp(r'^\d{1,4}(?:v\d)?$');
+final _trailerGroupRe = RegExp(r'-([A-Za-z0-9]{2,16}) *(?:\[[^\]]*\] *)*$');
+final _eNumRe = RegExp(r'^E?\d+$', caseSensitive: false);
+final _multiSpaceRe = RegExp(r' {2,}');
+final _multiEpRe = RegExp(r'( ?[-~] ?)?E?(\d+)');
+final _leadLowerRe = RegExp(r'^ [a-z]');
+final _bareRegionRe = RegExp(
+  r'(?<![A-Za-z0-9])(\d{1,3})(?:v\d)?(?![A-Za-z0-9])',
+);
+final _spaceDashRe = RegExp(r'[\s-]');
+final _resPiRe = RegExp(
+  r'(?<![0-9])(\d{3,4})[pi](?![A-Za-z0-9])',
+  caseSensitive: false,
+);
+final _resXRe = RegExp(r'(?<![A-Za-z0-9])\d{3,4}x(\d{3,4})(?![A-Za-z0-9])');
+final _resKRe = RegExp(
+  r'(?<![A-Za-z0-9])([248])k(?![A-Za-z0-9])',
+  caseSensitive: false,
+);
+final _hdrAudioRe = RegExp(
+  r'(?<![A-Za-z0-9])(hdr10plus|hdr10|hdr|dovi|dv|hlg|imax|atmos|truehd|dts-?hd|dts-?x)\d*(?![A-Za-z0-9])',
+  caseSensitive: false,
+);
 
 Info analyze(String raw, {required bool file}) {
   final a = Info();
@@ -319,7 +358,7 @@ Info analyze(String raw, {required bool file}) {
   s = s.replaceAll(_wwwRe, ' ').replaceFirst(_leadDomainRe, '');
   final dm = _dateRe.firstMatch(s);
   if (dm != null) {
-    final d = dm[0]!.replaceAll(RegExp(r'[-._ ]'), '');
+    final d = dm[0]!.replaceAll(_dashDateRe, '');
     a.airDate = DateTime.utc(
       int.parse(d.substring(0, 4)),
       int.parse(d.substring(4, 6)),
@@ -340,8 +379,7 @@ Info analyze(String raw, {required bool file}) {
     final isSquare = m[0]!.trimLeft().startsWith('[');
     s = s.substring(m.end);
     if (_isAd(c) || _crcRe.hasMatch(c)) continue;
-    if (RegExp(r'^\d{1,4}(?:v\d)?$').hasMatch(c) &&
-        !RegExp(r'^(?:19|20)\d\d$').hasMatch(c)) {
+    if (_numWithVRe.hasMatch(c) && !_fourDigitYearRe.hasMatch(c)) {
       tail.write(' - $c ');
       continue;
     }
@@ -357,23 +395,16 @@ Info analyze(String raw, {required bool file}) {
   }
 
   // Protect release tokens before the trailing "-GROUP" is looked for.
-  s = s.replaceAllMapped(
-    RegExp(r'web[-. _]?dl', caseSensitive: false),
-    (m) => 'WEBDL',
-  );
-  s = s.replaceAllMapped(
-    RegExp(r'blu[-. ]?ray', caseSensitive: false),
-    (m) => 'BluRay',
-  );
+  s = s.replaceAllMapped(_webdlRe, (m) => 'WEBDL');
+  s = s.replaceAllMapped(_blurayRe, (m) => 'BluRay');
   if (a.group == null) {
-    final gm = RegExp(r'-([A-Za-z0-9]{2,16}) *(?:\[[^\]]*\] *)*$')
-        .firstMatch(s);
+    final gm = _trailerGroupRe.firstMatch(s);
     if (gm != null) {
       final cand = gm[1]!;
       final before = _normalize(s.substring(0, gm.start));
       if (_techRe.hasMatch(before) &&
           !_techRe.hasMatch(cand) &&
-          !RegExp(r'^E?\d+$', caseSensitive: false).hasMatch(cand)) {
+          !_eNumRe.hasMatch(cand)) {
         a.group = cand;
         s = s.substring(0, gm.start) + s.substring(gm.start + 1 + cand.length);
       }
@@ -384,8 +415,7 @@ Info analyze(String raw, {required bool file}) {
   s = s.replaceAllMapped(_midBracket, (m) {
     final c = (m[1] ?? m[2]!).trim();
     if (_isAd(c) || _crcRe.hasMatch(c)) return ' ';
-    if (RegExp(r'^\d{1,4}(?:v\d)?$').hasMatch(c) &&
-        !RegExp(r'^(?:19|20)\d\d$').hasMatch(c)) {
+    if (_numWithVRe.hasMatch(c) && !_fourDigitYearRe.hasMatch(c)) {
       return ' - $c ';
     }
     return ' \u0001 $c ';
@@ -395,7 +425,7 @@ Info analyze(String raw, {required bool file}) {
   // "剧场版 名侦探柯南 ..." — the keyword is only a flag; the rest is the title.
   if (_movieRe.hasMatch(s)) {
     a.movieKw = true;
-    s = s.replaceFirst(_movieRe, ' ').replaceAll(RegExp(r' {2,}'), ' ').trim();
+    s = s.replaceFirst(_movieRe, ' ').replaceAll(_multiSpaceRe, ' ').trim();
   }
 
   var cut = s.length;
@@ -408,7 +438,7 @@ Info analyze(String raw, {required bool file}) {
   if (m != null) {
     a.season = int.parse(m[1]!);
     final nums = <int>[int.parse(m[2]!)];
-    for (final t in RegExp(r'( ?[-~] ?)?E?(\d+)').allMatches(m[3] ?? '')) {
+    for (final t in _multiEpRe.allMatches(m[3] ?? '')) {
       final n = int.parse(t[2]!);
       if (t[1] != null && n > nums.last && n - nums.last <= 200) {
         nums.addAll([for (var i = nums.last + 1; i <= n; i++) i]);
@@ -475,7 +505,7 @@ Info analyze(String raw, {required bool file}) {
   final inTitle =
       em != null &&
       ((a.explicitEp && em.start < cut) ||
-          RegExp(r'^ [a-z]').hasMatch(s.substring(em.end)));
+          _leadLowerRe.hasMatch(s.substring(em.end)));
   if (em != null && !inTitle) {
     a.extraKw = true;
     mark(em.start);
@@ -535,15 +565,11 @@ Info analyze(String raw, {required bool file}) {
     }
     if (a.bare == null && a.year == null) {
       final region = s.substring(0, cut);
-      final nums = RegExp(r'(?<![A-Za-z0-9])(\d{1,3})(?:v\d)?(?![A-Za-z0-9])')
-          .allMatches(region)
-          .toList();
+      final nums = _bareRegionRe.allMatches(region).toList();
       if (nums.isNotEmpty) {
         final last = nums.last;
         final before = region.substring(0, last.start).trim();
-        final after = region
-            .substring(last.end)
-            .replaceAll(RegExp(r'[\s-]'), '');
+        final after = region.substring(last.end).replaceAll(_spaceDashRe, '');
         final n = int.parse(last[1]!);
         if (before.isEmpty && after.isEmpty) {
           a.bare = n;
@@ -567,19 +593,12 @@ Info analyze(String raw, {required bool file}) {
   }
 
   // ---- resolution / extra info (whole string, so bracketed [1080p] counts)
-  final rm = RegExp(
-    r'(?<![0-9])(\d{3,4})[pi](?![A-Za-z0-9])',
-    caseSensitive: false,
-  ).firstMatch(s);
+  final rm = _resPiRe.firstMatch(s);
   if (rm != null) {
     a.res = '${rm[1]}${rm[0]!.toLowerCase().endsWith('i') ? 'i' : 'p'}';
   } else {
-    final xm = RegExp(r'(?<![A-Za-z0-9])\d{3,4}x(\d{3,4})(?![A-Za-z0-9])')
-        .firstMatch(s);
-    final km = RegExp(
-      r'(?<![A-Za-z0-9])([248])k(?![A-Za-z0-9])',
-      caseSensitive: false,
-    ).firstMatch(s);
+    final xm = _resXRe.firstMatch(s);
+    final km = _resKRe.firstMatch(s);
     if (xm != null) {
       a.res = '${xm[1]}p';
     } else if (km != null) {
@@ -588,10 +607,7 @@ Info analyze(String raw, {required bool file}) {
   }
   // order: resolution, picture (DV/HDR), audio (Atmos/TrueHD/DTS-HD)
   final picture = <String>{}, audio = <String>{};
-  for (final t in RegExp(
-    r'(?<![A-Za-z0-9])(hdr10plus|hdr10|hdr|dovi|dv|hlg|imax|atmos|truehd|dts-?hd|dts-?x)\d*(?![A-Za-z0-9])',
-    caseSensitive: false,
-  ).allMatches(s)) {
+  for (final t in _hdrAudioRe.allMatches(s)) {
     final k = _canonExtra(t[1]!);
     (const {'Atmos', 'TrueHD', 'DTS-HD', 'DTS-X'}.contains(k) ? audio : picture)
         .add(k);
@@ -614,12 +630,17 @@ String _canonExtra(String t) => switch (t.toLowerCase()) {
   _ => 'DTS-HD',
 };
 
+final _stripBracketsRe = RegExp(r'[\[\]()]');
+final _anyWhitespaceRe = RegExp(r'\s+');
+final _edgePunctRe = RegExp(r'^[\s\-_.~,;:|/&+@]+|[\s\-_.~,;:|/&+@]+$');
+final _latinThreeWordRe = RegExp(r'[A-Za-z]{3,}');
+
 String _pickTitle(String region) {
   var t = region
       .replaceAll('\u0001', ' ')
-      .replaceAll(RegExp(r'[\[\]()]'), ' ')
-      .replaceAll(RegExp(r'\s+'), ' ');
-  t = t.replaceAll(RegExp(r'^[\s\-_.~,;:|/&+@]+|[\s\-_.~,;:|/&+@]+$'), '');
+      .replaceAll(_stripBracketsRe, ' ')
+      .replaceAll(_anyWhitespaceRe, ' ');
+  t = t.replaceAll(_edgePunctRe, '');
   // Bilingual: keep CJK block when a Latin block with a 3+ letter word is at one edge.
   final toks = t.split(' ').where((x) => x.isNotEmpty).toList();
   if (toks.length > 1 && toks.any(_cjk.hasMatch)) {
@@ -632,7 +653,7 @@ String _pickTitle(String region) {
     ];
     if (contiguous &&
         latin.isNotEmpty &&
-        latin.any((x) => RegExp(r'[A-Za-z]{3,}').hasMatch(x))) {
+        latin.any((x) => _latinThreeWordRe.hasMatch(x))) {
       t = toks.sublist(first, last + 1).join(' ');
     }
   }

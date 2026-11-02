@@ -169,4 +169,28 @@ class DriftHistoryStore implements HistoryStore {
           ..limit(1);
     return (await q.get()).isNotEmpty;
   }
+
+  @override
+  Future<Set<String>> areOrganized(
+    ConnectionId connection,
+    Iterable<String> paths,
+  ) async {
+    final list = paths.toList();
+    if (list.isEmpty) return const {};
+    final q =
+        db.selectOnly(db.historyRecords).join([
+            innerJoin(
+              db.batches,
+              db.batches.id.equalsExp(db.historyRecords.batchId),
+            ),
+          ])
+          ..addColumns([db.historyRecords.dst])
+          ..where(
+            db.batches.connectionId.equals(connection.value) &
+                db.historyRecords.dst.isIn(list) &
+                db.historyRecords.status.equals(OpStatus.done.name),
+          );
+    final rows = await q.get();
+    return {for (final r in rows) r.read(db.historyRecords.dst)!};
+  }
 }

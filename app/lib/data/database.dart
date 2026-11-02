@@ -33,6 +33,7 @@ class Batches extends Table {
 
 /// Write-ahead log: every op is inserted as `pending` before storage is touched.
 @DataClassName('HistoryRow')
+@TableIndex(name: 'history_records_dst_status', columns: {#dst, #status})
 class HistoryRecords extends Table {
   TextColumn get batchId => text().references(Batches, #id)();
   TextColumn get opId => text()();

@@ -92,4 +92,23 @@ class MemoryHistoryStore implements HistoryStore {
     }
     return false;
   }
+
+  @override
+  Future<Set<String>> areOrganized(
+    ConnectionId connection,
+    Iterable<String> paths,
+  ) async {
+    final target = paths.toSet();
+    if (target.isEmpty) return const {};
+    final out = <String>{};
+    for (final MapEntry(key: id, value: b) in _batches.entries) {
+      if (b.conn != connection) continue;
+      for (final r in _records[id]!) {
+        if (r.status == OpStatus.done && target.contains(r.op.dst)) {
+          out.add(r.op.dst);
+        }
+      }
+    }
+    return out;
+  }
 }
