@@ -118,16 +118,22 @@ class WebDAVBackend implements StorageBackend {
     dir: dir,
   );
 
-  // Namespace prefixes vary by server (D:, d:, none), so match them loosely.
+  // Namespace prefixes vary by server (D:, d:, lp1:, none), so match them loosely.
   static String _tag(String name) =>
-      '<(?:\\w+:)?$name\\b[^>]*>(.*?)</(?:\\w+:)?$name>';
+      '<(?:[\\w.-]+:)?$name\\b[^>]*>(.*?)</(?:[\\w.-]+:)?$name>';
   static final _responseRe = RegExp(_tag('response'), dotAll: true);
   static final _hrefRe = RegExp(_tag('href'), dotAll: true);
   static final _lengthRe = RegExp(_tag('getcontentlength'), dotAll: true);
   static final _modifiedRe = RegExp(_tag('getlastmodified'), dotAll: true);
-  static final _collectionRe = RegExp(r'<(?:\w+:)?collection\b');
+  static final _collectionRe = RegExp(r'<(?:[\w.-]+:)?collection\b');
 
   static String _unxml(String s) => s
+      .replaceAllMapped(
+        RegExp(r'&#x([0-9a-fA-F]+);|&#(\d+);'),
+        (m) => String.fromCharCode(
+          m[1] != null ? int.parse(m[1]!, radix: 16) : int.parse(m[2]!),
+        ),
+      )
       .replaceAll('&lt;', '<')
       .replaceAll('&gt;', '>')
       .replaceAll('&quot;', '"')

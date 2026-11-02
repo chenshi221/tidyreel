@@ -1013,5 +1013,79 @@ void main() {
         );
       },
     );
+
+    test('multi-episode range, duplicate subtitles, and custom vars', () async {
+      final p = await plan(
+        scanOf([
+          tvGroup([
+            ScanFile(
+              path: '$root/ep1-2.mkv',
+              name: 'ep1-2.mkv',
+              size: 1,
+              role: FileRole.video,
+              parsed: const ParsedName(
+                season: 1,
+                episodes: [1, 2],
+                extraInfo: '1080p.HDR',
+                lang: 'chs',
+                confidence: 0.9,
+              ),
+            ),
+            other('$root/ep1-2.chs.srt', FileRole.subtitle),
+            other('$root/ep1-2.sc.srt', FileRole.subtitle),
+            other('$root/poster.jpg', FileRole.sidecar),
+            other('$root/fanart.jpg', FileRole.sidecar),
+          ]),
+        ]),
+      );
+      expect(
+        opFor(p, '$root/ep1-2.mkv').dst,
+        '$root/Season 01/$name.S01E01-E02.mkv',
+      );
+      expect(
+        opFor(p, '$root/ep1-2.chs.srt').dst,
+        '$root/Season 01/$name.S01E01-E02.zh-Hans.srt',
+      );
+      expect(
+        opFor(p, '$root/ep1-2.sc.srt').dst,
+        '$root/Season 01/$name.S01E01-E02.zh-Hans.2.srt',
+      );
+      // Unrelated sidecars in a single-video folder are not collided into the video name.
+      expect(p.ops.where((o) => o.src.endsWith('.jpg')), isEmpty);
+      expect(p.conflicts, isEmpty);
+
+      // Custom template with {version}, {lang}, {ext} does not double-append extension.
+      final custom = await plan(
+        scanOf([
+          tvGroup([
+            ScanFile(
+              path: '$root/ep1.mkv',
+              name: 'ep1.mkv',
+              size: 1,
+              role: FileRole.video,
+              parsed: const ParsedName(
+                season: 1,
+                episodes: [1],
+                extraInfo: '1080p',
+                lang: 'chs',
+                confidence: 0.9,
+              ),
+            ),
+          ]),
+        ]),
+        options: const PlanOptions(
+          naming: NamingProfile(
+            tv: NamingOptions(
+              customTemplate:
+                  '{title}.S{season:02}E{episode:02}.{version}.{lang}.{ext}',
+            ),
+          ),
+        ),
+      );
+      expect(
+        opFor(custom, '$root/ep1.mkv').dst,
+        '$root/Season 01/异兽魔都.S01E01.1080p.zh-Hans.mkv',
+      );
+    });
   });
 }

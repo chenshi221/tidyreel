@@ -311,6 +311,12 @@ void main() {
     expect((await rig.tm.review(id)).scan.groups.single.files, hasLength(1));
   });
 
+  test('submitting a path with trailing slash normalizes it', () async {
+    final rig = Rig(MemoryStorageBackend(library()));
+    final id = await rig.submitReady(['/in/Good/']);
+    expect((await rig.tm.review(id)).scan.groups.single.rootDir, '/in/Good');
+  });
+
   test('cancel during import stops the pipeline', () async {
     final fs = GatedBackend(library())..gate = Completer();
     final rig = Rig(fs);

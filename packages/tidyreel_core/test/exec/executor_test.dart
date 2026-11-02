@@ -522,4 +522,87 @@ void main() {
       expect(f.files.where((p) => p.endsWith('/g')), hasLength(done));
     },
   );
+
+  test('single-file undo after in-place folder rename locates and restores the file', () async {
+    final f = MemoryStorageBackend({'/d/raw/01.mkv': 1, '/d/raw/02.mkv': 2});
+    final ops = [
+      mkdir('/d/raw/Season 01'),
+      reloc('/d/raw/01.mkv', '/d/raw/Season 01/Show.S01E01.mkv'),
+      reloc('/d/raw/02.mkv', '/d/raw/Season 01/Show.S01E02.mkv'),
+      reloc('/d/raw', '/d/Show (2020)', phase: ExecPhase.folders),
+    ];
+    final ex = executor(history);
+    await run(ex.execute(task, conn, RenamePlan(ops: ops), f));
+    final b = await theBatch(history);
+    expect(
+      await history.isOrganized(
+        conn,
+        '/d/Show (2020)/Season 01/Show.S01E01.mkv',
+      ),
+      isTrue,
+    );
+    expect(
+      await history.areOrganized(conn, [
+        '/d/Show (2020)/Season 01/Show.S01E01.mkv',
+        '/d/Show (2020)/Season 01/Show.S01E02.mkv',
+      ]),
+      {
+        '/d/Show (2020)/Season 01/Show.S01E01.mkv',
+        '/d/Show (2020)/Season 01/Show.S01E02.mkv',
+      },
+    );
+
+    // Undo only the first episode while the folder stays renamed.
+    await run(ex.undo(b, f, only: {ops[1].id}));
+    expect(f.files, [
+      '/d/Show (2020)/01.mkv',
+      '/d/Show (2020)/Season 01/Show.S01E02.mkv',
+    ]);
+    final recs = {for (final r in await history.records(b)) r.op.id: r.status};
+    expect(recs[ops[1].id], OpStatus.undone);
+    expect(recs[ops[2].id], OpStatus.done);
+  });
+
+  test('same-directory colliding renames succeed via tmp names', () async {
+    final f = MemoryStorageBackend({'/d/01.mkv': 10, '/d/02.mkv': 20});
+    final ops = [
+      reloc('/d/01.mkv', '/d/02.mkv'),
+      reloc('/d/02.mkv', '/d/03.mkv'),
+    ];
+    await run(executor(history).execute(task, conn, RenamePlan(ops: ops), f));
+    expect(f.files, ['/d/02.mkv', '/d/03.mkv']);
+    final b = await theBatch(history);
+    expect(statusCounts(await history.records(b)), {OpStatus.done: 2});
+  });
+
+  test(
+    'failed folder rename blocks cleanup delete targeting post-rename path',
+    () async {
+      final f = MemoryStorageBackend({'/d/raw/a.mkv': 1, '/d/raw/ad.txt': 1});
+      final ops = [
+        reloc('/d/raw/a.mkv', '/d/raw/Show.S01E01.mkv'),
+        reloc('/d/raw', '/d/Show (2020)', phase: ExecPhase.folders),
+        RenameOp(
+          id: const OpId('del-1'),
+          kind: OpKind.delete,
+          phase: ExecPhase.cleanup,
+          src: '/d/Show (2020)/ad.txt',
+          dst: '',
+        ),
+      ];
+      final be = HookBackend(f, (m, a) {
+        if (m == 'rename' && a.first == '/d/raw') {
+          throw const StorageException(StorageErrorCode.busy, 'locked');
+        }
+      });
+      await run(
+        executor(history).execute(task, conn, RenamePlan(ops: ops), be),
+      );
+      final recs = {
+        for (final r in await history.records(await theBatch(history)))
+          r.op.id: r.status,
+      };
+      expect(recs[const OpId('del-1')], OpStatus.skipped);
+    },
+  );
 }

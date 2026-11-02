@@ -252,8 +252,8 @@ final _movieRe = RegExp(
 final _yearRe = RegExp(r'(?<![A-Za-z0-9㐀-鿿])((?:19|20)\d\d)(?![A-Za-z0-9])');
 final _cjk = RegExp(r'[぀-ヿ㐀-鿿가-힯]');
 final _langRe = RegExp(
-  r'(?<![A-Za-z0-9])(zh[- ]?(?:cn|tw|hans|hant|hk)|chs|cht|chi|zho|jpsc|jptc|sc|tc|gb|big5|english|eng|en|jpn|jap|jp|ja|kor|ko|zh|cn|chinese|'
-  r'简体中文|繁體中文|繁体中文|简体|繁体|繁體|简中|繁中|简日|繁日|简繁|简英|繁英|中英|中文|双语|雙語|日语|日文|英文|英语)(?![A-Za-z0-9])',
+  r'(?<![A-Za-z0-9])(zh[- ]?(?:cn|tw|hans|hant|hk|sg)|chs|cht|zhs|zht|chi|zho|jpsc|jptc|sc|tc|gbk|gb2312|gb|big5|english|eng|en|japanese|jpn|jap|jp|ja|korean|kor|ko|zh|cn|chinese|'
+  r'简体中文|繁體中文|繁体中文|简体|繁体|繁體|简中|繁中|简日|繁日|简繁|简英|繁英|中英|中文|双语|雙語|日语|日文|韩语|韩文|英文|英语)(?![A-Za-z0-9])',
   caseSensitive: false,
 );
 

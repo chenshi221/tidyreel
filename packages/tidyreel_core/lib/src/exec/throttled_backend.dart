@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:path/path.dart' as p;
+
 import '../model/scan.dart';
 import '../storage/alist_backend.dart';
 import '../storage/storage_backend.dart';
@@ -73,7 +75,7 @@ class ThrottledBackend implements StorageBackend {
       return _call(() => inner.renameMany(dir, names));
     }
     for (final e in names.entries) {
-      await rename('$dir/${e.key}', e.value);
+      await rename(p.posix.join(dir, e.key), e.value);
     }
   }
 

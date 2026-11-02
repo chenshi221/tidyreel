@@ -44,8 +44,10 @@ class LocalBackend implements StorageBackend {
     } on FileSystemException catch (e) {
       final code = switch (e.osError?.errorCode) {
         2 || 3 => StorageErrorCode.notFound, // ENOENT / ERROR_PATH_NOT_FOUND
-        17 || 66 || 183 => StorageErrorCode.alreadyExists,
+        17 || 39 || 66 || 183 => StorageErrorCode.alreadyExists,
         16 || 32 => StorageErrorCode.busy, // EBUSY / ERROR_SHARING_VIOLATION
+        5 when Platform.isWindows =>
+          StorageErrorCode.busy, // ERROR_ACCESS_DENIED (locked file)
         _ => StorageErrorCode.other,
       };
       throw StorageException(code, '$path: ${e.message}');

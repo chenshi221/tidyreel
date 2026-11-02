@@ -21,11 +21,14 @@ String compileTemplate(NamingOptions options, MediaKind kind) {
     (TitleLanguage.englishFirst, false) => '{en_title}',
   };
   final episodePiece = switch (options.episodeStyle) {
-    EpisodeStyle.upperPadded => r'S{season:02}E{episode:02}',
-    EpisodeStyle.lowerPadded => r's{season:02}e{episode:02}',
-    EpisodeStyle.lowerShort => r's{season}e{episode}',
-    EpisodeStyle.cross => r'{season}x{episode:02}',
-    EpisodeStyle.lowerDotted => r's{season:02}.e{episode:02}',
+    EpisodeStyle.upperPadded =>
+      r'S{season:02}E{episode:02}[-E{episode_end:02}]',
+    EpisodeStyle.lowerPadded =>
+      r's{season:02}e{episode:02}[-e{episode_end:02}]',
+    EpisodeStyle.lowerShort => r's{season}e{episode}[-e{episode_end}]',
+    EpisodeStyle.cross => r'{season}x{episode:02}[-{episode_end:02}]',
+    EpisodeStyle.lowerDotted =>
+      r's{season:02}.e{episode:02}[-e{episode_end:02}]',
   };
 
   final pieces = <(String, bool)>[]; // (text, always present)

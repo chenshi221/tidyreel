@@ -275,6 +275,24 @@ void main() {
       );
       expect(mock.tree.nodes['/b'], 2);
     });
+
+    test(
+      'HTML 200 response from reverse proxy is StorageErrorCode.other',
+      () async {
+        final server = await MockServer.start(
+          (_) => Response.ok(
+            '<html><body>login gateway</body></html>',
+            headers: {'content-type': 'text/html'},
+          ),
+        );
+        addTearDown(server.close);
+        final be = createBackend(
+          cfg(ConnectionType.alist, server.url),
+          const Credentials(token: 'tok'),
+        );
+        await expectLater(be.list('/'), throwsStorage(StorageErrorCode.other));
+      },
+    );
   });
 
   group('WebDAV', () {
@@ -339,6 +357,35 @@ void main() {
         ('/sub/100% Love.mkv', '100% Love.mkv', false, 42),
         ('/sub/nested', 'nested', true, 0),
       ]);
+    });
+
+    test('parses custom XML namespace prefixes and numeric entities', () async {
+      final server = await MockServer.start((Request r) {
+        if (r.method == 'PROPFIND') {
+          return Response(
+            207,
+            body:
+                '<?xml version="1.0"?><ns-1:multistatus xmlns:ns-1="DAV:">'
+                '<ns-1:response><ns-1:href>/dav/sub/</ns-1:href><ns-1:propstat><ns-1:prop>'
+                '<ns-1:resourcetype><ns-1:collection/></ns-1:resourcetype>'
+                '</ns-1:prop></ns-1:propstat></ns-1:response>'
+                '<ns-1:response><ns-1:href>/dav/sub/Tom%20&#38;%20Jerry.mkv</ns-1:href>'
+                '<ns-1:propstat><ns-1:prop><ns-1:resourcetype/>'
+                '<ns-1:getcontentlength>10</ns-1:getcontentlength>'
+                '</ns-1:prop></ns-1:propstat></ns-1:response>'
+                '</ns-1:multistatus>',
+            headers: {'content-type': 'application/xml; charset=utf-8'},
+          );
+        }
+        return Response.notFound('');
+      });
+      addTearDown(server.close);
+      final be = createBackend(
+        cfg(ConnectionType.webdav, '${server.url}/dav'),
+        const Credentials(password: 'pw'),
+      );
+      final entries = await be.list('/sub');
+      expect(entries.single.name, 'Tom & Jerry.mkv');
     });
   });
 }

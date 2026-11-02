@@ -67,6 +67,7 @@ class _PlanBuilder {
   final Set<String> existing;
 
   final mkdirs = <String, GroupId?>{};
+  final selectedMkdirs = <String>{};
   final fileOps = <RenameOp>[];
   final folderOps = <RenameOp>[];
 
@@ -121,6 +122,7 @@ class _PlanBuilder {
               src: '',
               dst: e.key,
               group: e.value,
+              selected: selectedMkdirs.contains(e.key),
             ),
         ]..sort((a, b) {
           final da = '/'.allMatches(a.dst).length;
@@ -306,10 +308,11 @@ class _PlanBuilder {
         (naming.episodeTitle ||
             (naming.customTemplate?.contains('episode_title') ?? false));
     final titles = wantTitles
-        ? await _episodeTitles(match.tmdbId, epGroup, items)
+        ? await _episodeTitles(match.tmdbId, epGroup, d.strategy, items)
         : const <EpisodeRef, String>{};
 
     // --- folders
+    final groupSelected = items.any((it) => it.selected);
     final titleVars = _titleVars(match, naming, g.anchorTitle);
     final folderVars = {
       ...titleVars,
@@ -336,12 +339,13 @@ class _PlanBuilder {
               src: g.rootDir,
               dst: finalBase,
               group: g.id,
+              selected: groupSelected,
             ),
           );
         }
       } else {
         curBase = joinPath(g.rootDir, folderName);
-        _mkdir(curBase, g.id);
+        _mkdir(curBase, g.id, selected: groupSelected);
       }
     } else {
       final lib = opts.libraryRoot;
@@ -352,10 +356,10 @@ class _PlanBuilder {
       var base = lib == '/' ? '' : lib.replaceFirst(RegExp(r'/+$'), '');
       if (typeDir.isNotEmpty) {
         base = '$base/${sanitizeName(typeDir)}';
-        _mkdir(base, g.id);
+        _mkdir(base, g.id, selected: groupSelected);
       }
       curBase = '$base/$folderName';
-      _mkdir(curBase, g.id);
+      _mkdir(curBase, g.id, selected: groupSelected);
     }
 
     // --- name every video
@@ -374,21 +378,32 @@ class _PlanBuilder {
         continue;
       }
       final p = v.parsed;
+      final extraInfo = p?.extraInfo?.replaceAll(
+        RegExp(r'[._ ]+'),
+        naming.separator,
+      );
       final vars = <String, Object?>{
         ...titleVars,
         'year': match.year,
         'resolution': p?.resolution,
         'group': p?.group,
-        'extra_info': p?.extraInfo?.replaceAll(
-          RegExp(r'[._ ]+'),
-          naming.separator,
-        ),
+        'extra_info': extraInfo,
+        'version': extraInfo,
+        'lang': _parsedLang(v),
         'ext': ext,
       };
       if (isTv) {
         final r = it.ref!;
+        final span =
+            !it.manual &&
+                p != null &&
+                p.episodes.length > 1 &&
+                p.episodes.last > p.episodes.first
+            ? p.episodes.last - p.episodes.first
+            : 0;
         vars['season'] = r.season;
         vars['episode'] = r.episode;
+        vars['episode_end'] = span > 0 ? r.episode + span : null;
         vars['episode_title'] = titles[r];
         if (naming.showYear == ShowYearSource.seasonAir) {
           vars['year'] =
@@ -414,15 +429,20 @@ class _PlanBuilder {
       }
       it.newBase = sanitizeName(renderTemplate(template, vars));
     }
-    if (isTv) _reuseSeasonFolders(g, items, curBase);
+    if (isTv && opts.mode == OrganizeMode.inPlace) {
+      _reuseSeasonFolders(g, items, curBase);
+    }
     for (final it in items) {
-      _mkdir(it.dstDir, g.id);
+      _mkdir(it.dstDir, g.id, selected: it.selected);
       final ext = extOf(it.file.name);
+      final hasExt =
+          ext.isNotEmpty &&
+          it.newBase.toLowerCase().endsWith('.${ext.toLowerCase()}');
       _emit(
         it,
         it.extra
             ? it.file.name
-            : ext.isEmpty
+            : (ext.isEmpty || hasExt)
             ? it.newBase
             : '${it.newBase}.$ext',
         g.id,
@@ -431,10 +451,13 @@ class _PlanBuilder {
 
     // --- subtitles and sidecars follow their video
     final byPath = {for (final it in items) it.file.path: it};
+    final subTargets = <String, int>{};
     for (final f in g.files) {
       if (f.role != FileRole.subtitle && f.role != FileRole.sidecar) continue;
       var m = matchVideo(f, [for (final it in items) it.file]);
-      if (m == null && items.length == 1) m = FollowMatch(items.first.file, '');
+      if (m == null && items.length == 1 && f.role == FileRole.subtitle) {
+        m = FollowMatch(items.first.file, '');
+      }
       final it = m == null ? null : byPath[m.video.path];
       if (m == null || it == null) continue;
       final ext = extOf(f.name);
@@ -443,7 +466,11 @@ class _PlanBuilder {
         name = f.name;
       } else if (f.role == FileRole.subtitle) {
         final lang = langFromRemainder(m.remainder) ?? _parsedLang(f);
-        name = '${it.newBase}${lang == null ? '' : '.$lang'}.$ext';
+        final prefix = '${it.newBase}${lang == null ? '' : '.$lang'}';
+        final key = '${it.dstDir}/$prefix.$ext'.toLowerCase();
+        final n = (subTargets[key] ?? 0) + 1;
+        subTargets[key] = n;
+        name = n == 1 ? '$prefix.$ext' : '$prefix.$n.$ext';
       } else {
         name = '${it.newBase}${m.remainder}.$ext';
       }
@@ -474,6 +501,7 @@ class _PlanBuilder {
       final src = dirs.single;
       final inside = '$src/';
       final ok =
+          dirOf(src) == curBase &&
           src.startsWith('${g.rootDir}/') &&
           src != season &&
           !taken.contains(src) &&
@@ -486,6 +514,9 @@ class _PlanBuilder {
                 f.role != FileRole.video ||
                 dirOf(f.path) != src ||
                 its.any((it) => it.file.path == f.path),
+          ) &&
+          !scan.unassigned.any(
+            (f) => f.role != FileRole.junk && f.path.startsWith(inside),
           ) &&
           !scan.groups.any(
             (o) =>
@@ -506,6 +537,7 @@ class _PlanBuilder {
           src: src,
           dst: season,
           group: g.id,
+          selected: its.any((it) => it.selected),
         ),
       );
     }
@@ -532,8 +564,11 @@ class _PlanBuilder {
     );
   }
 
-  void _mkdir(String dir, GroupId gid) {
-    if (!knownDirs.contains(dir)) mkdirs.putIfAbsent(dir, () => gid);
+  void _mkdir(String dir, GroupId gid, {bool selected = true}) {
+    if (!knownDirs.contains(dir)) {
+      mkdirs.putIfAbsent(dir, () => gid);
+      if (selected) selectedMkdirs.add(dir);
+    }
   }
 
   /// A group "owns" its folder when nothing else lives in it and its name is about the
@@ -641,6 +676,7 @@ class _PlanBuilder {
   Future<Map<EpisodeRef, String>> _episodeTitles(
     int id,
     EpisodeGroup? epGroup,
+    SeasonStrategy strategy,
     List<_Item> items,
   ) async {
     final seasonCache = <int, Map<int, String?>>{};
@@ -663,10 +699,16 @@ class _PlanBuilder {
       var orig = r;
       if (epGroup != null) {
         final s = epGroup.seasons.where((s) => s.order == r.season).firstOrNull;
-        if (s == null || r.episode < 1 || r.episode > s.episodes.length) {
-          continue;
+        if (s == null) continue;
+        var idx = r.episode - 1;
+        if (strategy == SeasonStrategy.splitKeepEpisode) {
+          for (final prev in epGroup.seasons) {
+            if (prev.order >= r.season) break;
+            idx -= prev.episodes.length;
+          }
         }
-        orig = s.episodes[r.episode - 1];
+        if (idx < 0 || idx >= s.episodes.length) continue;
+        orig = s.episodes[idx];
       }
       final t = await titleOf(orig.season, orig.episode);
       if (t != null && t.isNotEmpty) out[r] = t;
@@ -677,7 +719,7 @@ class _PlanBuilder {
   List<PlanConflict> _conflicts(List<RenameOp> ops) {
     final moves = [
       for (final o in ops)
-        if (o.kind == OpKind.relocate) o,
+        if (o.kind == OpKind.relocate && o.selected) o,
     ];
     final sources = {for (final o in moves) o.src};
     final byDst = <String, List<RenameOp>>{};

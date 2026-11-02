@@ -117,26 +117,62 @@ class DefaultExecutor implements Executor {
     });
   }
 
-  @override
-  Stream<ExecProgress> resume(BatchId batch, StorageBackend backend) =>
-      _stream((emit, cancelled) async {
-        final records = await history.records(batch);
-        await _forward(
-          [
-            for (final r in records)
-              if (r.status == OpStatus.pending) r.op,
-          ],
-          batch,
-          _wrap(backend),
-          emit,
-          cancelled,
-          resuming: true,
-          failed: [
-            for (final r in records)
-              if (r.status == OpStatus.failed) r.op,
-          ],
+  static String _mapPath(String path, Iterable<RenameOp> doneFolders) {
+    if (path.isEmpty) return path;
+    var cur = path;
+    for (final f in doneFolders) {
+      if (cur == f.src) {
+        cur = f.dst;
+      } else if (cur.startsWith('${f.src}/')) {
+        cur = '${f.dst}${cur.substring(f.src.length)}';
+      }
+    }
+    return cur;
+  }
+
+  static RenameOp _mapOp(RenameOp op, Iterable<RenameOp> doneFolders) =>
+      doneFolders.isEmpty
+      ? op
+      : RenameOp(
+          id: op.id,
+          kind: op.kind,
+          phase: op.phase,
+          group: op.group,
+          src: _mapPath(op.src, doneFolders),
+          dst: _mapPath(op.dst, doneFolders),
+          selected: op.selected,
+          warning: op.warning,
         );
-      });
+
+  @override
+  Stream<ExecProgress> resume(BatchId batch, StorageBackend backend) => _stream(
+    (emit, cancelled) async {
+      final records = await history.records(batch);
+      final doneFolders = [
+        for (final r in records)
+          if (r.status == OpStatus.done &&
+              r.op.phase == ExecPhase.folders &&
+              r.op.kind == OpKind.relocate)
+            r.op,
+      ];
+      await _forward(
+        [
+          for (final r in records)
+            if (r.status == OpStatus.pending)
+              r.op.phase == ExecPhase.files ? _mapOp(r.op, doneFolders) : r.op,
+        ],
+        batch,
+        _wrap(backend),
+        emit,
+        cancelled,
+        resuming: true,
+        failed: [
+          for (final r in records)
+            if (r.status == OpStatus.failed) r.op,
+        ],
+      );
+    },
+  );
 
   @override
   Stream<ExecProgress> undo(
@@ -208,10 +244,19 @@ class DefaultExecutor implements Executor {
       if (cancelled()) return;
       await undoOne(op);
     }
+    final activeFolders = [
+      for (final r in await history.records(batch))
+        if (r.status == OpStatus.done &&
+            r.op.phase == ExecPhase.folders &&
+            r.op.kind == OpKind.relocate)
+          r.op,
+    ];
+    final mappedFiles = [for (final o in files) _mapOp(o, activeFolders)];
+    final mappedMkdirs = [for (final o in mkdirs) _mapOp(o, activeFolders)];
 
     // One fresh listing per folder stands in for two exists() per file.
     final dirs = {
-      for (final o in files)
+      for (final o in mappedFiles)
         if (o.kind == OpKind.relocate) ...[
           p.posix.dirname(o.src),
           p.posix.dirname(o.dst),
@@ -229,7 +274,7 @@ class DefaultExecutor implements Executor {
     final inverse = <RenameOp>[];
     final byId = <OpId, RenameOp>{};
     final rest = <RenameOp>[];
-    for (final o in files) {
+    for (final o in mappedFiles) {
       if (o.kind != OpKind.relocate || o.src == o.dst) {
         rest.add(o);
       } else if (present.contains(o.src)) {
@@ -268,7 +313,7 @@ class DefaultExecutor implements Executor {
     await Future.wait([
       for (var i = 0; i < concurrency && i < queue.length; i++) worker(),
     ]);
-    for (final op in mkdirs) {
+    for (final op in mappedMkdirs) {
       if (cancelled()) return;
       await undoOne(op);
     }
@@ -418,15 +463,28 @@ class DefaultExecutor implements Executor {
         final n = p.posix.basename(o.dst);
         targets[n] = (targets[n] ?? 0) + 1;
       }
+      final freeing = {
+        for (final o in ops)
+          if (p.posix.basename(o.src) != p.posix.basename(o.dst) ||
+              p.posix.dirname(o.dst) != dir)
+            p.posix.basename(o.src),
+      };
       // A name already there (or wanted twice) needs the tmp-name dance.
       final batch = <RenameOp>[];
+      final viaTmp = <RenameOp>[];
       for (final o in ops) {
         final n = p.posix.basename(o.dst);
         final renames = p.posix.basename(o.src) != n;
-        if (renames && (taken.contains(n) || targets[n]! > 1)) {
-          rest.add(o);
-        } else {
+        if (!renames) {
           batch.add(o);
+        } else if (targets[n]! == 1 && !taken.contains(n)) {
+          batch.add(o);
+        } else if (targets[n]! == 1 &&
+            p.posix.dirname(o.dst) == dir &&
+            freeing.contains(n)) {
+          viaTmp.add(o);
+        } else {
+          rest.add(o);
         }
       }
       final retry = <RenameOp>[], fresh = <RenameOp>[];
@@ -434,12 +492,15 @@ class DefaultExecutor implements Executor {
         for (final o in batch)
           if (p.posix.basename(o.src) != p.posix.basename(o.dst))
             p.posix.basename(o.src): p.posix.basename(o.dst),
+        for (final o in viaTmp)
+          p.posix.basename(o.src): '.tidyreel-tmp-${o.id.value}',
       };
       try {
         if (renames.isNotEmpty) await be.renameMany(dir, renames);
       } on Object {
-        retry.addAll(batch);
+        retry.addAll([...batch, ...viaTmp]);
         batch.clear();
+        viaTmp.clear();
       }
       final byDstDir = <String, List<RenameOp>>{};
       for (final o in batch) {
@@ -456,16 +517,37 @@ class DefaultExecutor implements Executor {
           batch.removeWhere(moving.contains);
           // Put the names back so each file can fail (or work) on its own.
           try {
+            final nowInDir = {
+              for (final e in await be.list(dir, refresh: true)) e.name,
+            };
             final back = {
               for (final o in moving)
-                if (renames.containsKey(p.posix.basename(o.src)))
+                if (renames.containsKey(p.posix.basename(o.src)) &&
+                    nowInDir.contains(p.posix.basename(o.dst)))
                   p.posix.basename(o.dst): p.posix.basename(o.src),
             };
             if (back.isNotEmpty) await be.renameMany(dir, back);
-            fresh.addAll(moving);
+            if (moving.every(
+              (o) => nowInDir.contains(p.posix.basename(o.dst)),
+            )) {
+              fresh.addAll(moving);
+            } else {
+              retry.addAll(moving);
+            }
           } on Object {
             retry.addAll(moving);
           }
+        }
+      }
+      if (viaTmp.isNotEmpty) {
+        try {
+          await be.renameMany(dir, {
+            for (final o in viaTmp)
+              '.tidyreel-tmp-${o.id.value}': p.posix.basename(o.dst),
+          });
+          batch.addAll(viaTmp);
+        } on Object {
+          retry.addAll(viaTmp);
         }
       }
       for (final o in batch) {
@@ -485,9 +567,11 @@ class DefaultExecutor implements Executor {
       return op.kind != OpKind.delete &&
           (op.dst == f.dst || op.dst.startsWith('${f.dst}/'));
     }
-    return f.kind == OpKind.relocate &&
-        op.src.isNotEmpty &&
-        op.src.startsWith('${f.src}/');
+    if (f.kind != OpKind.relocate || op.src.isEmpty) return false;
+    if (op.src.startsWith('${f.src}/')) return true;
+    return f.phase == ExecPhase.folders &&
+        f.dst.isNotEmpty &&
+        op.src.startsWith('${f.dst}/');
   }
 
   Future<void> _apply(
@@ -523,19 +607,30 @@ class DefaultExecutor implements Executor {
     final dstDir = p.posix.dirname(dst);
     final name = p.posix.basename(dst);
     if (src == dst) return;
-    if (srcDir == dstDir) return be.rename(src, name);
-
     final tmp = '.tidyreel-tmp-${id.value}';
+    if (srcDir == dstDir) {
+      if (resuming && !await be.exists(src)) {
+        final tmpPath = p.posix.join(srcDir, tmp);
+        if (await be.exists(tmpPath)) {
+          return be.rename(tmpPath, name);
+        }
+      }
+      return be.rename(src, name);
+    }
+
     if (resuming && !await be.exists(src)) {
       // Crashed between steps: continue from wherever the file got to.
-      if (await be.exists('$dstDir/$tmp')) {
-        return be.rename('$dstDir/$tmp', name);
+      final dstTmp = p.posix.join(dstDir, tmp);
+      final srcTmp = p.posix.join(srcDir, tmp);
+      final srcNamed = p.posix.join(srcDir, name);
+      if (await be.exists(dstTmp)) {
+        return be.rename(dstTmp, name);
       }
-      if (await be.exists('$srcDir/$tmp')) {
+      if (await be.exists(srcTmp)) {
         await be.move(srcDir, dstDir, [tmp]);
-        return be.rename('$dstDir/$tmp', name);
+        return be.rename(dstTmp, name);
       }
-      if (await be.exists('$srcDir/$name')) {
+      if (await be.exists(srcNamed)) {
         await be.mkdirs(dstDir);
         return be.move(srcDir, dstDir, [name]);
       }

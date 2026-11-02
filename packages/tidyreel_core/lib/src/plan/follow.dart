@@ -58,16 +58,16 @@ FollowMatch? matchVideo(ScanFile f, Iterable<ScanFile> videos) {
 }
 
 const _zhHans = {
-  'chs', 'sc', 'gb', 'gbk', 'gb2312', '简体', '简中', '简', '简体中文', '简日',
-  '简英', 'zh-cn', 'zh-hans', 'zh-sg', 'zhs', 'zh', 'chi', 'zho', 'chinese',
-  '中文', //
+  'chs', 'sc', 'gb', 'gbk', 'gb2312', 'jpsc', 'cn', '简体', '简中', '简', '简体中文',
+  '简日', '简英', '简繁', '中英', '双语', '雙語', 'zh-cn', 'zh-hans', 'zh-sg', 'zhs',
+  'zh', 'chi', 'zho', 'chinese', '中文', //
 };
 const _zhHant = {
-  'cht', 'tc', 'big5', '繁体', '繁體', '繁中', '繁', '繁体中文', '繁日', '繁英',
+  'cht', 'tc', 'big5', 'jptc', '繁体', '繁體', '繁中', '繁', '繁体中文', '繁日', '繁英',
   'zh-tw', 'zh-hk', 'zh-hant', 'zht', //
 };
 const _en = {'eng', 'en', 'english', 'en-us', 'en-gb', '英文', '英语'};
-const _ja = {'jpn', 'ja', 'jp', 'japanese', '日文', '日语'};
+const _ja = {'jpn', 'jap', 'ja', 'jp', 'japanese', '日文', '日语'};
 const _ko = {'kor', 'ko', 'korean', '韩文', '韩语'};
 
 /// Maps a language tag as found in file names to zh-Hans / zh-Hant / en / ja / ko.

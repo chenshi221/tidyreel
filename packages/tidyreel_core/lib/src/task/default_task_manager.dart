@@ -24,6 +24,7 @@ class _Task {
   Map<GroupId, GroupDecision> decisions;
   RenamePlan? plan;
   bool cancelled = false;
+  bool busy = false;
   StreamSubscription<ExecProgress>? exec;
   Completer<void>? execDone;
   Future<void> persistQueue = Future.value();
@@ -149,6 +150,10 @@ class DefaultTaskManager implements TaskManager {
     OrganizeMode mode,
   ) async {
     await _ready;
+    final cleanPaths = [
+      for (final raw in paths)
+        raw == '/' ? '/' : raw.replaceFirst(RegExp(r'/+$'), ''),
+    ];
     final id = TaskId(
       'T${++_seq}-${_rng.nextInt(1 << 24).toRadixString(16).padLeft(6, '0')}',
     );
@@ -156,7 +161,7 @@ class DefaultTaskManager implements TaskManager {
       TaskSummary(
         id: id,
         connection: connection,
-        paths: List.unmodifiable(paths),
+        paths: List.unmodifiable(cleanPaths),
         mode: mode,
         stage: TaskStage.importing,
         message: '正在导入文件',
@@ -211,33 +216,39 @@ class DefaultTaskManager implements TaskManager {
   Future<void> run(TaskId id, {bool onlyConfident = false}) async {
     final t = await _get(id);
     _requireStage(t, TaskStage.awaitingReview);
-    var plan = t.plan ??= await _plan(t);
-    if (onlyConfident) plan = _confidentOnly(t, plan);
-    if (!plan.canExecute) throw StateError('存在冲突，无法执行');
-    // Never report "整理完成" for a run that would touch nothing.
-    if (!plan.ops.any((o) => o.selected)) {
-      throw StateError('没有可执行的操作：请先勾选要整理的作品');
+    if (t.busy) throw StateError('任务正在处理中');
+    t.busy = true;
+    try {
+      var plan = t.plan ??= await _plan(t);
+      if (onlyConfident) plan = _confidentOnly(t, plan);
+      if (!plan.canExecute) throw StateError('存在冲突，无法执行');
+      // Never report "整理完成" for a run that would touch nothing.
+      if (!plan.ops.any((o) => o.selected)) {
+        throw StateError('没有可执行的操作：请先勾选要整理的作品');
+      }
+      await _set(
+        t,
+        _with(
+          t.summary,
+          stage: TaskStage.renamingFiles,
+          message: '正在重命名文件',
+          progress: () => 0,
+        ),
+      );
+      if (t.cancelled) return;
+      await _drive(
+        t,
+        executor.execute(
+          id,
+          t.summary.connection,
+          plan,
+          backendFor(t.summary.connection),
+        ),
+        null,
+      );
+    } finally {
+      t.busy = false;
     }
-    await _set(
-      t,
-      _with(
-        t.summary,
-        stage: TaskStage.renamingFiles,
-        message: '正在重命名文件',
-        progress: () => 0,
-      ),
-    );
-    if (t.cancelled) return;
-    await _drive(
-      t,
-      executor.execute(
-        id,
-        t.summary.connection,
-        plan,
-        backendFor(t.summary.connection),
-      ),
-      null,
-    );
   }
 
   @override
@@ -247,34 +258,41 @@ class DefaultTaskManager implements TaskManager {
     if (batch == null || t.summary.stage != TaskStage.partiallyFailed) {
       throw StateError('任务没有失败的操作');
     }
-    for (final r in await history.records(batch)) {
-      if (r.status == OpStatus.failed || r.status == OpStatus.skipped) {
-        await history.mark(batch, r.op.id, OpStatus.pending);
+    if (t.busy) throw StateError('任务正在处理中');
+    t.busy = true;
+    try {
+      for (final r in await history.records(batch)) {
+        if (r.status == OpStatus.failed || r.status == OpStatus.skipped) {
+          await history.mark(batch, r.op.id, OpStatus.pending);
+        }
       }
+      t.cancelled = false;
+      await _set(
+        t,
+        _with(
+          t.summary,
+          stage: TaskStage.renamingFiles,
+          message: '正在重试失败的操作',
+          progress: () => 0,
+        ),
+        force: true,
+      );
+      await _drive(
+        t,
+        executor.resume(batch, backendFor(t.summary.connection)),
+        batch,
+      );
+    } finally {
+      t.busy = false;
     }
-    t.cancelled = false;
-    await _set(
-      t,
-      _with(
-        t.summary,
-        stage: TaskStage.renamingFiles,
-        message: '正在重试失败的操作',
-        progress: () => 0,
-      ),
-      force: true,
-    );
-    await _drive(
-      t,
-      executor.resume(batch, backendFor(t.summary.connection)),
-      batch,
-    );
   }
 
   @override
   Future<void> delete(TaskId id) async {
     final t = await _get(id);
-    if (t.summary.stage.isActive &&
-        t.summary.stage != TaskStage.awaitingReview) {
+    if (t.busy ||
+        (t.summary.stage.isActive &&
+            t.summary.stage != TaskStage.awaitingReview)) {
       throw StateError('任务正在进行，先取消再删除');
     }
     _tasks.remove(id);
@@ -314,33 +332,39 @@ class DefaultTaskManager implements TaskManager {
     if (batch == null || t.summary.stage.isActive) {
       throw StateError('任务没有可撤销的操作');
     }
-    var skipped = 0;
-    await for (final e in executor.undo(
-      batch,
-      backendFor(t.summary.connection),
-      only: only,
-    )) {
-      if (e.error != null) skipped++;
-      _emit(
+    if (t.busy) throw StateError('任务正在撤销中');
+    t.busy = true;
+    try {
+      var skipped = 0;
+      await for (final e in executor.undo(
+        batch,
+        backendFor(t.summary.connection),
+        only: only,
+      )) {
+        if (e.error != null) skipped++;
+        _emit(
+          t,
+          _with(
+            t.summary,
+            message: '正在撤销（${e.done}/${e.total}）',
+            progress: () => e.total == 0 ? 1 : e.done / e.total,
+          ),
+          force: true,
+        );
+      }
+      final remaining = (await history.records(batch))
+          .any((r) => r.status == OpStatus.done);
+      final note = skipped == 0 ? '' : '，$skipped 项已跳过';
+      await _set(
         t,
-        _with(
-          t.summary,
-          message: '正在撤销（${e.done}/${e.total}）',
-          progress: () => e.total == 0 ? 1 : e.done / e.total,
-        ),
+        remaining
+            ? _with(t.summary, message: '已撤销部分操作$note')
+            : _with(t.summary, stage: TaskStage.undone, message: '已撤销$note'),
         force: true,
       );
+    } finally {
+      t.busy = false;
     }
-    final remaining = (await history.records(batch))
-        .any((r) => r.status == OpStatus.done);
-    final note = skipped == 0 ? '' : '，$skipped 项已跳过';
-    await _set(
-      t,
-      remaining
-          ? _with(t.summary, message: '已撤销部分操作$note')
-          : _with(t.summary, stage: TaskStage.undone, message: '已撤销$note'),
-      force: true,
-    );
   }
 
   // ---- background pipeline -----------------------------------------------
@@ -475,10 +499,14 @@ class DefaultTaskManager implements TaskManager {
     final s = t.summary;
     final opts = options(s.connection, s.mode);
     var plan = await planner.build(t.scan!, t.decisions, opts);
-    final srcs = {for (final o in plan.ops) o.src};
+    final srcs = {
+      for (final o in plan.ops)
+        if (o.selected && o.src.isNotEmpty) o.src,
+    };
     final dsts = [
       for (final o in plan.ops)
-        if (o.kind == OpKind.relocate && !srcs.contains(o.dst)) o.dst,
+        if (o.selected && o.kind == OpKind.relocate && !srcs.contains(o.dst))
+          o.dst,
     ];
     final be = backendFor(s.connection);
     // One listing per target folder instead of one request per target.
@@ -641,6 +669,7 @@ class DefaultTaskManager implements TaskManager {
   }
 
   Future<BatchId?> _batchOf(TaskId id) async =>
+      _tasks[id]?.summary.batch ??
       (await history.batches()).where((b) => b.task == id).firstOrNull?.id;
 
   // ---- plumbing ----------------------------------------------------------
