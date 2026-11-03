@@ -603,10 +603,9 @@ class _Breadcrumbs extends StatelessWidget {
 }
 
 Color _entryColor(RemoteEntry e, Palette p) => switch (_entryIcon(e)) {
-  CupertinoIcons.folder_fill => p.accent.withValues(alpha: 0.85),
-  CupertinoIcons.film => seasonColor(2),
-  CupertinoIcons.captions_bubble => seasonColor(3),
-  _ => p.textMuted,
+  CupertinoIcons.folder_fill => p.textMuted,
+  CupertinoIcons.film => p.text,
+  _ => p.textFaint,
 };
 
 IconData _entryIcon(RemoteEntry e) {
@@ -651,10 +650,8 @@ class _EntryTile extends StatelessWidget {
         duration: const Duration(milliseconds: 100),
         padding: const EdgeInsets.fromLTRB(4, 7, 8, 7),
         decoration: BoxDecoration(
-          color: selected
-              ? p.accent.withValues(alpha: 0.10)
-              : (hover ? p.hover : Colors.transparent),
-          borderRadius: BorderRadius.circular(Radii.md),
+          color: selected ? p.selected : (hover ? p.hover : Colors.transparent),
+          borderRadius: BorderRadius.circular(Radii.lg),
         ),
         child: Row(
           children: [

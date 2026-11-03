@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import 'tokens.dart';
 
 /// App theme from [Palette], sized like a native macOS app: 13pt body,
-/// 28pt controls, hairline borders, no ripples, no floating labels.
+/// 30pt controls, no ripples, no floating labels. Quiet by design: controls
+/// are ink outlines or plain text, selection is ink, and the accent is kept
+/// for the one primary action on a screen.
 ThemeData buildTheme(Brightness brightness, {Color? accent}) {
   final palette = brightness == Brightness.light ? Palette.light : Palette.dark;
   final p = accent == null ? palette : palette.withAccent(accent);
@@ -64,21 +66,28 @@ ThemeData buildTheme(Brightness brightness, {Color? accent}) {
   );
   final bt = base.textTheme;
   final text = bt.copyWith(
+    displayLarge: t(
+      bt.displayLarge,
+      TypeScale.display,
+      weight: FontWeight.w200,
+      height: 1,
+      spacing: -2,
+    ),
     displaySmall: t(
       bt.displaySmall,
-      28,
-      weight: FontWeight.w700,
-      spacing: -0.4,
+      30,
+      weight: FontWeight.w300,
+      spacing: -0.6,
     ),
     headlineSmall: t(
       bt.headlineSmall,
       TypeScale.title,
-      weight: FontWeight.w700,
-      spacing: -0.3,
+      weight: FontWeight.w500,
+      spacing: -0.4,
     ),
-    titleLarge: t(bt.titleLarge, 17, weight: FontWeight.w600, spacing: -0.2),
-    titleMedium: t(bt.titleMedium, TypeScale.headline, weight: FontWeight.w600),
-    titleSmall: t(bt.titleSmall, TypeScale.body, weight: FontWeight.w600),
+    titleLarge: t(bt.titleLarge, 17, weight: FontWeight.w500, spacing: -0.2),
+    titleMedium: t(bt.titleMedium, TypeScale.headline, weight: FontWeight.w500),
+    titleSmall: t(bt.titleSmall, TypeScale.body, weight: FontWeight.w500),
     bodyLarge: t(bt.bodyLarge, 14, height: 1.4),
     bodyMedium: t(bt.bodyMedium, TypeScale.body, height: 1.38),
     bodySmall: t(
@@ -92,7 +101,7 @@ ThemeData buildTheme(Brightness brightness, {Color? accent}) {
     labelSmall: t(
       bt.labelSmall,
       11,
-      weight: FontWeight.w600,
+      weight: FontWeight.w500,
       color: p.textFaint,
     ),
   );
@@ -105,8 +114,9 @@ ThemeData buildTheme(Brightness brightness, {Color? accent}) {
     side: side,
   );
   final line = BorderSide(color: p.line, width: hairline);
-  const buttonPadding = EdgeInsets.symmetric(horizontal: 12, vertical: 6);
-  const buttonSize = Size(0, 28);
+  const buttonPadding = EdgeInsets.symmetric(horizontal: 14, vertical: 7);
+  const buttonSize = Size(0, 30);
+  final ink = BorderSide(color: p.text.withValues(alpha: 0.78), width: 1);
   const buttonText = TextStyle(
     fontSize: TypeScale.body,
     fontWeight: FontWeight.w500,
@@ -125,7 +135,7 @@ ThemeData buildTheme(Brightness brightness, {Color? accent}) {
     splashColor: Colors.transparent,
     highlightColor: Colors.transparent,
     hoverColor: p.hover,
-    focusColor: p.accent.withValues(alpha: 0.18),
+    focusColor: p.text.withValues(alpha: 0.10),
     dividerColor: p.line,
     textTheme: text,
     iconTheme: IconThemeData(color: p.textMuted, size: 16),
@@ -150,30 +160,30 @@ ThemeData buildTheme(Brightness brightness, {Color? accent}) {
         padding: buttonPadding,
         minimumSize: buttonSize,
         textStyle: buttonText,
-        shape: rounded(Radii.md),
+        shape: rounded(Radii.lg),
         elevation: 0,
       ),
     ),
     outlinedButtonTheme: OutlinedButtonThemeData(
       style: OutlinedButton.styleFrom(
         foregroundColor: p.text,
-        backgroundColor: p.panel,
+        backgroundColor: Colors.transparent,
+        disabledForegroundColor: p.textFaint,
         padding: buttonPadding,
         minimumSize: buttonSize,
         textStyle: buttonText,
-        side: BorderSide(color: p.lineStrong, width: hairline),
-        shape: rounded(Radii.md),
-        elevation: 0.6,
-        shadowColor: Colors.black.withValues(alpha: 0.25),
+        side: ink,
+        shape: rounded(Radii.lg),
+        elevation: 0,
       ),
     ),
     textButtonTheme: TextButtonThemeData(
       style: TextButton.styleFrom(
         foregroundColor: p.text,
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
         minimumSize: buttonSize,
         textStyle: buttonText,
-        shape: rounded(Radii.md),
+        shape: rounded(Radii.lg),
       ),
     ),
     iconButtonTheme: IconButtonThemeData(
@@ -190,22 +200,22 @@ ThemeData buildTheme(Brightness brightness, {Color? accent}) {
       style: ButtonStyle(
         visualDensity: VisualDensity.compact,
         textStyle: const WidgetStatePropertyAll(buttonText),
-        shape: WidgetStatePropertyAll(rounded(Radii.md)),
-        side: WidgetStatePropertyAll(
-          BorderSide(color: p.lineStrong, width: hairline),
-        ),
+        shape: WidgetStatePropertyAll(rounded(Radii.lg)),
+        side: WidgetStatePropertyAll(ink),
         backgroundColor: WidgetStateProperty.resolveWith(
-          (s) => s.contains(WidgetState.selected) ? p.selected : p.panel,
+          (s) => s.contains(WidgetState.selected)
+              ? p.selected
+              : Colors.transparent,
         ),
         foregroundColor: WidgetStatePropertyAll(p.text),
         iconColor: WidgetStatePropertyAll(p.textMuted),
       ),
     ),
     chipTheme: ChipThemeData(
-      backgroundColor: p.panel,
-      selectedColor: p.accentSoft,
+      backgroundColor: Colors.transparent,
+      selectedColor: p.selected,
       side: BorderSide(color: p.lineStrong, width: hairline),
-      shape: rounded(Radii.md),
+      shape: rounded(Radii.lg),
       labelStyle: TextStyle(
         fontSize: 12.5,
         color: p.text,
@@ -216,16 +226,16 @@ ThemeData buildTheme(Brightness brightness, {Color? accent}) {
         color: p.text,
         fontFamilyFallback: sansFallback,
       ),
-      checkmarkColor: p.accent,
+      checkmarkColor: p.text,
       iconTheme: IconThemeData(color: p.textMuted, size: 14),
       padding: const EdgeInsets.symmetric(horizontal: 4),
       labelPadding: const EdgeInsets.symmetric(horizontal: 6),
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      fillColor: p.panel,
+      fillColor: Colors.transparent,
       isDense: true,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 9, vertical: 8),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 11, vertical: 9),
       hintStyle: TextStyle(color: p.textFaint, fontSize: TypeScale.body),
       labelStyle: TextStyle(color: p.textMuted, fontSize: TypeScale.body),
       floatingLabelBehavior: FloatingLabelBehavior.never,
@@ -236,16 +246,16 @@ ThemeData buildTheme(Brightness brightness, {Color? accent}) {
       suffixIconColor: p.textFaint,
       prefixIconConstraints: const BoxConstraints(minWidth: 30, minHeight: 28),
       suffixIconConstraints: const BoxConstraints(minWidth: 30, minHeight: 28),
-      border: inputBorder(p.lineStrong, hairline),
-      enabledBorder: inputBorder(p.lineStrong, hairline),
-      focusedBorder: inputBorder(p.accent, 2),
+      border: inputBorder(p.lineStrong),
+      enabledBorder: inputBorder(p.lineStrong),
+      focusedBorder: inputBorder(p.text.withValues(alpha: 0.78), 1.2),
       errorBorder: inputBorder(p.danger, 1),
       focusedErrorBorder: inputBorder(p.danger, 2),
       disabledBorder: inputBorder(p.line, hairline),
     ),
     textSelectionTheme: TextSelectionThemeData(
-      cursorColor: p.accent,
-      selectionColor: p.accent.withValues(alpha: 0.25),
+      cursorColor: p.text,
+      selectionColor: p.text.withValues(alpha: 0.16),
     ),
     dialogTheme: DialogThemeData(
       backgroundColor: p.panel,
@@ -287,7 +297,7 @@ ThemeData buildTheme(Brightness brightness, {Color? accent}) {
       ),
     ),
     listTileTheme: ListTileThemeData(
-      shape: rounded(Radii.md),
+      shape: rounded(Radii.lg),
       selectedColor: p.text,
       selectedTileColor: p.selected,
       iconColor: p.textMuted,
@@ -301,12 +311,12 @@ ThemeData buildTheme(Brightness brightness, {Color? accent}) {
     tabBarTheme: TabBarThemeData(
       labelColor: p.text,
       unselectedLabelColor: p.textMuted,
-      indicatorColor: p.accent,
+      indicatorColor: p.text,
       indicatorSize: TabBarIndicatorSize.label,
       dividerColor: p.line,
       labelStyle: const TextStyle(
         fontSize: TypeScale.body,
-        fontWeight: FontWeight.w600,
+        fontWeight: FontWeight.w500,
         fontFamilyFallback: sansFallback,
       ),
       unselectedLabelStyle: const TextStyle(
@@ -317,44 +327,45 @@ ThemeData buildTheme(Brightness brightness, {Color? accent}) {
       labelPadding: const EdgeInsets.symmetric(horizontal: 12),
     ),
     checkboxTheme: CheckboxThemeData(
+      // Square ink boxes, like a paper form.
       shape: rounded(4),
-      side: BorderSide(color: p.lineStrong, width: 1),
+      side: BorderSide(color: p.text.withValues(alpha: 0.7), width: 1.2),
       visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
       fillColor: WidgetStateProperty.resolveWith(
-        (s) => s.contains(WidgetState.selected) ? p.accent : p.panel,
+        (s) => s.contains(WidgetState.selected) ? p.text : Colors.transparent,
       ),
-      checkColor: WidgetStatePropertyAll(p.onAccent),
+      checkColor: WidgetStatePropertyAll(p.canvas),
     ),
     radioTheme: RadioThemeData(
       visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
       fillColor: WidgetStateProperty.resolveWith(
-        (s) => s.contains(WidgetState.selected) ? p.accent : p.lineStrong,
+        (s) => s.contains(WidgetState.selected) ? p.text : p.lineStrong,
       ),
     ),
     switchTheme: SwitchThemeData(
       thumbColor: const WidgetStatePropertyAll(Colors.white),
       trackColor: WidgetStateProperty.resolveWith(
-        (s) => s.contains(WidgetState.selected) ? p.accent : p.selected,
+        (s) => s.contains(WidgetState.selected) ? p.text : p.selected,
       ),
       trackOutlineColor: const WidgetStatePropertyAll(Colors.transparent),
       thumbIcon: const WidgetStatePropertyAll(null),
     ),
     progressIndicatorTheme: ProgressIndicatorThemeData(
-      color: p.accent,
+      color: p.text,
       linearTrackColor: p.selected,
       circularTrackColor: Colors.transparent,
-      linearMinHeight: 4,
+      linearMinHeight: 3,
       borderRadius: BorderRadius.circular(2),
     ),
     sliderTheme: SliderThemeData(
-      activeTrackColor: p.accent,
+      activeTrackColor: p.text,
       thumbColor: Colors.white,
       inactiveTrackColor: p.selected,
       trackHeight: 3,
     ),
     badgeTheme: BadgeThemeData(
-      backgroundColor: p.accent,
-      textColor: p.onAccent,
+      backgroundColor: p.text,
+      textColor: p.canvas,
       textStyle: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w600),
     ),
     tooltipTheme: TooltipThemeData(

@@ -109,7 +109,8 @@ enum AccentChoice {
   terracotta('陶土橙', Color(0xFFC96442), Color(0xFFDB7A59)),
   blue('蓝', Color(0xFF3E7CB1), Color(0xFF5B9BD5)),
   green('绿', Color(0xFF3F8A55), Color(0xFF6BB07F)),
-  purple('紫', Color(0xFF8B5FBF), Color(0xFFA889D6));
+  purple('紫', Color(0xFF8B5FBF), Color(0xFFA889D6)),
+  ink('墨', Color(0xFF2D2C29), Color(0xFFE6E3D8));
 
   final String label;
   final Color light;

@@ -3,7 +3,8 @@ import 'package:flutter/material.dart';
 
 import 'tokens.dart';
 
-/// Inset-grouped container: white, hairline border, barely-there shadow.
+/// Inset-grouped container: a slightly lighter sheet with a hairline edge.
+/// No shadow: grouping comes from tone and space, not elevation.
 class Panel extends StatelessWidget {
   final Widget child;
   final EdgeInsetsGeometry padding;
@@ -25,7 +26,6 @@ class Panel extends StatelessWidget {
         color: color ?? p.panel,
         borderRadius: BorderRadius.circular(Radii.lg),
         border: Border.all(color: p.line, width: hairline),
-        boxShadow: panelShadow(),
       ),
       padding: padding,
       child: child,
@@ -123,7 +123,7 @@ class HoverRow extends StatelessWidget {
         duration: const Duration(milliseconds: 120),
         decoration: BoxDecoration(
           color: selected
-              ? p.accent.withValues(alpha: 0.10)
+              ? p.selected
               : (hover && onTap != null ? p.hover : Colors.transparent),
           borderRadius: borderRadius,
         ),
@@ -190,16 +190,16 @@ class IconTile extends StatelessWidget {
       width: size,
       height: size,
       decoration: BoxDecoration(
-        color: background ?? p.sidebar,
-        borderRadius: BorderRadius.circular(size * 0.24),
-        border: Border.all(color: p.line, width: hairline),
+        color: background ?? p.selected,
+        borderRadius: BorderRadius.circular(size * 0.3),
       ),
       child: Icon(icon, size: size * 0.52, color: color ?? p.textMuted),
     );
   }
 }
 
-/// Dot + label, e.g. 已连接 / 认证失败.
+/// Dot + label, e.g. 已连接 / 认证失败. No fill: the colour lives in the dot,
+/// the label stays quiet.
 class StatusPill extends StatelessWidget {
   final String label;
   final Color color;
@@ -215,21 +215,13 @@ class StatusPill extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-    decoration: BoxDecoration(
-      color: color.withValues(alpha: 0.10),
-      borderRadius: BorderRadius.circular(20),
-    ),
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 3),
     child: Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         if (busy)
-          SizedBox(
-            width: 8,
-            height: 8,
-            child: CircularProgressIndicator(strokeWidth: 1.4, color: color),
-          )
+          Spinner(size: 11, color: color)
         else if (icon != null)
           Icon(icon, size: 11, color: color)
         else
@@ -239,14 +231,7 @@ class StatusPill extends StatelessWidget {
             decoration: BoxDecoration(color: color, shape: BoxShape.circle),
           ),
         const SizedBox(width: 5),
-        Text(
-          label,
-          style: TextStyle(
-            color: color,
-            fontSize: 11.5,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
+        Text(label, style: TextStyle(color: color, fontSize: 12)),
       ],
     ),
   );
@@ -303,23 +288,13 @@ class EmptyState extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                width: 76,
-                height: 76,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: RadialGradient(
-                    colors: [
-                      p.accent.withValues(alpha: 0.22),
-                      p.accent.withValues(alpha: 0.04),
-                    ],
-                  ),
-                  border: Border.all(
-                    color: p.accent.withValues(alpha: 0.25),
-                    width: hairline,
-                  ),
+              // Concentric rings, the same contour motif as the map.
+              SizedBox.square(
+                dimension: 88,
+                child: CustomPaint(
+                  painter: _RingsPainter(p.contour),
+                  child: Icon(icon, size: 26, color: p.textMuted),
                 ),
-                child: Icon(icon, size: 32, color: p.accent),
               ),
               const SizedBox(height: 16),
               Text(title, style: theme.textTheme.titleMedium),
@@ -487,7 +462,7 @@ class MacSwitch extends StatelessWidget {
     scale: 0.72,
     child: CupertinoSwitch(
       value: value,
-      activeTrackColor: Palette.of(context).accent,
+      activeTrackColor: Palette.of(context).text,
       onChanged: onChanged,
     ),
   );
@@ -531,7 +506,7 @@ class Tag extends StatelessWidget {
         text,
         style: TextStyle(
           fontSize: 11,
-          fontWeight: FontWeight.w600,
+          fontWeight: FontWeight.w500,
           color: c,
           fontFamilyFallback: sansFallback,
         ),
@@ -623,8 +598,7 @@ class _FadeInState extends State<FadeIn> with SingleTickerProviderStateMixin {
         );
 }
 
-/// Thick rounded progress bar with a gradient fill that animates between
-/// values.
+/// Rounded progress bar with a flat fill that animates between values.
 class GradientProgress extends StatelessWidget {
   final double value;
   final Color color;
@@ -639,15 +613,11 @@ class GradientProgress extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hsl = HSLColor.fromColor(color);
-    final light = hsl
-        .withLightness((hsl.lightness + 0.14).clamp(0.0, 1.0))
-        .toColor();
     return ClipRRect(
       borderRadius: BorderRadius.circular(height),
       child: Container(
         height: height,
-        color: color.withValues(alpha: 0.14),
+        color: color.withValues(alpha: 0.12),
         alignment: Alignment.centerLeft,
         child: TweenAnimationBuilder<double>(
           tween: Tween(end: value.clamp(0.0, 1.0)),
@@ -658,7 +628,7 @@ class GradientProgress extends StatelessWidget {
             child: DecoratedBox(
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(height),
-                gradient: LinearGradient(colors: [light, color]),
+                color: color,
               ),
             ),
           ),
@@ -782,4 +752,153 @@ class MoreButton extends StatelessWidget {
       },
     ),
   );
+}
+
+class _RingsPainter extends CustomPainter {
+  final Color color;
+
+  const _RingsPainter(this.color);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.6
+      ..color = color;
+    final c = size.center(Offset.zero);
+    for (var r = size.shortestSide / 2; r > 22; r -= 7) {
+      canvas.drawCircle(c, r, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_RingsPainter old) => old.color != color;
+}
+
+/// Dashed ring meaning "working on it". Deliberately still: it reads as a
+/// state, not a distraction (and keeps pumpAndSettle in tests finite).
+class Spinner extends StatelessWidget {
+  final double size;
+  final Color? color;
+
+  const Spinner({super.key, this.size = 14, this.color});
+
+  @override
+  Widget build(BuildContext context) => SizedBox.square(
+    dimension: size,
+    child: CustomPaint(
+      painter: _DashedRingPainter(color ?? Palette.of(context).textMuted),
+    ),
+  );
+}
+
+class _DashedRingPainter extends CustomPainter {
+  final Color color;
+
+  const _DashedRingPainter(this.color);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const dashes = 8;
+    const sweep = 3.14159265 * 2 / dashes;
+    final stroke = size.shortestSide / 9;
+    final rect = (Offset.zero & size).deflate(stroke);
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = stroke
+      ..strokeCap = StrokeCap.round
+      ..color = color;
+    for (var i = 0; i < dashes; i++) {
+      canvas.drawArc(rect, i * sweep, sweep * 0.45, false, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_DashedRingPainter old) => old.color != color;
+}
+
+/// Hero number with a small unit and an optional caption block beside it:
+/// `247 G  可用空间 / ◌ 正在扫描`.
+class BigNumber extends StatelessWidget {
+  final String value;
+  final String? unit;
+  final List<Widget> captions;
+  final double? fontSize;
+
+  const BigNumber(
+    this.value, {
+    super.key,
+    this.unit,
+    this.captions = const [],
+    this.fontSize,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    final big = Theme.of(context).textTheme.displayLarge!.copyWith(
+      fontSize: fontSize,
+      fontFeatures: const [FontFeature.tabularFigures()],
+    );
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Text(value, style: big),
+        if (unit != null)
+          Padding(
+            padding: const EdgeInsets.only(left: 4, bottom: 2),
+            child: Text(
+              unit!,
+              style: TextStyle(
+                fontSize: (big.fontSize ?? TypeScale.display) * 0.34,
+                fontWeight: FontWeight.w300,
+                color: p.textMuted,
+              ),
+            ),
+          ),
+        if (captions.isNotEmpty) ...[
+          const SizedBox(width: 18),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: DefaultTextStyle.merge(
+              style: TextStyle(fontSize: 13, color: p.text, height: 1.7),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: captions,
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// Underlined text action, for secondary actions inside prose
+/// (立即检查, 在列表中显示).
+class LinkText extends StatelessWidget {
+  final String text;
+  final VoidCallback? onTap;
+
+  const LinkText(this.text, {super.key, this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    return Hoverable(
+      onTap: onTap,
+      builder: (_, hover) => Text(
+        text,
+        style: TextStyle(
+          fontSize: 12.5,
+          color: hover ? p.text : p.textMuted,
+          decoration: TextDecoration.underline,
+          decorationColor: hover ? p.text : p.textFaint,
+          decorationThickness: 1,
+        ),
+      ),
+    );
+  }
 }

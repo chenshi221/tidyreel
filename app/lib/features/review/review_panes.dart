@@ -432,13 +432,11 @@ class _GroupCard extends StatelessWidget {
         margin: const EdgeInsets.only(bottom: 4),
         padding: const EdgeInsets.fromLTRB(6, 8, 10, 8),
         decoration: BoxDecoration(
-          color: selected
-              ? p.accent.withValues(alpha: 0.10)
-              : (hover ? p.hover : Colors.transparent),
+          color: selected ? p.selected : (hover ? p.hover : Colors.transparent),
           borderRadius: BorderRadius.circular(Radii.lg),
           border: Border.all(
             color: selected
-                ? p.accent.withValues(alpha: 0.45)
+                ? p.text.withValues(alpha: 0.35)
                 : Colors.transparent,
           ),
         ),
@@ -809,7 +807,7 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
                       ),
                       decoration: BoxDecoration(
                         color: isCurrent
-                            ? p.accent.withValues(alpha: 0.10)
+                            ? p.selected
                             : hover
                             ? p.hover
                             : Colors.transparent,
@@ -1998,7 +1996,7 @@ class _OptionRow extends StatelessWidget {
                     ? CupertinoIcons.largecircle_fill_circle
                     : CupertinoIcons.circle,
                 size: 15,
-                color: selected ? p.accent : p.lineStrong,
+                color: selected ? p.text : p.lineStrong,
               ),
             ),
             const SizedBox(width: 10),

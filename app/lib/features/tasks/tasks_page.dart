@@ -285,7 +285,7 @@ class TaskCard extends ConsumerWidget {
                           fontFamily: monoFamily,
                           fontFamilyFallback: monoFallback,
                           fontSize: 11.5,
-                          color: hover ? p.accent : p.textMuted,
+                          color: hover ? p.text : p.textMuted,
                         ),
                       ),
                     ),
@@ -390,8 +390,8 @@ class TaskCard extends ConsumerWidget {
     final backdrop = works.map((w) => w.backdropPath).nonNulls.firstOrNull;
     // Cards that want attention get a coloured edge.
     final edge = switch (t.stage) {
-      TaskStage.awaitingReview => p.accent,
-      TaskStage.partiallyFailed => p.warning,
+      TaskStage.awaitingReview => p.text.withValues(alpha: 0.45),
+      TaskStage.partiallyFailed => p.warning.withValues(alpha: 0.6),
       _ => null,
     };
 
@@ -614,27 +614,27 @@ class _Stepper extends StatelessWidget {
                 ClipRRect(
                   borderRadius: BorderRadius.circular(2),
                   child: SizedBox(
-                    height: 5,
+                    height: 3,
                     width: double.infinity,
                     child: i == cur && i != 2 && progress != null
                         ? GradientProgress(
                             value: progress!,
-                            color: p.accent,
-                            height: 5,
+                            color: p.text,
+                            height: 3,
                           )
                         : i == cur && i != 2
                         ? LinearProgressIndicator(
-                            minHeight: 5,
-                            color: p.accent,
-                            backgroundColor: p.accent.withValues(alpha: 0.18),
+                            minHeight: 3,
+                            color: p.text,
+                            backgroundColor: p.selected,
                           )
                         : ColoredBox(
                             color: dim
                                 ? p.selected
                                 : cur == _steps.length
-                                ? p.success.withValues(alpha: 0.8)
+                                ? p.success.withValues(alpha: 0.7)
                                 : i < cur
-                                ? p.accent.withValues(alpha: 0.75)
+                                ? p.text.withValues(alpha: 0.5)
                                 : i == cur
                                 ? p.accent
                                 : p.selected,

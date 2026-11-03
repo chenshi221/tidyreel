@@ -244,8 +244,7 @@ class _ConnectionRow extends ConsumerWidget {
         leading: IconTile(
           connectionTypeIcon(c.type),
           size: 34,
-          color: connectionTypeColor(c.type),
-          background: connectionTypeColor(c.type).withValues(alpha: 0.12),
+          color: Palette.of(context).textMuted,
         ),
         title: Text(c.name),
         subtitle: Column(
@@ -343,8 +342,8 @@ class _RecentTask extends ConsumerWidget {
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: hover ? p.accent : p.text,
+                          fontWeight: FontWeight.w500,
+                          color: hover ? p.text : p.textMuted,
                         ),
                       ),
                       if (w.year != null)
