@@ -51,7 +51,11 @@ class AlistBackend implements StorageBackend {
     }
     final data = r.data;
     if (data is Map<String, dynamic> && data['code'] is int) return data;
-    return {'code': r.statusCode ?? 0, 'message': 'HTTP ${r.statusCode}'};
+    final status = r.statusCode ?? 0;
+    return {
+      'code': status == 200 ? 0 : status,
+      'message': 'HTTP ${r.statusCode}',
+    };
   }
 
   Future<void> _login() =>
@@ -63,7 +67,14 @@ class AlistBackend implements StorageBackend {
       'password': _password,
     }, null);
     try {
-      _token = (_data(res, 'login') as Map)['token'] as String;
+      final data = _data(res, 'login');
+      if (data is! Map || data['token'] is! String) {
+        throw const StorageException(
+          StorageErrorCode.other,
+          'login: invalid response',
+        );
+      }
+      _token = data['token'] as String;
     } on StorageException catch (e) {
       // Bad credentials come back as code 400 "password is incorrect".
       if (e.code != StorageErrorCode.other) rethrow;
@@ -114,15 +125,18 @@ class AlistBackend implements StorageBackend {
   Future<List<RemoteEntry>> list(String dir, {bool refresh = false}) async {
     final out = <RemoteEntry>[];
     for (var page = 1; ; page++) {
-      final data = await _call('/api/fs/list', {
+      final raw = await _call('/api/fs/list', {
         'path': dir,
         'password': '',
         'page': page,
         'per_page': _perPage,
         'refresh': refresh && page == 1,
-      }) as Map<String, dynamic>;
+      });
+      final data = raw is Map<String, dynamic>
+          ? raw
+          : const <String, dynamic>{};
       final content = (data['content'] as List?) ?? const [];
-      for (final e in content.cast<Map<String, dynamic>>()) {
+      for (final e in content.whereType<Map<String, dynamic>>()) {
         final name = e['name'] as String;
         out.add(
           RemoteEntry(
@@ -143,8 +157,8 @@ class AlistBackend implements StorageBackend {
 
   Future<Map<String, dynamic>?> _get(String path) async {
     try {
-      return await _call('/api/fs/get', {'path': path, 'password': ''})
-          as Map<String, dynamic>;
+      final res = await _call('/api/fs/get', {'path': path, 'password': ''});
+      return res is Map<String, dynamic> ? res : null;
     } on StorageException catch (e) {
       if (e.code == StorageErrorCode.notFound) return null;
       rethrow;
@@ -166,9 +180,19 @@ class AlistBackend implements StorageBackend {
 
   @override
   Future<void> rename(String path, String newName) async {
-    final target = p.posix.join(p.posix.dirname(path), newName);
+    final dir = p.posix.dirname(path);
+    final oldName = p.posix.basename(path);
+    if (oldName == newName) return;
+    final target = p.posix.join(dir, newName);
     // Some drivers overwrite silently, so never rely on the server to refuse.
-    if (await exists(target)) {
+    // On case-insensitive backends, exists(target) hits the source itself for
+    // case-only renames, so check the folder listing instead.
+    if (oldName.toLowerCase() == newName.toLowerCase()) {
+      final have = {for (final e in await list(dir, refresh: true)) e.name};
+      if (have.contains(newName)) {
+        throw StorageException(StorageErrorCode.alreadyExists, target);
+      }
+    } else if (await exists(target)) {
       throw StorageException(StorageErrorCode.alreadyExists, target);
     }
     await _call('/api/fs/rename', {'path': path, 'name': newName});

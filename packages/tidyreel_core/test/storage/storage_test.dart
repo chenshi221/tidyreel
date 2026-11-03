@@ -85,7 +85,13 @@ void main() {
   group('Local', () {
     test('refuses paths that escape the root', () async {
       final be = await makeLocal({'/a.txt': 1});
-      for (final bad in ['/../x', '/a/../../x', '/..']) {
+      for (final bad in [
+        '/../x',
+        '/a/../../x',
+        '/..',
+        r'/..\evil',
+        r'/a\..\..\evil',
+      ]) {
         await expectLater(be.list(bad), throwsStorage(StorageErrorCode.other));
         await expectLater(
           be.exists(bad),
@@ -101,6 +107,22 @@ void main() {
         throwsStorage(StorageErrorCode.other),
       );
       await expectLater(
+        be.rename('/a.txt', r'..\evil'),
+        throwsStorage(StorageErrorCode.other),
+      );
+      await expectLater(
+        be.rename('/a.txt', '.'),
+        throwsStorage(StorageErrorCode.other),
+      );
+      await expectLater(
+        be.rename('/a.txt', ''),
+        throwsStorage(StorageErrorCode.other),
+      );
+      await expectLater(
+        be.rename('/missing.txt', 'missing.txt'),
+        throwsStorage(StorageErrorCode.notFound),
+      );
+      await expectLater(
         be.move('/', '/..', ['a.txt']),
         throwsStorage(StorageErrorCode.other),
       );
@@ -108,6 +130,50 @@ void main() {
         be.remove('/..', ['x']),
         throwsStorage(StorageErrorCode.other),
       );
+    });
+
+    test('allows case-only rename on local files', () async {
+      final be = await makeLocal({'/test.txt': 5});
+      await be.rename('/test.txt', 'Test.txt');
+      expect(await be.exists('/Test.txt'), isTrue);
+    });
+
+    group('a target that resolves to the source but is its own entry', () {
+      late Directory root;
+      late StorageBackend be;
+      setUp(() {
+        root = Directory.systemTemp.createTempSync('tidyreel_links_');
+        addTearDown(() => root.deleteSync(recursive: true));
+        File('${root.path}/a.mkv').writeAsBytesSync([1, 2, 3]);
+        be = createBackend(
+          cfg(ConnectionType.local, root.path),
+          const Credentials(),
+        );
+      });
+
+      test('hard link is refused, both names kept', () async {
+        final r = Process.runSync('ln', [
+          '${root.path}/a.mkv',
+          '${root.path}/b.mkv',
+        ]);
+        expect(r.exitCode, 0, reason: '${r.stderr}');
+        await expectLater(
+          be.rename('/a.mkv', 'b.mkv'),
+          throwsStorage(StorageErrorCode.alreadyExists),
+        );
+        expect(File('${root.path}/a.mkv').existsSync(), isTrue);
+        expect(File('${root.path}/b.mkv').existsSync(), isTrue);
+      }, testOn: '!windows');
+
+      test('symlink is refused and not replaced', () async {
+        Link('${root.path}/b.mkv').createSync('${root.path}/a.mkv');
+        await expectLater(
+          be.rename('/a.mkv', 'b.mkv'),
+          throwsStorage(StorageErrorCode.alreadyExists),
+        );
+        expect(FileSystemEntity.isLinkSync('${root.path}/b.mkv'), isTrue);
+        expect(File('${root.path}/a.mkv').existsSync(), isTrue);
+      }, testOn: '!windows');
     });
   });
 
@@ -219,6 +285,23 @@ void main() {
       ]);
     });
 
+    test(
+      'the executor wrapper still batch-renames behind CachedBackend',
+      () async {
+        final (mock, be) = await connect(files: {'/d/1': 1, '/d/2': 1});
+        // What the app hands the executor: Throttled(Cached(Alist)).
+        final wrapped = ThrottledBackend(
+          CachedBackend(be),
+          minInterval: Duration.zero,
+        );
+        await wrapped.renameMany('/d', {'1': 'a', '2': 'b'});
+        expect(mock.tree.nodes.keys, containsAll(['/d/a', '/d/b']));
+        expect(mock.calls.where((c) => c.contains('rename')), [
+          'api/fs/batch_rename',
+        ]);
+      },
+    );
+
     test('renameMany falls back to fs/rename on older servers', () async {
       final (mock, be) = await connect(files: {'/d/1': 1, '/d/2': 1});
       mock.batchRename = false;
@@ -247,6 +330,24 @@ void main() {
       );
       expect(mock.tree.nodes['/b'], 2);
     });
+
+    test(
+      'HTML 200 response from reverse proxy is StorageErrorCode.other',
+      () async {
+        final server = await MockServer.start(
+          (_) => Response.ok(
+            '<html><body>login gateway</body></html>',
+            headers: {'content-type': 'text/html'},
+          ),
+        );
+        addTearDown(server.close);
+        final be = createBackend(
+          cfg(ConnectionType.alist, server.url),
+          const Credentials(token: 'tok'),
+        );
+        await expectLater(be.list('/'), throwsStorage(StorageErrorCode.other));
+      },
+    );
   });
 
   group('WebDAV', () {
@@ -263,6 +364,53 @@ void main() {
       );
     });
 
+    group('case-only rename', () {
+      Future<(MockWebDav, StorageBackend)> connect(
+        Map<String, int> files, {
+        required bool caseInsensitive,
+      }) async {
+        final dav = MockWebDav(files, caseInsensitive: caseInsensitive);
+        final server = await MockServer.start(dav.handle);
+        addTearDown(server.close);
+        return (
+          dav,
+          createBackend(
+            cfg(ConnectionType.webdav, '${server.url}/dav'),
+            const Credentials(password: 'pw'),
+          ),
+        );
+      }
+
+      test(
+        'works on a case-insensitive server, folder contents kept',
+        () async {
+          final (dav, be) = await connect({
+            '/the office/S01E01.mkv': 1,
+          }, caseInsensitive: true);
+          await be.rename('/the office', 'The Office');
+          expect(dav.tree.nodes.keys, contains('/The Office/S01E01.mkv'));
+          expect(dav.tree.nodes.keys, isNot(contains('/the office')));
+          expect(
+            dav.tree.nodes.keys.where((k) => k.contains('.tidyreel-case-')),
+            isEmpty,
+          );
+        },
+      );
+
+      test('a separate entry with that exact name is refused', () async {
+        final (dav, be) = await connect({
+          '/a.mkv': 1,
+          '/A.mkv': 2,
+        }, caseInsensitive: false);
+        await expectLater(
+          be.rename('/a.mkv', 'A.mkv'),
+          throwsStorage(StorageErrorCode.alreadyExists),
+        );
+        expect(dav.tree.nodes['/a.mkv'], 1);
+        expect(dav.tree.nodes['/A.mkv'], 2);
+      });
+    });
+
     test('percent-encodes paths on the wire', () async {
       final seen = <String>[];
       final dav = MockWebDav({'/电影 [1].mkv': 1});
@@ -277,6 +425,69 @@ void main() {
       );
       await be.rename('/电影 [1].mkv', '电影 (2020).mkv');
       expect(seen.single, '/dav/%E7%94%B5%E5%BD%B1%20%5B1%5D.mkv');
+    });
+
+    test('resolves relative hrefs and percent signs in filenames', () async {
+      final server = await MockServer.start((Request r) {
+        if (r.method == 'PROPFIND') {
+          return Response(
+            207,
+            body:
+                '<?xml version="1.0"?><D:multistatus xmlns:D="DAV:">'
+                '<D:response><D:href>/dav/sub/</D:href><D:propstat><D:prop>'
+                '<D:resourcetype><D:collection/></D:resourcetype>'
+                '</D:prop></D:propstat></D:response>'
+                '<D:response><D:href>100%25%20Love.mkv</D:href><D:propstat><D:prop>'
+                '<D:resourcetype/><D:getcontentlength>42</D:getcontentlength>'
+                '</D:prop></D:propstat></D:response>'
+                '<D:response><D:href>nested/</D:href><D:propstat><D:prop>'
+                '<D:resourcetype><D:collection/></D:resourcetype>'
+                '</D:prop></D:propstat></D:response>'
+                '</D:multistatus>',
+            headers: {'content-type': 'application/xml; charset=utf-8'},
+          );
+        }
+        return Response.notFound('');
+      });
+      addTearDown(server.close);
+      final be = createBackend(
+        cfg(ConnectionType.webdav, '${server.url}/dav'),
+        const Credentials(password: 'pw'),
+      );
+      final entries = await be.list('/sub');
+      expect(entries.map((e) => (e.path, e.name, e.isDir, e.size)).toList(), [
+        ('/sub/100% Love.mkv', '100% Love.mkv', false, 42),
+        ('/sub/nested', 'nested', true, 0),
+      ]);
+    });
+
+    test('parses custom XML namespace prefixes and numeric entities', () async {
+      final server = await MockServer.start((Request r) {
+        if (r.method == 'PROPFIND') {
+          return Response(
+            207,
+            body:
+                '<?xml version="1.0"?><ns-1:multistatus xmlns:ns-1="DAV:">'
+                '<ns-1:response><ns-1:href>/dav/sub/</ns-1:href><ns-1:propstat><ns-1:prop>'
+                '<ns-1:resourcetype><ns-1:collection/></ns-1:resourcetype>'
+                '</ns-1:prop></ns-1:propstat></ns-1:response>'
+                '<ns-1:response><ns-1:href>/dav/sub/Tom%20&#38;%20Jerry.mkv</ns-1:href>'
+                '<ns-1:propstat><ns-1:prop><ns-1:resourcetype/>'
+                '<ns-1:getcontentlength>10</ns-1:getcontentlength>'
+                '</ns-1:prop></ns-1:propstat></ns-1:response>'
+                '</ns-1:multistatus>',
+            headers: {'content-type': 'application/xml; charset=utf-8'},
+          );
+        }
+        return Response.notFound('');
+      });
+      addTearDown(server.close);
+      final be = createBackend(
+        cfg(ConnectionType.webdav, '${server.url}/dav'),
+        const Credentials(password: 'pw'),
+      );
+      final entries = await be.list('/sub');
+      expect(entries.single.name, 'Tom & Jerry.mkv');
     });
   });
 }

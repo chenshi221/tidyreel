@@ -216,7 +216,9 @@ final taskManagerProvider = Provider<TaskManager>((ref) {
     executor: DefaultExecutor(
       history,
       concurrency: s.concurrency,
-      minInterval: Duration(milliseconds: 1000 ~/ s.requestsPerSecond),
+      minInterval: s.requestsPerSecond <= 0
+          ? Duration.zero
+          : Duration(milliseconds: 1000 ~/ s.requestsPerSecond),
     ),
     history: history,
     store: DriftTaskStore(ref.watch(bootstrapProvider).db),

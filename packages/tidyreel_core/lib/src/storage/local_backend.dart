@@ -13,14 +13,22 @@ class LocalBackend implements StorageBackend {
 
   /// Maps a '/'-rooted path to a real path, refusing anything that escapes [root].
   String _real(String path) {
-    final segs = path.split('/').where((s) => s.isNotEmpty && s != '.');
+    final normalized = path.replaceAll('\\', '/');
+    final segs = normalized.split('/').where((s) => s.isNotEmpty && s != '.');
     if (segs.contains('..')) {
       throw StorageException(
         StorageErrorCode.other,
         'path escapes root: $path',
       );
     }
-    return p.joinAll([root, ...segs]);
+    final resolved = p.joinAll([root, ...segs]);
+    if (!p.isWithin(root, resolved) && resolved != root) {
+      throw StorageException(
+        StorageErrorCode.other,
+        'path escapes root: $path',
+      );
+    }
+    return resolved;
   }
 
   String _virtual(String dir, String name) =>
@@ -36,8 +44,10 @@ class LocalBackend implements StorageBackend {
     } on FileSystemException catch (e) {
       final code = switch (e.osError?.errorCode) {
         2 || 3 => StorageErrorCode.notFound, // ENOENT / ERROR_PATH_NOT_FOUND
-        17 || 66 || 183 => StorageErrorCode.alreadyExists,
+        17 || 39 || 66 || 183 => StorageErrorCode.alreadyExists,
         16 || 32 => StorageErrorCode.busy, // EBUSY / ERROR_SHARING_VIOLATION
+        5 when Platform.isWindows =>
+          StorageErrorCode.busy, // ERROR_ACCESS_DENIED (locked file)
         _ => StorageErrorCode.other,
       };
       throw StorageException(code, '$path: ${e.message}');
@@ -79,8 +89,9 @@ class LocalBackend implements StorageBackend {
   Future<void> _relocate(String from, String to) async {
     final src = _real(from), dst = _real(to);
     if (!_present(src)) throw StorageException(StorageErrorCode.notFound, from);
+    if (from == to) return;
     // rename(2) silently overwrites, so check first.
-    if (_present(dst)) {
+    if (_present(dst) && !_sameEntry(src, dst)) {
       throw StorageException(StorageErrorCode.alreadyExists, to);
     }
     await _io(from, () async {
@@ -92,9 +103,26 @@ class LocalBackend implements StorageBackend {
     });
   }
 
+  /// Does [dst] only exist because the file system folds names (case on
+  /// APFS / NTFS, Unicode normalization on macOS), i.e. it *is* [src]? Then the
+  /// folder has no entry spelled exactly like [dst]. A hard link or symlink to
+  /// [src] also resolves to the same file but has its own entry: rename(2)
+  /// would silently do nothing (hard link) or replace the link.
+  bool _sameEntry(String src, String dst) {
+    if (!FileSystemEntity.identicalSync(src, dst)) return false;
+    final name = p.basename(dst);
+    return !Directory(p.dirname(dst))
+        .listSync(followLinks: false)
+        .any((e) => p.basename(e.path) == name);
+  }
+
   @override
   Future<void> rename(String path, String newName) async {
-    if (newName.contains('/') || newName.contains('\\') || newName == '..') {
+    if (newName.isEmpty ||
+        newName.contains('/') ||
+        newName.contains('\\') ||
+        newName == '..' ||
+        newName == '.') {
       throw StorageException(StorageErrorCode.other, 'bad name: $newName');
     }
     await _relocate(path, _virtual(p.posix.dirname(path), newName));

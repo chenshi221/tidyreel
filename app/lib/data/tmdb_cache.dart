@@ -23,20 +23,35 @@ class FileTmdbCache implements TmdbResponseCache {
     var data = <String, Object?>{};
     try {
       if (file.existsSync()) {
-        data = jsonDecode(file.readAsStringSync()) as Map<String, Object?>;
+        data = Map<String, Object?>.of(
+          jsonDecode(file.readAsStringSync()) as Map<String, Object?>,
+        );
       }
+      final cutoff = DateTime.now().subtract(ttl).millisecondsSinceEpoch;
+      data.removeWhere(
+        (_, v) =>
+            v is! List ||
+            v.length < 2 ||
+            v[0] is! num ||
+            v[1] is! Map<String, dynamic> ||
+            (v[0] as num) < cutoff,
+      );
     } on Object {
       // A broken cache is just a cold cache.
+      data = <String, Object?>{};
     }
-    final cutoff = DateTime.now().subtract(ttl).millisecondsSinceEpoch;
-    data.removeWhere((_, v) => v is! List || (v[0] as num) < cutoff);
     return FileTmdbCache._(file, ttl, data);
   }
 
   @override
   Map<String, dynamic>? read(String key) {
     final v = _data[key];
-    if (v is! List) return null;
+    if (v is! List ||
+        v.length < 2 ||
+        v[0] is! num ||
+        v[1] is! Map<String, dynamic>) {
+      return null;
+    }
     final at = DateTime.fromMillisecondsSinceEpoch((v[0] as num).toInt());
     if (DateTime.now().difference(at) > ttl) return null;
     return v[1] as Map<String, dynamic>;

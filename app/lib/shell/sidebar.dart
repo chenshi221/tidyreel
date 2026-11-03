@@ -51,7 +51,10 @@ class Sidebar extends ConsumerWidget {
       final before = {for (final t in prev?.value ?? const []) t.id: t.stage};
       for (final t in next.value ?? const <TaskSummary>[]) {
         final was = before[t.id];
-        if (was == null || was == t.stage || location.contains(t.id.value)) {
+        final onTaskPage =
+            location == '/tasks/${t.id.value}' ||
+            location == '/tasks/${t.id.value}/review';
+        if (was == null || was == t.stage || onTaskPage) {
           continue;
         }
         final (msg, path) = switch (t.stage) {
@@ -76,15 +79,17 @@ class Sidebar extends ConsumerWidget {
                 .where((s) => s.isNotEmpty)
                 .lastOrNull ??
             t.id.value;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('$name · $msg'),
-            action: SnackBarAction(
-              label: '查看',
-              onPressed: () => context.go(path!),
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(
+              content: Text('$name · $msg'),
+              action: SnackBarAction(
+                label: '查看',
+                onPressed: () => context.go(path!),
+              ),
             ),
-          ),
-        );
+          );
       }
     });
 

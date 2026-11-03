@@ -17,18 +17,22 @@ final taskDetailProvider = FutureProvider.autoDispose
       ref,
       id,
     ) async {
-      final task = ref
-          .watch(tasksProvider)
-          .value
-          ?.where((t) => t.id == id)
-          .firstOrNull;
+      final (_, batch, _) = ref.watch(
+        tasksProvider.select((v) {
+          final t = v.value?.where((t) => t.id == id).firstOrNull;
+          return (
+            t?.stage,
+            t?.batch,
+            t == null || t.stage.isActive ? null : t.message,
+          );
+        }),
+      );
       TaskReview? review;
       try {
         review = await ref.read(taskManagerProvider).review(id);
       } catch (_) {
         // Not recognized (cancelled early): show the history alone.
       }
-      final batch = task?.batch;
       final records = batch == null
           ? const <HistoryRecord>[]
           : await ref.read(historyProvider).records(batch);
@@ -83,7 +87,17 @@ class TaskDetailPage extends ConsumerWidget {
         if (task?.stage == TaskStage.partiallyFailed)
           FilledButton.icon(
             key: const ValueKey('retry-failed'),
-            onPressed: () => ref.read(taskManagerProvider).retryFailed(id),
+            onPressed: () async {
+              try {
+                await ref.read(taskManagerProvider).retryFailed(id);
+              } on StateError catch (e) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context)
+                    ..hideCurrentSnackBar()
+                    ..showSnackBar(SnackBar(content: Text(e.message)));
+                }
+              }
+            },
             icon: const Icon(CupertinoIcons.arrow_clockwise, size: 13),
             label: const Text('重试失败项'),
           ),

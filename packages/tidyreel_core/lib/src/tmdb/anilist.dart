@@ -37,12 +37,14 @@ query ($s: String) {
 }''';
 
   @override
-  Future<List<String>> altTitles(String query) =>
-      _cache[query.toLowerCase()] ??= _fetch(query);
+  Future<List<String>> altTitles(String query) {
+    final key = query.toLowerCase();
+    return _cache[key] ??= _fetch(key, query);
+  }
 
   /// AniList matches whole words, so "Akujo dewa" misses "Akujo de wa":
   /// retry with fewer words, keeping only hits that start like [query].
-  Future<List<String>> _fetch(String query) async {
+  Future<List<String>> _fetch(String key, String query) async {
     final words = query.trim().split(RegExp(r'\s+'));
     try {
       for (var n = words.length; n >= 2 && n > words.length - 4; n--) {
@@ -59,7 +61,8 @@ query ($s: String) {
         if (hits.isNotEmpty) return parseAniList(hits);
       }
     } on Object {
-      // Unreachable or changed API: no aliases.
+      // Unreachable or changed API: evict so transient errors are not cached.
+      _cache.remove(key);
     }
     return const [];
   }

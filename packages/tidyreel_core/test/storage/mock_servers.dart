@@ -196,11 +196,16 @@ class MockWebDav {
   /// a 301 to the slashed URL.
   final bool redirectCollections;
 
+  /// Like IIS or a NAS on NTFS: names differing only in case are one entry,
+  /// so MOVE onto a case variant of an existing name hits Overwrite: F.
+  final bool caseInsensitive;
+
   MockWebDav(
     Map<String, int> files, {
     this.mount = '/dav',
     this.absoluteHrefs = false,
     this.redirectCollections = false,
+    this.caseInsensitive = false,
   }) : tree = MockTree(files);
 
   Uri? _origin;
@@ -277,7 +282,9 @@ class MockWebDav {
         if (dst == null || !tree.isDir(p.posix.dirname(dst))) {
           return Response(409);
         }
-        final exists = tree.nodes.containsKey(dst);
+        final exists = caseInsensitive
+            ? tree.nodes.keys.any((k) => k.toLowerCase() == dst.toLowerCase())
+            : tree.nodes.containsKey(dst);
         if (exists && req.headers['overwrite'] == 'F') return Response(412);
         tree.relocate(path, dst);
         return Response(exists ? 204 : 201);

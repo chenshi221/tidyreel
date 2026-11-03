@@ -132,7 +132,14 @@ final onlyUnorganizedProvider = NotifierProvider<Val<bool>, bool>(
 
 /// Bumped by the 刷新 button; the next listing bypasses server caches.
 final browserRefreshProvider = NotifierProvider<Val<int>, int>(() => Val(0));
-var _seenRefresh = 0;
+
+class _RefreshTracker {
+  int seen = 0;
+}
+
+final _refreshTrackerProvider = Provider<_RefreshTracker>(
+  (ref) => _RefreshTracker(),
+);
 
 class BrowserSelection extends Notifier<Set<String>> {
   @override
@@ -161,17 +168,10 @@ final browserModeProvider = NotifierProvider<_ModeNotifier, OrganizeMode>(
   _ModeNotifier.new,
 );
 
+/// Entries of the current folder after search / filter / sort.
 /// 只看未整理的: a path counts as organized once a done op produced it.
 /// shortcut: doesn't yet check "name already matches the naming rules"; add when
 /// users report already-tidy folders showing up.
-final isOrganizedProvider = Provider<Future<bool> Function(String path)>((ref) {
-  final conn = ref.watch(openConnectionProvider);
-  final history = ref.watch(historyProvider);
-  return (path) async =>
-      conn != null && await history.isOrganized(conn.id, path);
-});
-
-/// Entries of the current folder after search / filter / sort.
 final browserEntriesProvider = FutureProvider.autoDispose<List<RemoteEntry>>((
   ref,
 ) async {
@@ -181,8 +181,9 @@ final browserEntriesProvider = FutureProvider.autoDispose<List<RemoteEntry>>((
   final onlyNew = ref.watch(onlyUnorganizedProvider);
   final conn = ref.watch(openConnectionProvider);
   final tick = ref.watch(browserRefreshProvider);
-  final refresh = tick != _seenRefresh;
-  _seenRefresh = tick;
+  final tracker = ref.watch(_refreshTrackerProvider);
+  final refresh = tick != tracker.seen;
+  tracker.seen = tick;
   if (conn == null) return const [];
   var list = await ref
       .watch(backendForProvider)(conn.id)
@@ -191,12 +192,12 @@ final browserEntriesProvider = FutureProvider.autoDispose<List<RemoteEntry>>((
     list = list.where((e) => fuzzyMatch(q, e.name)).toList();
   }
   if (onlyNew) {
-    final isOrganized = ref.read(isOrganizedProvider);
-    final keep = <RemoteEntry>[];
-    for (final e in list) {
-      if (!await isOrganized(e.path)) keep.add(e);
-    }
-    list = keep;
+    final history = ref.watch(historyProvider);
+    final organized = await history.areOrganized(
+      conn.id,
+      list.map((e) => e.path),
+    );
+    list = list.where((e) => !organized.contains(e.path)).toList();
   }
   int cmp(RemoteEntry a, RemoteEntry b) => switch (sort) {
     BrowserSort.name => a.name.toLowerCase().compareTo(b.name.toLowerCase()),

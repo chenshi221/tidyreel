@@ -80,16 +80,60 @@ class MemoryHistoryStore implements HistoryStore {
     }
   }
 
+  String _mapThroughFolders(BatchId id, String path, {required bool reverse}) {
+    final folders = [
+      for (final r in _records[id]!)
+        if (r.status == OpStatus.done &&
+            r.op.phase == ExecPhase.folders &&
+            r.op.kind == OpKind.relocate)
+          r.op,
+    ];
+    var cur = path;
+    for (final f in reverse ? folders.reversed : folders) {
+      final from = reverse ? f.dst : f.src;
+      final to = reverse ? f.src : f.dst;
+      if (cur == from) {
+        cur = to;
+      } else if (cur.startsWith('$from/')) {
+        cur = '$to${cur.substring(from.length)}';
+      }
+    }
+    return cur;
+  }
+
   @override
   Future<bool> isOrganized(ConnectionId connection, String path) async {
     for (final MapEntry(key: id, value: b) in _batches.entries) {
       if (b.conn != connection) continue;
+      final preFolder = _mapThroughFolders(id, path, reverse: true);
       if (_records[id]!.any(
-        (r) => r.status == OpStatus.done && r.op.dst == path,
+        (r) =>
+            r.status == OpStatus.done &&
+            (r.op.dst == path || r.op.dst == preFolder),
       )) {
         return true;
       }
     }
     return false;
+  }
+
+  @override
+  Future<Set<String>> areOrganized(
+    ConnectionId connection,
+    Iterable<String> paths,
+  ) async {
+    final target = paths.toSet();
+    if (target.isEmpty) return const {};
+    final out = <String>{};
+    for (final MapEntry(key: id, value: b) in _batches.entries) {
+      if (b.conn != connection) continue;
+      for (final r in _records[id]!) {
+        if (r.status != OpStatus.done || r.op.dst.isEmpty) continue;
+        if (target.contains(r.op.dst)) out.add(r.op.dst);
+        final postFolder = _mapThroughFolders(id, r.op.dst, reverse: false);
+        if (target.contains(postFolder)) out.add(postFolder);
+      }
+    }
+    return out;
   }
 }

@@ -13,9 +13,12 @@ Json candidateToJson(Candidate c) => {
   'englishTitle': c.englishTitle,
   'originalTitle': c.originalTitle,
   'year': c.year,
+  'overview': c.overview,
   'posterPath': c.posterPath,
+  'backdropPath': c.backdropPath,
   'originCountry': c.originCountry,
   'voteAverage': c.voteAverage,
+  'genres': c.genres,
 };
 
 Candidate candidateFromJson(Json j) => Candidate(
@@ -25,9 +28,12 @@ Candidate candidateFromJson(Json j) => Candidate(
   englishTitle: j['englishTitle'] as String?,
   originalTitle: j['originalTitle'] as String?,
   year: j['year'] as int?,
+  overview: j['overview'] as String?,
   posterPath: j['posterPath'] as String?,
+  backdropPath: j['backdropPath'] as String?,
   originCountry: j['originCountry'] as String?,
   voteAverage: (j['voteAverage'] as num?)?.toDouble(),
+  genres: (j['genres'] as List?)?.cast<String>() ?? const [],
 );
 
 Json _parsedToJson(ParsedName p) => {
@@ -36,6 +42,7 @@ Json _parsedToJson(ParsedName p) => {
   'season': p.season,
   'episodes': p.episodes,
   'absolute': p.absolute,
+  'airDate': p.airDate?.toIso8601String(),
   'kind': p.kind.name,
   'resolution': p.resolution,
   'group': p.group,
@@ -50,6 +57,9 @@ ParsedName _parsedFromJson(Json j) => ParsedName(
   season: j['season'] as int?,
   episodes: List<int>.of((j['episodes'] as List).cast<int>()),
   absolute: j['absolute'] as int?,
+  airDate: j['airDate'] == null
+      ? null
+      : DateTime.tryParse(j['airDate'] as String),
   kind: MediaKind.values.byName(j['kind'] as String),
   resolution: j['resolution'] as String?,
   group: j['group'] as String?,

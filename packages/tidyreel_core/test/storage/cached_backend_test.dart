@@ -87,4 +87,13 @@ void main() {
       throwsStateError,
     );
   });
+
+  test('walkDirs does not loop on duplicate or cyclical folders', () async {
+    final visited = <String>[];
+    await walkDirs(['/a', '/a', '/b'], (dir) async {
+      visited.add(dir);
+      return dir == '/a' ? ['/b', '/a'] : const [];
+    });
+    expect(visited, ['/a', '/b']);
+  });
 }

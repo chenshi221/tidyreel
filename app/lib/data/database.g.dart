@@ -1955,6 +1955,10 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $BatchesTable batches = $BatchesTable(this);
   late final $HistoryRecordsTable historyRecords = $HistoryRecordsTable(this);
   late final $TasksTable tasks = $TasksTable(this);
+  late final Index historyRecordsDstStatus = Index(
+    'history_records_dst_status',
+    'CREATE INDEX history_records_dst_status ON history_records (dst, status)',
+  );
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -1963,6 +1967,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     batches,
     historyRecords,
     tasks,
+    historyRecordsDstStatus,
   ];
 }
 

@@ -324,6 +324,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
       initial: c.text.trim().isEmpty ? '/' : _apiPath(c.text),
       list: (dir) => widget.lister!(config, password, dir),
     );
+    if (!mounted) return;
     if (dir != null) c.text = dir == '/' ? '' : dir;
   }
 
@@ -331,6 +332,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
     final dir = await getDirectoryPath(
       initialDirectory: _folder.text.trim().isEmpty ? null : _folder.text,
     );
+    if (!mounted) return;
     if (dir != null) _folder.text = dir;
   }
 

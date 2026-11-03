@@ -193,15 +193,25 @@ void main() {
 
   group('follower helpers', () {
     test('normalizeLang', () {
-      for (final t in ['chs', 'SC', '简体', 'zh-CN', 'zh-Hans', 'gb']) {
+      for (final t in [
+        'chs',
+        'SC',
+        '简体',
+        'zh-CN',
+        'zh-Hans',
+        'gb',
+        'jpsc',
+        'cn',
+      ]) {
         expect(normalizeLang(t), 'zh-Hans', reason: t);
       }
-      for (final t in ['cht', 'tc', '繁体', 'zh-TW', 'zh-Hant', 'big5']) {
+      for (final t in ['cht', 'tc', '繁体', 'zh-TW', 'zh-Hant', 'big5', 'jptc']) {
         expect(normalizeLang(t), 'zh-Hant', reason: t);
       }
       for (final t in ['eng', 'en', 'EN-US']) {
         expect(normalizeLang(t), 'en', reason: t);
       }
+      expect(normalizeLang('jap'), 'ja');
       expect(normalizeLang('chs&eng'), 'zh-Hans');
       expect(normalizeLang('xyz'), isNull);
     });

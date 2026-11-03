@@ -10,6 +10,8 @@ import '../../data/settings.dart';
 import '../../ui/tokens.dart';
 import '../../ui/widgets.dart';
 import '../../widgets/common.dart';
+import '../tasks/task_detail_page.dart' show taskDetailProvider;
+import '../tasks/tasks_page.dart' show taskWorksProvider;
 import 'review_logic.dart';
 import 'review_panes.dart';
 
@@ -39,6 +41,8 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
   GroupId? _selected;
   int _detailTab =
       folderTab - 1; // "unset": DetailPane falls back to first season
+  var _updateSeq = 0;
+  var _executing = false;
 
   TaskId get _id => TaskId(widget.taskId);
   TaskManager get _tm => ref.read(taskManagerProvider);
@@ -47,6 +51,20 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void didUpdateWidget(ReviewPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.taskId != widget.taskId) {
+      _review = null;
+      _error = null;
+      _selected = null;
+      _showUnassigned = false;
+      _detailTab = folderTab - 1;
+      _executing = false;
+      _load();
+    }
   }
 
   @override
@@ -101,8 +119,24 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
   // ---- mutations
 
   Future<void> _update(GroupId id, GroupDecision d) async {
+    final seq = ++_updateSeq;
+    final cur = _review;
+    if (cur != null) {
+      setState(() {
+        _review = TaskReview(
+          id: cur.id,
+          scan: cur.scan,
+          decisions: {...cur.decisions, id: d},
+          preview: cur.preview,
+        );
+        _selectFirstVisible();
+      });
+    }
     final r = await _tm.updateDecision(_id, id, d);
     if (!mounted) return;
+    ref.invalidate(taskWorksProvider(_id));
+    ref.invalidate(taskDetailProvider(_id));
+    if (seq != _updateSeq) return;
     setState(() {
       _review = r;
       _selectFirstVisible();
@@ -203,6 +237,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
   }
 
   Future<void> _execute() async {
+    if (_executing) return;
     final r = _review;
     if (r == null || r.preview.conflicts.isNotEmpty) return;
     final ops = r.preview.ops.where((o) => o.selected).toList();
@@ -223,10 +258,22 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
           ),
           confirmLabel: '执行',
         );
-    if (!ok || !mounted) return;
+    if (!ok || !mounted || _executing) return;
+    setState(() => _executing = true);
     final router = GoRouter.of(context);
-    await _tm.run(_id);
-    router.go('/tasks/${_id.value}');
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await _tm.run(_id);
+      if (mounted) router.go('/tasks/${_id.value}');
+    } on Object catch (e) {
+      if (mounted) {
+        messenger
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(content: Text('$e')));
+      }
+    } finally {
+      if (mounted) setState(() => _executing = false);
+    }
   }
 
   // ---- keyboard: ↑↓ groups, ←→ seasons, space toggles, ⌘F search, ⌘↩ execute
@@ -241,7 +288,9 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
       _searchFocus.requestFocus();
       return KeyEventResult.handled;
     }
-    if (cmd && k == LogicalKeyboardKey.enter) {
+    if (cmd &&
+        (k == LogicalKeyboardKey.enter ||
+            k == LogicalKeyboardKey.numpadEnter)) {
       _execute();
       return KeyEventResult.handled;
     }
@@ -255,7 +304,11 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
     if (k == LogicalKeyboardKey.arrowDown || k == LogicalKeyboardKey.arrowUp) {
       final next = i + (k == LogicalKeyboardKey.arrowDown ? 1 : -1);
       if (next >= 0 && next < v.length) {
-        setState(() => _selected = v[next].id);
+        setState(() {
+          _selected = v[next].id;
+          _showUnassigned = false;
+          _detailTab = folderTab - 1;
+        });
       }
       return KeyEventResult.handled;
     }
@@ -289,6 +342,18 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
   @override
   Widget build(BuildContext context) {
     final r = _review;
+    ref.listen(
+      tasksProvider.select(
+        (v) => v.value?.where((t) => t.id == _id).firstOrNull?.stage,
+      ),
+      (prev, next) {
+        if (prev == TaskStage.awaitingReview &&
+            next != null &&
+            next != TaskStage.awaitingReview) {
+          context.go('/tasks/${_id.value}');
+        }
+      },
+    );
     final paths = ref
         .watch(tasksProvider)
         .asData
@@ -521,8 +586,18 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
             },
             value: mode ?? OrganizeMode.inPlace,
             onChanged: (v) async {
-              final nr = await _tm.setMode(_id, v);
-              if (mounted) setState(() => _review = nr);
+              try {
+                final nr = await _tm.setMode(_id, v);
+                if (mounted) setState(() => _review = nr);
+              } on Object catch (e) {
+                if (!mounted) return;
+                final msg = '$e'.contains('libraryRoot')
+                    ? '请先在「来源」连接设置中配置媒体库目录'
+                    : '切换整理模式失败：$e';
+                ScaffoldMessenger.of(context)
+                  ..hideCurrentSnackBar()
+                  ..showSnackBar(SnackBar(content: Text(msg)));
+              }
             },
           ),
           const SizedBox(width: 16),

@@ -118,43 +118,64 @@ class WebDAVBackend implements StorageBackend {
     dir: dir,
   );
 
-  // Namespace prefixes vary by server (D:, d:, none), so match them loosely.
+  // Namespace prefixes vary by server (D:, d:, lp1:, none), so match them loosely.
   static String _tag(String name) =>
-      '<(?:\\w+:)?$name\\b[^>]*>(.*?)</(?:\\w+:)?$name>';
+      '<(?:[\\w.-]+:)?$name\\b[^>]*>(.*?)</(?:[\\w.-]+:)?$name>';
   static final _responseRe = RegExp(_tag('response'), dotAll: true);
   static final _hrefRe = RegExp(_tag('href'), dotAll: true);
   static final _lengthRe = RegExp(_tag('getcontentlength'), dotAll: true);
   static final _modifiedRe = RegExp(_tag('getlastmodified'), dotAll: true);
-  static final _collectionRe = RegExp(r'<(?:\w+:)?collection\b');
+  static final _collectionRe = RegExp(r'<(?:[\w.-]+:)?collection\b');
 
   static String _unxml(String s) => s
+      .replaceAllMapped(
+        RegExp(r'&#x([0-9a-fA-F]+);|&#(\d+);'),
+        (m) => String.fromCharCode(
+          m[1] != null ? int.parse(m[1]!, radix: 16) : int.parse(m[2]!),
+        ),
+      )
       .replaceAll('&lt;', '<')
       .replaceAll('&gt;', '>')
       .replaceAll('&quot;', '"')
       .replaceAll('&apos;', "'")
       .replaceAll('&amp;', '&');
 
-  /// href (absolute URL or path, percent-encoded) -> connection-relative path.
-  String _relative(String href) {
-    final full = Uri.decodeComponent(Uri.parse(_unxml(href.trim())).path);
-    final base = Uri.decodeComponent(_base.path)
-        .replaceFirst(RegExp(r'/+$'), '');
-    var rel = full.startsWith(base) ? full.substring(base.length) : full;
-    rel = rel.replaceFirst(RegExp(r'/+$'), '');
-    return rel.isEmpty ? '/' : (rel.startsWith('/') ? rel : '/$rel');
+  /// Converts a resolved URI to a connection-relative path (`/`-rooted).
+  String _toRelativePath(Uri resolved) {
+    final full = resolved.pathSegments.where((s) => s.isNotEmpty).toList();
+    final base = _base.pathSegments.where((s) => s.isNotEmpty).toList();
+    var matchesBase = full.length >= base.length;
+    if (matchesBase) {
+      for (var i = 0; i < base.length; i++) {
+        if (full[i] != base[i]) {
+          matchesBase = false;
+          break;
+        }
+      }
+    }
+    final relSegs = matchesBase ? full.sublist(base.length) : full;
+    return relSegs.isEmpty ? '/' : '/${relSegs.join('/')}';
+  }
+
+  /// href (absolute URL, path, or relative URI, percent-encoded) -> connection-relative path.
+  String _relative(String href, {Uri? scope}) {
+    final parsed = Uri.parse(_unxml(href.trim()));
+    final resolved = (scope ?? _base).resolveUri(parsed);
+    return _toRelativePath(resolved);
   }
 
   @override
   Future<List<RemoteEntry>> list(String dir, {bool refresh = false}) async {
     final r = await _propfind(dir, 1, dir: true);
     if (r.statusCode != 207) throw _fail(r, dir);
-    final self = _relative(_uri(dir).path);
+    final reqUri = _uri(dir, dir: true);
+    final self = _toRelativePath(reqUri);
     final out = <RemoteEntry>[];
     for (final m in _responseRe.allMatches('${r.data}')) {
       final block = m.group(1)!;
       final href = _hrefRe.firstMatch(block)?.group(1);
       if (href == null) continue;
-      final path = _relative(href);
+      final path = _relative(href, scope: reqUri);
       // PROPFIND Depth 1 includes the collection itself.
       if (path == self) continue;
       final isDir = _collectionRe.hasMatch(block);
@@ -212,8 +233,36 @@ class WebDAVBackend implements StorageBackend {
   }
 
   @override
-  Future<void> rename(String path, String newName) =>
-      _move(path, p.posix.join(p.posix.dirname(path), newName));
+  Future<void> rename(String path, String newName) async {
+    final dir = p.posix.dirname(path);
+    final oldName = p.posix.basename(path);
+    final target = p.posix.join(dir, newName);
+    if (oldName == newName) return;
+    if (oldName.toLowerCase() != newName.toLowerCase()) {
+      return _move(path, target);
+    }
+    // Case-only: a case-insensitive server (IIS, NAS on NTFS/APFS) answers 412
+    // since the target "exists" -- it is the source. Refuse only a separate
+    // entry spelled exactly like the target, then go through a temporary name.
+    if ((await list(dir)).any((e) => e.name == newName)) {
+      throw StorageException(StorageErrorCode.alreadyExists, target);
+    }
+    final tmp = p.posix.join(
+      dir,
+      '.tidyreel-case-${DateTime.now().microsecondsSinceEpoch}',
+    );
+    await _move(path, tmp);
+    try {
+      await _move(tmp, target);
+    } on Object {
+      try {
+        await _move(tmp, path);
+      } on Object {
+        // best effort; the original error is what matters
+      }
+      rethrow;
+    }
+  }
 
   /// WebDAV has no batch rename; each MOVE is one request anyway.
   @override

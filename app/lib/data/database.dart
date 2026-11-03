@@ -33,6 +33,7 @@ class Batches extends Table {
 
 /// Write-ahead log: every op is inserted as `pending` before storage is touched.
 @DataClassName('HistoryRow')
+@TableIndex(name: 'history_records_dst_status', columns: {#dst, #status})
 class HistoryRecords extends Table {
   TextColumn get batchId => text().references(Batches, #id)();
   TextColumn get opId => text()();
@@ -99,5 +100,17 @@ class AppDatabase extends _$AppDatabase {
   }
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
+
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+    beforeOpen: (details) async {
+      await customStatement('PRAGMA foreign_keys = ON');
+    },
+    onUpgrade: (m, from, to) async {
+      if (from < 2) {
+        await m.createIndex(historyRecordsDstStatus);
+      }
+    },
+  );
 }

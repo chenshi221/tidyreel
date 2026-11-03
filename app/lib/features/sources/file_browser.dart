@@ -107,11 +107,11 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
           backend: ref.read(backendForProvider)(widget.connection.id),
           paths: paths,
           organizedCount: (dirs) async {
-            var n = 0;
-            for (final d in dirs) {
-              if (await history.isOrganized(widget.connection.id, d)) n++;
-            }
-            return n;
+            final organized = await history.areOrganized(
+              widget.connection.id,
+              dirs,
+            );
+            return organized.length;
           },
         );
     if (!ok || !mounted) return;
@@ -278,7 +278,7 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
                   value: ref.watch(browserSortProvider),
                   onChanged: ref.read(browserSortProvider.notifier).set,
                 ),
-                // Hook: browserEntriesProvider applies isOrganizedProvider.
+                // Hook: browserEntriesProvider filters via HistoryStore.areOrganized.
                 FilterChip(
                   label: const Text('只看未整理的'),
                   selected: ref.watch(onlyUnorganizedProvider),

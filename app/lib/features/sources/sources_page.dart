@@ -158,7 +158,7 @@ Future<void> _edit(
     tester: ref.read(connectionTesterProvider),
     lister: ref.read(connectionListerProvider),
   );
-  if (draft == null) return;
+  if (draft == null || !context.mounted) return;
   ref.read(connectionsEditorProvider.notifier).upsert(draft.config);
   ref.read(connectionPasswordsProvider.notifier).set({
     ...ref.read(connectionPasswordsProvider),
@@ -179,7 +179,9 @@ Future<void> _delete(
     confirmLabel: '删除',
     destructive: true,
   );
-  if (ok) ref.read(connectionsEditorProvider.notifier).remove(c.id);
+  if (ok && context.mounted) {
+    ref.read(connectionsEditorProvider.notifier).remove(c.id);
+  }
 }
 
 class _ConnectionRow extends ConsumerWidget {

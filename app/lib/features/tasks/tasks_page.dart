@@ -201,11 +201,17 @@ class TaskCard extends ConsumerWidget {
         MenuAction('立即执行', runConfident, icon: CupertinoIcons.play),
       ],
       if (t.stage == TaskStage.partiallyFailed)
-        MenuAction(
-          '重试失败项',
-          () => tm.retryFailed(t.id),
-          icon: CupertinoIcons.arrow_clockwise,
-        ),
+        MenuAction('重试失败项', () async {
+          try {
+            await tm.retryFailed(t.id);
+          } on StateError catch (e) {
+            if (context.mounted) {
+              ScaffoldMessenger.of(context)
+                ..hideCurrentSnackBar()
+                ..showSnackBar(SnackBar(content: Text(e.message)));
+            }
+          }
+        }, icon: CupertinoIcons.arrow_clockwise),
       if (t.stage == TaskStage.done || t.stage == TaskStage.partiallyFailed)
         MenuAction('撤销', undo, icon: CupertinoIcons.arrow_uturn_left),
       if (t.stage.isActive)
@@ -491,7 +497,16 @@ Future<void> confirmUndo(BuildContext context, WidgetRef ref, TaskId id) async {
     confirmLabel: '撤销',
     destructive: true,
   );
-  if (ok) await ref.read(taskManagerProvider).undo(id);
+  if (!ok || !context.mounted) return;
+  try {
+    await ref.read(taskManagerProvider).undo(id);
+  } on StateError catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(e.message)));
+    }
+  }
 }
 
 /// Up to three posters fanned out; an icon tile before recognition.
