@@ -196,7 +196,7 @@ abstract final class Radii {
   static const xl = 12.0;
 
   /// Map blocks and other "pebble" shapes.
-  static const pebble = 22.0;
+  static const pebble = 34.0;
 }
 
 /// Platform UI font (SF + PingFang on macOS, Segoe + YaHei on Windows).

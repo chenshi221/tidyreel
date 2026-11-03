@@ -10,13 +10,19 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:tidyreel/app.dart';
 import 'package:tidyreel/shell/sidebar.dart';
 import 'package:tidyreel/data/providers.dart';
 import 'package:tidyreel/data/settings.dart';
+import 'package:tidyreel/features/map/map_providers.dart';
+import 'package:tidyreel/features/sources/sources_providers.dart';
+import 'package:tidyreel_core/testing.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
+
+import 'features/map/fake_library.dart';
 
 final _out = Platform.environment['SHOTS_DIR'];
 final _fonts = Platform.environment['FONTS_DIR'];
@@ -83,14 +89,17 @@ Future<void> _shot(WidgetTester tester, String name) async {
   });
 }
 
-Future<ProviderContainer> _pumpApp(WidgetTester tester) async {
+Future<ProviderContainer> _pumpApp(
+  WidgetTester tester, {
+  List<Override> overrides = const [],
+}) async {
   tester.view.physicalSize = const Size(1280, 800);
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
-    const RepaintBoundary(
-      key: ValueKey('shot-root'),
-      child: ProviderScope(child: TidyreelApp()),
+    RepaintBoundary(
+      key: const ValueKey('shot-root'),
+      child: ProviderScope(overrides: overrides, child: const TidyreelApp()),
     ),
   );
   await tester.pumpAndSettle();
@@ -173,6 +182,43 @@ void main() {
     await tester.tap(find.text('异兽魔都').first);
     await _settleTasks(tester);
     await _shot(tester, '10-review-show');
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('map screens', skip: _out == null, (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    final c = await _pumpApp(
+      tester,
+      overrides: [
+        demoBackendProvider.overrideWithValue(
+          MemoryStorageBackend(fakeLibrary),
+        ),
+        mapOrganizedOfProvider.overrideWith(
+          (ref, id) =>
+              (paths) async => paths.where(fakeOrganized.contains).toSet(),
+        ),
+      ],
+    );
+    // The app's router is global: the first test left it on a review page.
+    GoRouter.of(tester.element(find.byType(Sidebar))).go('/sources');
+    await tester.pumpAndSettle();
+    final conn = c
+        .read(connectionsProvider)
+        .firstWhere((e) => e.id == const ConnectionId('demo-alist'));
+    c.read(openConnectionProvider.notifier).set(conn);
+    c.read(browserDirProvider.notifier).set(root);
+    c.read(browserMapModeProvider.notifier).set(true);
+    await _settleTasks(tester);
+    await _shot(tester, '12-map');
+    c.read(browserDirProvider.notifier).set('$root/动漫');
+    await _settleTasks(tester);
+    await _shot(tester, '13-map-anime');
+    c.read(browserDirProvider.notifier).set(root);
+    c
+        .read(settingsProvider.notifier)
+        .update((s) => s.copyWith(themeMode: ThemeMode.dark));
+    await _settleTasks(tester);
+    await _shot(tester, '14-map-dark');
     debugDefaultTargetPlatformOverride = null;
   });
 }
