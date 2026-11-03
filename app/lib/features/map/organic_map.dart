@@ -44,7 +44,7 @@ class OrganicMap extends StatefulWidget {
     required this.blocks,
     this.onTap,
     this.onSecondaryTap,
-    this.gap = 9,
+    this.gap = 12,
   });
 
   @override
@@ -72,18 +72,21 @@ class _OrganicMapState extends State<OrganicMap> {
     // A floor on the drawn area keeps the long tail visible and clickable;
     // labels still show real sizes.
     final total = widget.blocks.fold(0, (t, b) => t + b.bytes);
-    final cells = layoutOrganic(
-      [
-        for (final b in widget.blocks)
-          MapItem(b.id, math.max(b.bytes.toDouble(), total * minShareDrawn)),
-      ],
-      Offset.zero & size,
-      maxTilt: 0.3,
-    );
+    final cells = layoutOrganic([
+      for (final b in widget.blocks)
+        MapItem(b.id, math.max(b.bytes.toDouble(), total * minShareDrawn)),
+    ], Offset.zero & size);
+    // Each pebble shrinks by its own amount, so the gaps between neighbours
+    // vary like stones laid by hand; bigger stones get a little more air.
+    final scale = math.sqrt(size.width * size.height);
     return _placed = [
       for (final c in cells)
-        if (insetConvex(c.polygon, widget.gap / 2) case final poly
-            when poly.isNotEmpty)
+        if (insetConvex(
+              c.polygon,
+              widget.gap / 2 * (0.8 + 0.4 * hashUnit(c.id)) +
+                  math.sqrt(c.area) / scale * widget.gap * 0.15,
+            )
+            case final poly when poly.isNotEmpty)
           _PlacedBlock(byId[c.id]!, poly),
     ];
   }
@@ -139,16 +142,22 @@ class _OrganicMapState extends State<OrganicMap> {
   }
 }
 
-/// Fill for a block state. Organized reads solid and calm, mixed in between,
-/// non-media recedes toward the paper; unorganized has no fill (contours).
-Color? blockFill(BlockState s, Palette p, {required bool dark}) {
+/// Fill for a block state, at full contrast: organized is the solid ink
+/// (near-black on paper, cream in the dark), non-media recedes toward the
+/// paper, mixed sits between; unorganized has no fill (contours). [id] nudges
+/// the lightness a little so neighbours of one state don't merge.
+Color? blockFill(BlockState s, Palette p, {required bool dark, String? id}) {
   final t = p.tones;
-  return switch (s) {
-    BlockState.organized => dark ? t[1] : t[3],
-    BlockState.mixed => t[2],
+  final base = switch (s) {
+    BlockState.organized => dark ? t[0] : t[4],
+    BlockState.mixed => dark ? t[1] : t[2],
     BlockState.other => dark ? t[3] : t[0],
     BlockState.unorganized => null,
   };
+  if (base == null || id == null) return base;
+  final hsl = HSLColor.fromColor(base);
+  final nudge = (hashUnit(id) - 0.5) * 0.07;
+  return hsl.withLightness((hsl.lightness + nudge).clamp(0.0, 1.0)).toColor();
 }
 
 class _MapPainter extends CustomPainter {
@@ -160,59 +169,59 @@ class _MapPainter extends CustomPainter {
   final TextStyle baseStyle;
 
   _MapPainter({
-    required this.baseStyle,
     required this.placed,
     required this.palette,
     required this.dark,
     required this.hover,
     required this.textScaler,
+    required this.baseStyle,
   });
 
-  static const _radius = Radii.pebble;
-  static const _contourStep = 9.0;
+  static const _contourStep = 7.0;
 
   @override
   void paint(Canvas canvas, Size size) {
     final p = palette;
     for (final b in placed) {
       final hovered = b.block.id == hover;
-      final fill = blockFill(b.block.state, p, dark: dark);
-      final outline = roundedPolygon(b.polygon, _radius);
+      final fill = blockFill(b.block.state, p, dark: dark, id: b.block.id);
+      final label = _labelFor(b, fill);
       if (fill == null) {
         final line = Paint()
           ..style = PaintingStyle.stroke
-          ..strokeWidth = hovered ? 0.9 : 0.6
+          ..strokeWidth = hovered ? 0.8 : 0.5
+          ..isAntiAlias = true
           ..color = hovered
-              ? p.text.withValues(alpha: p.contour.a * 1.5)
+              ? p.text.withValues(alpha: math.min(1, p.contour.a * 1.6))
               : p.contour;
-        canvas.drawPath(outline, line);
-        for (final ring in contourRings(b.polygon, _contourStep)) {
-          canvas.drawPath(roundedPolygon(ring, _radius), line);
+        canvas.drawPath(pebblePath(b.polygon), line);
+        final keep = label?.rect.inflate(6);
+        for (final ring in contourRings(b.polygon, _contourStep, keep: keep)) {
+          canvas.drawPath(pebblePath(ring), line);
         }
       } else {
         final c = hovered
-            ? Color.lerp(fill, dark ? Colors.white : Colors.black, 0.07)!
+            ? Color.lerp(fill, dark ? Colors.white : Colors.black, 0.08)!
             : fill;
-        canvas.drawPath(outline, Paint()..color = c);
+        canvas.drawPath(pebblePath(b.polygon), Paint()..color = c);
       }
-      _label(canvas, b, fill);
+      label?.paint(canvas);
     }
   }
 
-  void _label(Canvas canvas, _PlacedBlock b, Color? fill) {
+  _Label? _labelFor(_PlacedBlock b, Color? fill) {
     final p = palette;
     final ink = fill == null
         ? p.text
         : fill.computeLuminance() > 0.33
         ? const Color(0xFF1D1C1A)
         : const Color(0xFFF1EFE7);
-    // Unorganized contours sit behind the text; give the label a calm patch.
     final c = polygonCentroid(b.polygon);
-    // Rounded corners only eat into the chord near the ends.
-    final width = chordWidth(b.polygon, c.dy) - 1.2 * _radius;
-    final height = chordHeight(b.polygon, c.dx) - 1.2 * _radius;
-    if (width < 36 || height < 22) return;
-    final big = math.min(width, height) > 150;
+    // Smoothing eats the corners; the middle of each chord is what's left.
+    final width = chordWidth(b.polygon, c.dy) * 0.78;
+    final height = chordHeight(b.polygon, c.dx) * 0.72;
+    if (width < 36 || height < 22) return null;
+    final big = math.min(width, height) > 140;
     TextPainter line(
       String text,
       double size,
@@ -226,7 +235,7 @@ class _MapPainter extends CustomPainter {
           fontSize: size,
           fontWeight: w,
           color: ink.withValues(alpha: alpha),
-          height: 1.25,
+          height: 1.3,
           decoration: TextDecoration.none,
           fontFeatures: const [FontFeature.tabularFigures()],
         ),
@@ -237,14 +246,14 @@ class _MapPainter extends CustomPainter {
       ellipsis: '…',
       textScaler: textScaler,
     )..layout(maxWidth: width);
-    final name = line(b.block.label, big ? 16 : 13, FontWeight.w400, 1);
+    final name = line(b.block.label, big ? 17 : 13, FontWeight.w400, 1);
     final caption = b.block.caption == null
         ? null
         : line(
             b.block.caption!,
-            big ? 16 : 12,
+            big ? 17 : 12,
             FontWeight.w300,
-            0.75,
+            0.72,
             maxLines: 1,
           );
     // A cut-off number says nothing: drop the size rather than show "35.4…".
@@ -253,23 +262,11 @@ class _MapPainter extends CustomPainter {
       if (name.height + (size?.height ?? 0) + 2 <= height) name,
       ?size,
     ];
+    if (lines.isEmpty) return null;
     final total = lines.fold(0.0, (s, l) => s + l.height) + 2;
-    if (lines.isEmpty || total > height) return;
-    if (fill == null) {
-      final w = lines.map((l) => l.width).reduce(math.max) + 24;
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromCenter(center: c, width: w, height: total + 14),
-          const Radius.circular(10),
-        ),
-        Paint()..color = p.canvas,
-      );
-    }
-    var y = c.dy - total / 2;
-    for (final l in lines) {
-      l.paint(canvas, Offset(c.dx - l.width / 2, y));
-      y += l.height + 2;
-    }
+    if (total > height) return null;
+    final w = lines.map((l) => l.width).reduce(math.max);
+    return _Label(lines, Rect.fromCenter(center: c, width: w, height: total));
   }
 
   @override
@@ -278,4 +275,19 @@ class _MapPainter extends CustomPainter {
       old.hover != hover ||
       old.palette != palette ||
       old.dark != dark;
+}
+
+class _Label {
+  final List<TextPainter> lines;
+  final Rect rect;
+
+  const _Label(this.lines, this.rect);
+
+  void paint(Canvas canvas) {
+    var y = rect.top;
+    for (final l in lines) {
+      l.paint(canvas, Offset(rect.center.dx - l.width / 2, y));
+      y += l.height + 2;
+    }
+  }
 }

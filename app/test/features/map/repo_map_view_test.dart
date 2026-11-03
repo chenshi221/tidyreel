@@ -51,19 +51,15 @@ Offset _centerOf(WidgetTester tester, ProviderContainer c, String label) {
   final map = tester.widget<OrganicMap>(find.byType(OrganicMap));
   final box = tester.renderObject<RenderBox>(find.byType(OrganicMap));
   final total = map.blocks.fold(0, (t, b) => t + b.bytes);
-  final cells = layoutOrganic(
-    [
-      for (final b in map.blocks)
-        MapItem(
-          b.id,
-          b.bytes.toDouble() < total * minShareDrawn
-              ? total * minShareDrawn
-              : b.bytes.toDouble(),
-        ),
-    ],
-    Offset.zero & box.size,
-    maxTilt: 0.3,
-  );
+  final cells = layoutOrganic([
+    for (final b in map.blocks)
+      MapItem(
+        b.id,
+        b.bytes.toDouble() < total * minShareDrawn
+            ? total * minShareDrawn
+            : b.bytes.toDouble(),
+      ),
+  ], Offset.zero & box.size);
   final id = map.blocks.firstWhere((b) => b.label == label).id;
   return box.localToGlobal(cells.firstWhere((x) => x.id == id).centroid);
 }

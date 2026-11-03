@@ -36,13 +36,13 @@ class FolderStats {
 
 /// How the map shades a block (PLAN: colour = organize state).
 enum BlockState {
-  /// ≥ 90 % of the video bytes are organized.
+  /// ≥ 80 % of the video bytes are organized.
   organized,
 
   /// Some organized, some not.
   mixed,
 
-  /// ≥ 90 % of the video bytes still need organizing: drawn as contours.
+  /// ≥ 80 % of the video bytes still need organizing: drawn as contours.
   unorganized,
 
   /// No video at all (subtitles, extras, junk…).
@@ -52,8 +52,8 @@ enum BlockState {
 BlockState blockStateOf(FolderStats s) {
   if (s.video == 0) return BlockState.other;
   final ratio = s.organized / s.video;
-  if (ratio >= 0.9) return BlockState.organized;
-  if (ratio <= 0.1) return BlockState.unorganized;
+  if (ratio >= 0.8) return BlockState.organized;
+  if (ratio <= 0.2) return BlockState.unorganized;
   return BlockState.mixed;
 }
 

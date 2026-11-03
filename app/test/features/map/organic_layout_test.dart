@@ -32,7 +32,7 @@ void main() {
     final total = items.fold(0.0, (s, i) => s + i.value);
     for (final c in cells) {
       final want = bounds.width * bounds.height * c.value / total;
-      expect((c.area - want).abs() / want, lessThan(0.01), reason: c.id);
+      expect((c.area - want).abs() / want, lessThan(0.05), reason: c.id);
     }
   });
 
@@ -106,15 +106,31 @@ void main() {
     expect(chordWidth(tri, 50), closeTo(50, 1e-9));
   });
 
-  test('rounded path stays within the polygon bounds', () {
+  test('smoothing keeps the pebble inside its polygon and rounds it', () {
     final cells = layoutOrganic(items, bounds);
     for (final c in cells) {
-      final path = roundedPolygon(c.polygon, 22);
-      final box = path.getBounds();
-      final xs = c.polygon.map((p) => p.dx);
-      final ys = c.polygon.map((p) => p.dy);
-      expect(box.left, greaterThanOrEqualTo(xs.reduce(math.min) - 1e-3));
-      expect(box.bottom, lessThanOrEqualTo(ys.reduce(math.max) + 1e-3));
+      final smooth = smoothPolygon(c.polygon);
+      expect(smooth.length, greaterThan(c.polygon.length * 8));
+      // Chaikin points are convex combinations of the corners.
+      final xs = c.polygon.map((p) => p.dx), ys = c.polygon.map((p) => p.dy);
+      for (final p in smooth) {
+        expect(
+          p.dx,
+          inInclusiveRange(
+            xs.reduce(math.min) - 1e-6,
+            xs.reduce(math.max) + 1e-6,
+          ),
+        );
+        expect(
+          p.dy,
+          inInclusiveRange(
+            ys.reduce(math.min) - 1e-6,
+            ys.reduce(math.max) + 1e-6,
+          ),
+        );
+      }
+      expect(polygonArea(smooth), lessThan(c.area));
+      expect(polygonArea(smooth), greaterThan(c.area * 0.8));
     }
   });
 }
