@@ -278,16 +278,36 @@ class DefaultExecutor implements Executor {
         if (e.code != StorageErrorCode.notFound) rethrow;
       }
     }
+    // An original location that is occupied only by a file this undo moves
+    // away (a chain a->b, b->c) is not a reason to skip; drop candidates
+    // until every remaining occupant is one of them.
+    var cand = [
+      for (final o in mappedFiles)
+        if (o.kind == OpKind.relocate &&
+            o.src != o.dst &&
+            present.contains(o.dst))
+          o,
+    ];
+    while (true) {
+      final vacating = {for (final o in cand) o.dst};
+      final keep = [
+        for (final o in cand)
+          if (!present.contains(o.src) || vacating.contains(o.src)) o,
+      ];
+      if (keep.length == cand.length) break;
+      cand = keep;
+    }
+    final undoing = {for (final o in cand) o.id};
     final inverse = <RenameOp>[];
     final byId = <OpId, RenameOp>{};
     final rest = <RenameOp>[];
     for (final o in mappedFiles) {
       if (o.kind != OpKind.relocate || o.src == o.dst) {
         rest.add(o);
-      } else if (present.contains(o.src)) {
-        await finish(o, '原位置已被占用：${o.src}', null);
       } else if (!present.contains(o.dst)) {
         await finish(o, '目标已不存在：${o.dst}', null);
+      } else if (!undoing.contains(o.id)) {
+        await finish(o, '原位置已被占用：${o.src}', null);
       } else {
         final inv = RenameOp(
           id: o.id,
@@ -301,24 +321,60 @@ class DefaultExecutor implements Executor {
         byId[o.id] = o;
       }
     }
+
+    // Inverses run like forward ops: a failed batch step is retried in resume
+    // mode (picking up a half-done rename instead of reporting it missing),
+    // and swaps / chains go through tmp names. Backends never overwrite.
+    final taken = <String>{};
+    Future<void> landed(RenameOp inv) {
+      taken.add(inv.dst);
+      return finish(byId[inv.id]!, null, null);
+    }
+
+    Future<void> invOne(RenameOp inv, {bool retry = false}) async {
+      try {
+        await _apply(
+          be,
+          inv,
+          resuming: retry,
+          srcTaken: taken.contains(inv.src),
+        );
+      } on Object catch (e) {
+        return finish(byId[inv.id]!, null, e.toString());
+      }
+      await landed(inv);
+    }
+
     final left = await _batched(
       inverse,
       be,
       (_) => null,
-      (inv, status, error) => finish(byId[inv.id]!, null, null),
-      (inv, {retry = false}) => undoOne(byId[inv.id]!),
+      (inv, status, error) => landed(inv),
+      invOne,
       cancelled,
     );
-    final queue = [for (final inv in left) byId[inv.id]!, ...rest];
+    if (cancelled()) return;
+    await _runStaged(
+      left,
+      be,
+      width: concurrency,
+      stage: true,
+      resuming: false,
+      taken: taken,
+      blocked: (_) => false,
+      one: invOne,
+      parkFailed: (inv, e) => finish(byId[inv.id]!, null, e.toString()),
+      cancelled: cancelled,
+    );
     var next = 0;
     Future<void> worker() async {
-      while (!cancelled() && next < queue.length) {
-        await undoOne(queue[next++]);
+      while (!cancelled() && next < rest.length) {
+        await undoOne(rest[next++]);
       }
     }
 
     await Future.wait([
-      for (var i = 0; i < concurrency && i < queue.length; i++) worker(),
+      for (var i = 0; i < concurrency && i < rest.length; i++) worker(),
     ]);
     for (final op in mappedMkdirs) {
       if (cancelled()) return;
@@ -431,66 +487,93 @@ class DefaultExecutor implements Executor {
         if (phase == ExecPhase.files && !resuming) {
           group = await _batched(group, be, blockerOf, record, one, cancelled);
         }
-        // Swaps and chains (a target that another op still has to vacate):
-        // park those files under their tmp name first and land them after
-        // everything else ran. Resume mode never gets here via _batched, so
-        // this is what keeps a retried EP01 <-> EP02 from colliding.
-        final staged = phase == ExecPhase.files
-            ? _occupiedByPeer(group)
-            : const <RenameOp>[];
-        final parked = <RenameOp>[];
-        if (staged.isNotEmpty) {
-          final ids = {for (final o in staged) o.id};
-          group = [
-            for (final o in group)
-              if (!ids.contains(o.id)) o,
-          ];
-          for (final o in staged) {
-            if (cancelled()) return;
-            if (blockerOf(o) != null) {
-              parked.add(o); // one() records the skip
-              continue;
-            }
-            try {
-              // When resuming, the file may already be parked, or have landed
-              // (src then holds the file of the op that moved in).
-              final tmp = p.posix.join(p.posix.dirname(o.src), _tmpName(o.id));
-              if (!resuming ||
-                  (!taken.contains(o.src) &&
-                      !await be.exists(tmp) &&
-                      await be.exists(o.src))) {
-                await be.rename(o.src, _tmpName(o.id));
-              }
-              parked.add(o);
-            } on Object catch (e) {
-              failed.add(o);
-              await record(o, OpStatus.failed, e.toString());
-            }
-          }
-        }
-        var next = 0;
-        Future<void> worker() async {
-          while (!cancelled() && next < group.length) {
-            await one(group[next++]);
-          }
-        }
-
-        // Folder renames can be nested (parent + child), so they run one by one.
-        final width = phase == ExecPhase.files ? concurrency : 1;
-        await Future.wait([
-          for (var i = 0; i < width && i < group.length; i++) worker(),
-        ]);
-        // Their targets are free now; resume mode finds them under tmp.
-        for (final o in parked) {
-          if (cancelled()) return;
-          await one(o, retry: true);
-        }
+        await _runStaged(
+          group,
+          be,
+          // Folder renames can be nested (parent + child): one by one.
+          width: phase == ExecPhase.files ? concurrency : 1,
+          // Resume mode never runs _batched, so this is what keeps a retried
+          // EP01 <-> EP02 from colliding.
+          stage: phase == ExecPhase.files,
+          resuming: resuming,
+          taken: taken,
+          blocked: (o) => blockerOf(o) != null,
+          one: one,
+          parkFailed: (o, e) async {
+            failed.add(o);
+            await record(o, OpStatus.failed, e.toString());
+          },
+          cancelled: cancelled,
+        );
       }
       if (cancelled()) return;
     }
   }
 
   static String _tmpName(OpId id) => '.tidyreel-tmp-${id.value}';
+
+  /// Runs [group] [width] at a time. With [stage], relocates whose target
+  /// another op of [group] still has to vacate (swaps, chains) are parked
+  /// under their tmp name first and landed after the rest via
+  /// `one(op, retry: true)`, which resumes from the tmp name.
+  Future<void> _runStaged(
+    List<RenameOp> group,
+    StorageBackend be, {
+    required int width,
+    required bool stage,
+    required bool resuming,
+    required Set<String> taken,
+    required bool Function(RenameOp) blocked,
+    required Future<void> Function(RenameOp, {bool retry}) one,
+    required Future<void> Function(RenameOp, Object error) parkFailed,
+    required bool Function() cancelled,
+  }) async {
+    final staged = stage ? _occupiedByPeer(group) : const <RenameOp>[];
+    final parked = <RenameOp>[];
+    if (staged.isNotEmpty) {
+      final ids = {for (final o in staged) o.id};
+      group = [
+        for (final o in group)
+          if (!ids.contains(o.id)) o,
+      ];
+      for (final o in staged) {
+        if (cancelled()) return;
+        if (blocked(o)) {
+          parked.add(o); // one() records the skip
+          continue;
+        }
+        try {
+          // When resuming, the file may already be parked, or have landed
+          // (src then holds the file of the op that moved in).
+          final tmp = p.posix.join(p.posix.dirname(o.src), _tmpName(o.id));
+          if (!resuming ||
+              (!taken.contains(o.src) &&
+                  !await be.exists(tmp) &&
+                  await be.exists(o.src))) {
+            await be.rename(o.src, _tmpName(o.id));
+          }
+          parked.add(o);
+        } on Object catch (e) {
+          await parkFailed(o, e);
+        }
+      }
+    }
+    var next = 0;
+    Future<void> worker() async {
+      while (!cancelled() && next < group.length) {
+        await one(group[next++]);
+      }
+    }
+
+    await Future.wait([
+      for (var i = 0; i < width && i < group.length; i++) worker(),
+    ]);
+    // Their targets are free now.
+    for (final o in parked) {
+      if (cancelled()) return;
+      await one(o, retry: true);
+    }
+  }
 
   /// Relocates whose target is the source of another op in [ops].
   static List<RenameOp> _occupiedByPeer(List<RenameOp> ops) {

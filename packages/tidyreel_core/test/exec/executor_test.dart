@@ -360,6 +360,90 @@ void main() {
     expect(fs.files, contains('/d/Movie.mkv'));
   });
 
+  group('undo of swaps, chains and half-done batches', () {
+    Future<Map<String, int>> sizes(MemoryStorageBackend f, String dir) async =>
+        {for (final e in await f.list(dir)) e.name: e.size};
+
+    test('a rename chain is undone, not skipped', () async {
+      final f = MemoryStorageBackend({'/d/E01.mkv': 1, '/d/E02.mkv': 2});
+      final ops = [
+        reloc('/d/E01.mkv', '/d/E02.mkv'),
+        reloc('/d/E02.mkv', '/d/E03.mkv'),
+      ];
+      final ex = executor(history);
+      await run(ex.execute(task, conn, RenamePlan(ops: ops), f));
+      final b = await theBatch(history);
+      expect(await sizes(f, '/d'), {'E02.mkv': 1, 'E03.mkv': 2});
+      await run(ex.undo(b, f));
+      expect(await sizes(f, '/d'), {'E01.mkv': 1, 'E02.mkv': 2});
+      expect(statusCounts(await history.records(b)), {OpStatus.undone: 2});
+    });
+
+    test('a swap and a 3-cycle are undone', () async {
+      final f = MemoryStorageBackend({
+        '/d/01.mkv': 1,
+        '/d/02.mkv': 2,
+        '/d/x/a.mkv': 3,
+        '/d/x/b.mkv': 4,
+        '/d/x/c.mkv': 5,
+      });
+      final before = {...await sizes(f, '/d'), ...await sizes(f, '/d/x')};
+      final ops = [
+        reloc('/d/01.mkv', '/d/02.mkv'),
+        reloc('/d/02.mkv', '/d/01.mkv'),
+        reloc('/d/x/a.mkv', '/d/x/b.mkv'),
+        reloc('/d/x/b.mkv', '/d/x/c.mkv'),
+        reloc('/d/x/c.mkv', '/d/x/a.mkv'),
+      ];
+      final ex = executor(history);
+      await run(ex.execute(task, conn, RenamePlan(ops: ops), f));
+      final b = await theBatch(history);
+      await run(ex.undo(b, f));
+      expect({...await sizes(f, '/d'), ...await sizes(f, '/d/x')}, before);
+      expect(statusCounts(await history.records(b)), {OpStatus.undone: 5});
+    });
+
+    test('an occupant that is not part of the undo still blocks it', () async {
+      final f = MemoryStorageBackend({'/d/E01.mkv': 1});
+      final op = reloc('/d/E01.mkv', '/d/E02.mkv');
+      final ex = executor(history);
+      await run(ex.execute(task, conn, RenamePlan(ops: [op]), f));
+      final b = await theBatch(history);
+      f.addFile('/d/E01.mkv', 9); // a new file took the original name
+      await run(ex.undo(b, f));
+      expect(await sizes(f, '/d'), {'E01.mkv': 9, 'E02.mkv': 1});
+      expect(statusCounts(await history.records(b)), {OpStatus.skipped: 1});
+    });
+
+    test('a half-applied batch rename is finished on retry', () async {
+      final mem = MemoryStorageBackend({
+        for (var i = 1; i <= 3; i++) '/s/raw/ep$i.mkv': i,
+      });
+      final before = mem.files;
+      final ops = [
+        mkdir('/s/raw/Season 01'),
+        for (var i = 1; i <= 3; i++)
+          reloc('/s/raw/ep$i.mkv', '/s/raw/Season 01/E$i.mkv'),
+      ];
+      final ex = executor(history);
+      await run(ex.execute(task, conn, RenamePlan(ops: ops), mem));
+      final b = await theBatch(history);
+      // The undo's batch rename applies E1, then errors on E2 (the throttle
+      // splits it into per-file renames on non-Alist backends).
+      var hit = false;
+      final hook = HookBackend(mem, (m, a) {
+        if (m == 'rename' && a.first == '/s/raw/Season 01/E2.mkv' && !hit) {
+          hit = true;
+          throw const StorageException(StorageErrorCode.other, 'boom');
+        }
+      });
+      await run(ex.undo(b, hook));
+      expect(hit, isTrue);
+      expect(mem.files, before);
+      expect(statusCounts(await history.records(b)), {OpStatus.undone: 4});
+    });
+  });
+
   test('undo with only restores just those ops', () async {
     final ex = executor(history);
     final ops = [
