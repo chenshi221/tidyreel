@@ -90,11 +90,8 @@ class LocalBackend implements StorageBackend {
     final src = _real(from), dst = _real(to);
     if (!_present(src)) throw StorageException(StorageErrorCode.notFound, from);
     if (from == to) return;
-    // rename(2) silently overwrites, so check first. On case-insensitive file
-    // systems (APFS / NTFS), dst resolves to the same underlying file as src
-    // for case-only renames; identicalSync distinguishes that from a distinct
-    // existing target on case-sensitive file systems (ext4).
-    if (_present(dst) && !FileSystemEntity.identicalSync(src, dst)) {
+    // rename(2) silently overwrites, so check first.
+    if (_present(dst) && !_sameEntry(src, dst)) {
       throw StorageException(StorageErrorCode.alreadyExists, to);
     }
     await _io(from, () async {
@@ -104,6 +101,19 @@ class LocalBackend implements StorageBackend {
         await File(src).rename(dst);
       }
     });
+  }
+
+  /// Does [dst] only exist because the file system folds names (case on
+  /// APFS / NTFS, Unicode normalization on macOS), i.e. it *is* [src]? Then the
+  /// folder has no entry spelled exactly like [dst]. A hard link or symlink to
+  /// [src] also resolves to the same file but has its own entry: rename(2)
+  /// would silently do nothing (hard link) or replace the link.
+  bool _sameEntry(String src, String dst) {
+    if (!FileSystemEntity.identicalSync(src, dst)) return false;
+    final name = p.basename(dst);
+    return !Directory(p.dirname(dst))
+        .listSync(followLinks: false)
+        .any((e) => p.basename(e.path) == name);
   }
 
   @override

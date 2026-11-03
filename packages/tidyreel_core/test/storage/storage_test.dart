@@ -137,6 +137,44 @@ void main() {
       await be.rename('/test.txt', 'Test.txt');
       expect(await be.exists('/Test.txt'), isTrue);
     });
+
+    group('a target that resolves to the source but is its own entry', () {
+      late Directory root;
+      late StorageBackend be;
+      setUp(() {
+        root = Directory.systemTemp.createTempSync('tidyreel_links_');
+        addTearDown(() => root.deleteSync(recursive: true));
+        File('${root.path}/a.mkv').writeAsBytesSync([1, 2, 3]);
+        be = createBackend(
+          cfg(ConnectionType.local, root.path),
+          const Credentials(),
+        );
+      });
+
+      test('hard link is refused, both names kept', () async {
+        final r = Process.runSync('ln', [
+          '${root.path}/a.mkv',
+          '${root.path}/b.mkv',
+        ]);
+        expect(r.exitCode, 0, reason: '${r.stderr}');
+        await expectLater(
+          be.rename('/a.mkv', 'b.mkv'),
+          throwsStorage(StorageErrorCode.alreadyExists),
+        );
+        expect(File('${root.path}/a.mkv').existsSync(), isTrue);
+        expect(File('${root.path}/b.mkv').existsSync(), isTrue);
+      }, testOn: '!windows');
+
+      test('symlink is refused and not replaced', () async {
+        Link('${root.path}/b.mkv').createSync('${root.path}/a.mkv');
+        await expectLater(
+          be.rename('/a.mkv', 'b.mkv'),
+          throwsStorage(StorageErrorCode.alreadyExists),
+        );
+        expect(FileSystemEntity.isLinkSync('${root.path}/b.mkv'), isTrue);
+        expect(File('${root.path}/a.mkv').existsSync(), isTrue);
+      }, testOn: '!windows');
+    });
   });
 
   group('Alist', () {
