@@ -4,6 +4,7 @@ import 'package:path/path.dart' as p;
 
 import '../model/scan.dart';
 import '../storage/alist_backend.dart';
+import '../storage/cached_backend.dart';
 import '../storage/storage_backend.dart';
 
 typedef Delay = Future<void> Function(Duration d);
@@ -71,13 +72,18 @@ class ThrottledBackend implements StorageBackend {
   /// each is paced on its own.
   @override
   Future<void> renameMany(String dir, Map<String, String> names) async {
-    if (inner is AlistBackend) {
+    if (_unwrapped(inner) is AlistBackend) {
       return _call(() => inner.renameMany(dir, names));
     }
     for (final e in names.entries) {
       await rename(p.posix.join(dir, e.key), e.value);
     }
   }
+
+  /// The app hands us `CachedBackend(AlistBackend)`; calls still go through
+  /// [inner] so the cache drops what we touch.
+  static StorageBackend _unwrapped(StorageBackend b) =>
+      b is CachedBackend ? _unwrapped(b.inner) : b;
 
   @override
   Future<void> move(String srcDir, String dstDir, List<String> names) =>

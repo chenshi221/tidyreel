@@ -285,6 +285,23 @@ void main() {
       ]);
     });
 
+    test(
+      'the executor wrapper still batch-renames behind CachedBackend',
+      () async {
+        final (mock, be) = await connect(files: {'/d/1': 1, '/d/2': 1});
+        // What the app hands the executor: Throttled(Cached(Alist)).
+        final wrapped = ThrottledBackend(
+          CachedBackend(be),
+          minInterval: Duration.zero,
+        );
+        await wrapped.renameMany('/d', {'1': 'a', '2': 'b'});
+        expect(mock.tree.nodes.keys, containsAll(['/d/a', '/d/b']));
+        expect(mock.calls.where((c) => c.contains('rename')), [
+          'api/fs/batch_rename',
+        ]);
+      },
+    );
+
     test('renameMany falls back to fs/rename on older servers', () async {
       final (mock, be) = await connect(files: {'/d/1': 1, '/d/2': 1});
       mock.batchRename = false;
