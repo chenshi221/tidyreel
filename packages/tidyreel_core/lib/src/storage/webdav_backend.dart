@@ -233,8 +233,36 @@ class WebDAVBackend implements StorageBackend {
   }
 
   @override
-  Future<void> rename(String path, String newName) =>
-      _move(path, p.posix.join(p.posix.dirname(path), newName));
+  Future<void> rename(String path, String newName) async {
+    final dir = p.posix.dirname(path);
+    final oldName = p.posix.basename(path);
+    final target = p.posix.join(dir, newName);
+    if (oldName == newName) return;
+    if (oldName.toLowerCase() != newName.toLowerCase()) {
+      return _move(path, target);
+    }
+    // Case-only: a case-insensitive server (IIS, NAS on NTFS/APFS) answers 412
+    // since the target "exists" -- it is the source. Refuse only a separate
+    // entry spelled exactly like the target, then go through a temporary name.
+    if ((await list(dir)).any((e) => e.name == newName)) {
+      throw StorageException(StorageErrorCode.alreadyExists, target);
+    }
+    final tmp = p.posix.join(
+      dir,
+      '.tidyreel-case-${DateTime.now().microsecondsSinceEpoch}',
+    );
+    await _move(path, tmp);
+    try {
+      await _move(tmp, target);
+    } on Object {
+      try {
+        await _move(tmp, path);
+      } on Object {
+        // best effort; the original error is what matters
+      }
+      rethrow;
+    }
+  }
 
   /// WebDAV has no batch rename; each MOVE is one request anyway.
   @override

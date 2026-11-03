@@ -364,6 +364,53 @@ void main() {
       );
     });
 
+    group('case-only rename', () {
+      Future<(MockWebDav, StorageBackend)> connect(
+        Map<String, int> files, {
+        required bool caseInsensitive,
+      }) async {
+        final dav = MockWebDav(files, caseInsensitive: caseInsensitive);
+        final server = await MockServer.start(dav.handle);
+        addTearDown(server.close);
+        return (
+          dav,
+          createBackend(
+            cfg(ConnectionType.webdav, '${server.url}/dav'),
+            const Credentials(password: 'pw'),
+          ),
+        );
+      }
+
+      test(
+        'works on a case-insensitive server, folder contents kept',
+        () async {
+          final (dav, be) = await connect({
+            '/the office/S01E01.mkv': 1,
+          }, caseInsensitive: true);
+          await be.rename('/the office', 'The Office');
+          expect(dav.tree.nodes.keys, contains('/The Office/S01E01.mkv'));
+          expect(dav.tree.nodes.keys, isNot(contains('/the office')));
+          expect(
+            dav.tree.nodes.keys.where((k) => k.contains('.tidyreel-case-')),
+            isEmpty,
+          );
+        },
+      );
+
+      test('a separate entry with that exact name is refused', () async {
+        final (dav, be) = await connect({
+          '/a.mkv': 1,
+          '/A.mkv': 2,
+        }, caseInsensitive: false);
+        await expectLater(
+          be.rename('/a.mkv', 'A.mkv'),
+          throwsStorage(StorageErrorCode.alreadyExists),
+        );
+        expect(dav.tree.nodes['/a.mkv'], 1);
+        expect(dav.tree.nodes['/A.mkv'], 2);
+      });
+    });
+
     test('percent-encodes paths on the wire', () async {
       final seen = <String>[];
       final dav = MockWebDav({'/电影 [1].mkv': 1});
