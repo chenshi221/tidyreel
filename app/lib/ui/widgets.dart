@@ -859,14 +859,16 @@ class BigNumber extends StatelessWidget {
           ),
         if (captions.isNotEmpty) ...[
           const SizedBox(width: 18),
-          Padding(
-            padding: const EdgeInsets.only(bottom: 4),
-            child: DefaultTextStyle.merge(
-              style: TextStyle(fontSize: 13, color: p.text, height: 1.7),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: captions,
+          Flexible(
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: DefaultTextStyle.merge(
+                style: TextStyle(fontSize: 13, color: p.text, height: 1.6),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: captions,
+                ),
               ),
             ),
           ),

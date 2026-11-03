@@ -127,7 +127,7 @@ class Sidebar extends ConsumerWidget {
     );
 
     Widget sectionTitle(String text) => Padding(
-      padding: const EdgeInsets.fromLTRB(10, 16, 10, 4),
+      padding: const EdgeInsets.fromLTRB(12, 22, 10, 6),
       child: Text(text, style: Theme.of(context).textTheme.labelSmall),
     );
 
@@ -159,10 +159,7 @@ class Sidebar extends ConsumerWidget {
                   ),
                 if (collapsed && !mac) Center(child: toggle),
                 if (!collapsed) _Brand(trailing: mac ? null : toggle),
-                if (!collapsed)
-                  sectionTitle('资料库')
-                else
-                  const SizedBox(height: 12),
+                SizedBox(height: collapsed ? 12 : 26),
                 item(
                   '/sources',
                   CupertinoIcons.folder,
@@ -226,7 +223,7 @@ class _Brand extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = Palette.of(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 6, 0, 2),
+      padding: const EdgeInsets.fromLTRB(12, 6, 0, 2),
       child: Row(
         children: [
           Text(
@@ -280,11 +277,14 @@ class _NavItem extends StatelessWidget {
       onTap: onTap,
       builder: (context, hover) => AnimatedContainer(
         duration: const Duration(milliseconds: 100),
-        height: 30,
-        margin: const EdgeInsets.only(bottom: 1),
-        padding: const EdgeInsets.symmetric(horizontal: 9),
+        height: 32,
+        margin: const EdgeInsets.only(bottom: 2),
+        padding: EdgeInsets.symmetric(horizontal: collapsed ? 9 : 12),
         decoration: BoxDecoration(
-          color: selected ? p.selected : (hover ? p.hover : Colors.transparent),
+          // Selection is the ink itself; only the collapsed rail gets a fill.
+          color: selected && collapsed
+              ? p.selected
+              : (hover ? p.hover : Colors.transparent),
           borderRadius: BorderRadius.circular(Radii.lg),
         ),
         child: collapsed
@@ -293,15 +293,14 @@ class _NavItem extends StatelessWidget {
                     ? iconW
                     : Badge(label: Text('$badge'), child: iconW),
               )
+            // Expanded: words only, like a table of contents.
             : Row(
                 children: [
-                  iconW,
-                  const SizedBox(width: 9),
                   Expanded(
                     child: Text(
                       label,
                       style: TextStyle(
-                        fontSize: 13,
+                        fontSize: 14,
                         color: selected ? p.text : p.textMuted,
                         fontWeight: selected
                             ? FontWeight.w500

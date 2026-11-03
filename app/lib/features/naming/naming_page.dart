@@ -69,7 +69,7 @@ class _NamingPageState extends ConsumerState<NamingPage> {
         ),
       ],
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(28, 0, 28, 0),
+        padding: const EdgeInsets.fromLTRB(48, 0, 40, 0),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [

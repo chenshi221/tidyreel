@@ -87,7 +87,7 @@ class PageScaffold extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     Widget header = Padding(
-      padding: const EdgeInsets.fromLTRB(28, 22, 24, 10),
+      padding: EdgeInsets.fromLTRB(leading == null ? 48 : 34, 30, 36, 18),
       child: Row(
         children: [
           if (leading != null) ...[leading!, const SizedBox(width: 6)],
@@ -99,12 +99,12 @@ class PageScaffold extends StatelessWidget {
                 Text(
                   title,
                   key: const ValueKey('page-title'),
-                  style: theme.textTheme.headlineSmall,
+                  style: theme.textTheme.displaySmall,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
                 if (subtitle != null) ...[
-                  const SizedBox(height: 3),
+                  const SizedBox(height: 6),
                   Text(
                     subtitle!,
                     style: theme.textTheme.bodySmall,

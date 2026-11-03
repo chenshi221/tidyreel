@@ -84,7 +84,7 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                 message: _finished ? null : '去「来源」选择文件夹，提交一个整理任务',
               )
             : ListView.separated(
-                padding: const EdgeInsets.fromLTRB(28, 14, 28, 28),
+                padding: const EdgeInsets.fromLTRB(48, 14, 40, 28),
                 itemCount: shown.length,
                 separatorBuilder: (_, _) => const SizedBox(height: 10),
                 itemBuilder: (_, i) => FadeIn(

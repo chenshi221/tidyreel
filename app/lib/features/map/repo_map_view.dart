@@ -70,6 +70,10 @@ class RepoMapView extends ConsumerStatefulWidget {
   /// 「其余 N 项」 was clicked: show the list instead.
   final VoidCallback onShowList;
 
+  /// Big number + legend above the map. Off when the page shows a
+  /// [RepoMapSummary] elsewhere (来源页 puts it in the left column).
+  final bool showHeader;
+
   const RepoMapView({
     super.key,
     required this.connection,
@@ -77,6 +81,7 @@ class RepoMapView extends ConsumerStatefulWidget {
     required this.onOpen,
     required this.menuFor,
     required this.onShowList,
+    this.showHeader = true,
   });
 
   @override
@@ -144,71 +149,27 @@ class _RepoMapViewState extends ConsumerState<RepoMapView> {
 
   @override
   Widget build(BuildContext context) {
-    final p = Palette.of(context);
     final s = ref.watch(sizeScannerProvider(widget.connection));
     final dir = widget.dir;
-    final stats = s.statsOfDir(dir);
     final blocks = mapBlocksFor(s, dir);
     final busy = s.running != null;
-    final complete = s.isComplete(dir);
     final byPath = {for (final e in s.entriesOf(dir)) e.path: e};
-
-    final size = fmtSize(stats.total);
-    final (value, unit) = size.isEmpty
-        ? ('0', null)
-        : (size.split(' ').first, size.split(' ').last);
-
-    final status = busy
-        ? Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Spinner(size: 13),
-              const SizedBox(width: 7),
-              Text('正在统计 · 已读 ${s.dirsListed} 个文件夹'),
-              const SizedBox(width: 10),
-              LinkText('停止', onTap: s.cancel),
-            ],
-          )
-        : s.error != null
-        ? Text('统计出错：${s.error}', style: TextStyle(color: p.danger))
-        : complete
-        ? Text('统计完成', style: TextStyle(color: p.textMuted))
-        : Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('已停止，结果不完整', style: TextStyle(color: p.textMuted)),
-              const SizedBox(width: 10),
-              LinkText('继续统计', onTap: () => unawaited(s.scan(dir))),
-            ],
-          );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(4, 4, 4, 18),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              BigNumber(
-                value,
-                unit: unit,
-                captions: [
-                  Text(
-                    [
-                      '${stats.files} 个文件',
-                      if (stats.unorganized > 0)
-                        '未整理 ${fmtSize(stats.unorganized)}',
-                    ].join(' · '),
-                  ),
-                  status,
-                ],
-              ),
-              const Spacer(),
-              _Legend(palette: p),
-            ],
+        if (widget.showHeader)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 4, 4, 18),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                RepoMapSummary(scanner: s, dir: dir),
+                const Spacer(),
+                const MapLegend(),
+              ],
+            ),
           ),
-        ),
         Expanded(
           child: blocks.isEmpty
               ? (busy || !s.isListed(dir)
@@ -241,14 +202,73 @@ class _RepoMapViewState extends ConsumerState<RepoMapView> {
   }
 }
 
-class _Legend extends StatelessWidget {
-  final Palette palette;
+/// Big size number with file count, 未整理 total and count progress.
+class RepoMapSummary extends StatelessWidget {
+  final SizeScanner scanner;
+  final String dir;
 
-  const _Legend({required this.palette});
+  /// Extra first caption line, e.g. 「演示 Alist · /影视库」.
+  final String? title;
+
+  const RepoMapSummary({
+    super.key,
+    required this.scanner,
+    required this.dir,
+    this.title,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final p = palette;
+    final p = Palette.of(context);
+    final s = scanner;
+    final stats = s.statsOfDir(dir);
+    final size = fmtSize(stats.total);
+    final (value, unit) = size.isEmpty
+        ? ('0', null)
+        : (size.split(' ').first, size.split(' ').last);
+    final status = s.running != null
+        ? Wrap(
+            spacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              const Spinner(size: 13),
+              Text('正在统计 · 已读 ${s.dirsListed} 个文件夹'),
+              LinkText('停止', onTap: s.cancel),
+            ],
+          )
+        : s.error != null
+        ? Text('统计出错：${s.error}', style: TextStyle(color: p.danger))
+        : s.isComplete(dir)
+        ? Text(
+            [
+              '${stats.files} 个文件',
+              if (stats.unorganized > 0) '未整理 ${fmtSize(stats.unorganized)}',
+            ].join(' · '),
+            style: TextStyle(color: p.textMuted),
+          )
+        : Wrap(
+            spacing: 10,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Text('已停止，结果不完整', style: TextStyle(color: p.textMuted)),
+              LinkText('继续统计', onTap: () => unawaited(s.scan(dir))),
+            ],
+          );
+    return BigNumber(
+      value,
+      unit: unit,
+      captions: [?(title == null ? null : Text(title!)), status],
+    );
+  }
+}
+
+/// 未整理 / 部分整理 / 已整理 / 非视频 swatches.
+class MapLegend extends StatelessWidget {
+  const MapLegend({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
     final dark = Theme.of(context).brightness == Brightness.dark;
     Widget item(BlockState st, String label) {
       final fill = blockFill(st, p, dark: dark);

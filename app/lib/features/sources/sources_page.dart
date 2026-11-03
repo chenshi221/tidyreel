@@ -5,6 +5,8 @@ import 'package:go_router/go_router.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
 import '../../data/providers.dart';
+import '../map/map_providers.dart';
+import '../map/repo_map_view.dart';
 import '../tasks/tasks_page.dart' show taskWorksProvider;
 
 import '../../ui/tokens.dart';
@@ -32,105 +34,204 @@ class SourcesPage extends ConsumerWidget {
       for (final c in conns)
         for (final f in c.favorites) (conn: c, path: f),
     ];
-    final add = FilledButton.icon(
+    final add = OutlinedButton.icon(
       onPressed: () => _edit(context, ref),
-      icon: const Icon(CupertinoIcons.plus, size: 14),
+      icon: const Icon(CupertinoIcons.plus, size: 13),
       label: const Text('添加连接'),
     );
-    return PageScaffold(
-      title: '来源',
-      subtitle: '连接 Alist、WebDAV 或本地文件夹，选择要整理的影视文件',
-      maxWidth: 1000,
-      actions: [if (conns.isNotEmpty) add],
-      child: conns.isEmpty
-          ? EmptyState(
-              icon: CupertinoIcons.cloud,
-              title: '还没有连接',
-              message: '添加一个 Alist、WebDAV 或本地文件夹，就可以开始整理了',
-              action: add,
-            )
-          : ListView(
-              padding: const EdgeInsets.fromLTRB(28, 0, 28, 28),
-              children: [
-                if (done.isNotEmpty) ...[
-                  const SectionLabel('最近整理'),
-                  SizedBox(
-                    height: 186,
-                    child: ListView(
-                      scrollDirection: Axis.horizontal,
+    final p = Palette.of(context);
+    final theme = Theme.of(context);
+    if (conns.isEmpty) {
+      return PageScaffold(
+        title: '来源',
+        child: EmptyState(
+          icon: CupertinoIcons.cloud,
+          title: '还没有连接',
+          message: '添加一个 Alist、WebDAV 或本地文件夹，就可以开始整理了',
+          action: add,
+        ),
+      );
+    }
+    final focusId = ref.watch(sourcesMapConnectionProvider);
+    final focus = conns.firstWhere(
+      (c) => c.id == focusId,
+      orElse: () => conns.first,
+    );
+    final mapDir = focus.libraryRoot ?? normalizeDir(focus.startDir);
+    final scanner = ref.watch(sizeScannerProvider(focus.id));
+
+    Widget label(String text) => Padding(
+      padding: const EdgeInsets.only(top: 36, bottom: 10),
+      child: Text(text, style: theme.textTheme.labelSmall),
+    );
+
+    final left = ListView(
+      padding: const EdgeInsets.fromLTRB(48, 30, 32, 32),
+      children: [
+        Text(
+          '来源',
+          key: const ValueKey('page-title'),
+          style: theme.textTheme.displaySmall,
+        ),
+        const SizedBox(height: 28),
+        ListenableBuilder(
+          listenable: scanner,
+          builder: (_, _) => RepoMapSummary(
+            scanner: scanner,
+            dir: mapDir,
+            title: '${focus.name} · $mapDir',
+          ),
+        ),
+        label('连接'),
+        for (var i = 0; i < conns.length; i++)
+          FadeIn(
+            index: i,
+            child: _ConnectionRow(
+              connection: conns[i],
+              focused: conns[i].id == focus.id,
+              onFocus: () => ref
+                  .read(sourcesMapConnectionProvider.notifier)
+                  .set(conns[i].id),
+            ),
+          ),
+        label('收藏'),
+        if (favorites.isEmpty)
+          Text(
+            '打开一个连接，在文件夹右上角点 ☆ 收藏，常用的下载目录就会出现在这里',
+            style: theme.textTheme.bodySmall,
+          )
+        else
+          for (final f in favorites)
+            ContextMenuArea(
+              items: () => [
+                MenuAction(
+                  '打开',
+                  () => openBrowser(ref, f.conn, f.path),
+                  icon: CupertinoIcons.folder,
+                ),
+                MenuAction(
+                  '取消收藏',
+                  () => ref
+                      .read(connectionsEditorProvider.notifier)
+                      .toggleFavorite(f.conn.id, f.path),
+                  icon: CupertinoIcons.star_slash,
+                  destructive: true,
+                ),
+              ],
+              child: Hoverable(
+                key: ValueKey('fav ${f.conn.id.value} ${f.path}'),
+                onTap: () => openBrowser(ref, f.conn, f.path),
+                builder: (_, hover) => Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 5),
+                  child: Text.rich(
+                    TextSpan(
                       children: [
-                        for (var i = 0; i < done.length; i++)
-                          FadeIn(
-                            index: i,
-                            child: _RecentTask(task: done[i]),
+                        TextSpan(
+                          text: f.path,
+                          style: TextStyle(
+                            color: p.text,
+                            decoration: hover
+                                ? TextDecoration.underline
+                                : TextDecoration.none,
+                            decorationColor: p.textFaint,
                           ),
+                        ),
+                        TextSpan(
+                          text: '  ${f.conn.name}',
+                          style: TextStyle(color: p.textFaint, fontSize: 12),
+                        ),
                       ],
                     ),
-                  ),
-                ],
-                const SectionLabel('连接'),
-                Panel(
-                  child: Rows(
-                    children: [
-                      for (var i = 0; i < conns.length; i++)
-                        FadeIn(
-                          index: i,
-                          child: _ConnectionRow(connection: conns[i]),
-                        ),
-                    ],
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                const SectionLabel('收藏文件夹'),
-                if (favorites.isEmpty)
-                  Panel(
-                    padding: const EdgeInsets.all(Space.lg),
-                    child: Text(
-                      '打开一个连接，在文件夹右上角点 ☆ 收藏，常用的下载目录就会出现在这里',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  )
-                else
-                  Panel(
-                    child: Rows(
-                      children: [
-                        for (final f in favorites)
-                          ContextMenuArea(
-                            items: () => [
-                              MenuAction(
-                                '打开',
-                                () => openBrowser(ref, f.conn, f.path),
-                                icon: CupertinoIcons.folder,
-                              ),
-                              MenuAction(
-                                '取消收藏',
-                                () => ref
-                                    .read(connectionsEditorProvider.notifier)
-                                    .toggleFavorite(f.conn.id, f.path),
-                                icon: CupertinoIcons.star_slash,
-                                destructive: true,
-                              ),
-                            ],
-                            child: HoverRow(
-                              key: ValueKey('fav ${f.conn.id.value} ${f.path}'),
-                              leading: Icon(
-                                CupertinoIcons.star_fill,
-                                size: 20,
-                                color: Palette.of(context).accent,
-                              ),
-                              title: Text(f.path),
-                              subtitle: Text(f.conn.name),
-                              hoverTrailing: const Icon(
-                                CupertinoIcons.chevron_right,
-                                size: 13,
-                              ),
-                              onTap: () => openBrowser(ref, f.conn, f.path),
-                            ),
-                          ),
-                      ],
-                    ),
+              ),
+            ),
+        if (done.isNotEmpty) ...[
+          label('最近整理'),
+          SizedBox(
+            height: 128,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              children: [
+                for (var i = 0; i < done.length; i++)
+                  FadeIn(
+                    index: i,
+                    child: _RecentTask(task: done[i]),
                   ),
               ],
             ),
+          ),
+        ],
+        const SizedBox(height: 36),
+        Align(alignment: Alignment.centerLeft, child: add),
+      ],
+    );
+
+    void openAt(String path, {required bool map}) {
+      openBrowser(ref, focus, path);
+      ref.read(browserMapModeProvider.notifier).set(map);
+    }
+
+    return LayoutBuilder(
+      builder: (context, box) {
+        // Narrow windows: the list alone; the map lives in the browser.
+        if (box.maxWidth < 860) return left;
+        final leftWidth = (box.maxWidth * 0.36).clamp(360.0, 460.0);
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SizedBox(width: leftWidth, child: left),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(0, 24, 24, 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(
+                      child: RepoMapView(
+                        key: ValueKey('sources-map ${focus.id.value}'),
+                        connection: focus.id,
+                        dir: mapDir,
+                        showHeader: false,
+                        onOpen: (path) => openAt(path, map: true),
+                        onShowList: () => openAt(mapDir, map: false),
+                        menuFor: (e) => [
+                          if (e.isDir)
+                            MenuAction(
+                              '在地图中打开',
+                              () => openAt(e.path, map: true),
+                              icon: CupertinoIcons.circle_grid_hex,
+                            ),
+                          MenuAction(
+                            '在列表中显示',
+                            () => openAt(
+                              e.isDir
+                                  ? e.path
+                                  : e.path.substring(
+                                      0,
+                                      e.path.lastIndexOf('/'),
+                                    ),
+                              map: false,
+                            ),
+                            icon: CupertinoIcons.list_bullet,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    const Align(
+                      alignment: Alignment.centerRight,
+                      child: MapLegend(),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -184,10 +285,18 @@ Future<void> _delete(
   }
 }
 
+/// One connection as two lines of text: name, then type · address · status.
+/// The ring on the left picks which connection the map shows.
 class _ConnectionRow extends ConsumerWidget {
   final ConnectionConfig connection;
+  final bool focused;
+  final VoidCallback onFocus;
 
-  const _ConnectionRow({required this.connection});
+  const _ConnectionRow({
+    required this.connection,
+    required this.focused,
+    required this.onFocus,
+  });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -238,69 +347,115 @@ class _ConnectionRow extends ConsumerWidget {
           destructive: true,
         ),
       ],
-      child: HoverRow(
+      child: Hoverable(
         key: ValueKey('conn ${c.id.value}'),
-        padding: const EdgeInsets.fromLTRB(14, 11, 8, 11),
-        leading: IconTile(
-          connectionTypeIcon(c.type),
-          size: 34,
-          color: Palette.of(context).textMuted,
-        ),
-        title: Text(c.name),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(meta, maxLines: 1, overflow: TextOverflow.ellipsis),
-            if (failed && value.detail != null) ...[
-              const SizedBox(height: 4),
-              Text(
-                value.detail!,
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: color, fontSize: 12),
+        onTap: () => openBrowser(ref, c),
+        builder: (context, hover) => AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          margin: const EdgeInsets.only(bottom: 2),
+          padding: const EdgeInsets.fromLTRB(0, 9, 0, 9),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Tooltip(
+                message: focused ? '右侧地图正在显示' : '在右侧地图中查看',
+                child: GestureDetector(
+                  onTap: onFocus,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(0, 6, 14, 6),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 160),
+                      width: 9,
+                      height: 9,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: focused ? p.text : Colors.transparent,
+                        border: Border.all(
+                          color: focused ? p.text : p.textFaint,
+                          width: 1,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      c.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: focused || hover ? p.text : p.textMuted,
+                        decoration: hover
+                            ? TextDecoration.underline
+                            : TextDecoration.none,
+                        decorationColor: p.textFaint,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      meta,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12, color: p.textFaint),
+                    ),
+                    const SizedBox(height: 2),
+                    StatusPill(label: label, color: color, busy: value == null),
+                    if (failed && value.detail != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        value.detail!,
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: color, fontSize: 12),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              if (failed)
+                IconButton(
+                  tooltip: '重新检测',
+                  icon: const Icon(CupertinoIcons.arrow_clockwise),
+                  onPressed: () =>
+                      ref.invalidate(connectionStatusProvider(c.id)),
+                ),
+              AnimatedOpacity(
+                duration: const Duration(milliseconds: 120),
+                opacity: hover || failed ? 1 : 0.35,
+                child: PopupMenuButton<String>(
+                  tooltip: '更多',
+                  icon: const Icon(CupertinoIcons.ellipsis, size: 16),
+                  onSelected: (v) {
+                    if (v == 'edit') _edit(context, ref, c);
+                    if (v == 'copy') _edit(context, ref, c, true);
+                    if (v == 'delete') _delete(context, ref, c);
+                  },
+                  itemBuilder: (_) => [
+                    const PopupMenuItem(
+                      value: 'edit',
+                      height: 30,
+                      child: Text('编辑'),
+                    ),
+                    const PopupMenuItem(
+                      value: 'copy',
+                      height: 30,
+                      child: Text('复制（同一服务器的另一个文件夹）'),
+                    ),
+                    PopupMenuItem(
+                      value: 'delete',
+                      height: 30,
+                      child: Text('删除', style: TextStyle(color: p.danger)),
+                    ),
+                  ],
+                ),
               ),
             ],
-          ],
-        ),
-        onTap: () => openBrowser(ref, c),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            StatusPill(label: label, color: color, busy: value == null),
-            const SizedBox(width: 4),
-            if (failed)
-              IconButton(
-                tooltip: '重新检测',
-                icon: const Icon(CupertinoIcons.arrow_clockwise),
-                onPressed: () => ref.invalidate(connectionStatusProvider(c.id)),
-              ),
-            PopupMenuButton<String>(
-              tooltip: '更多',
-              icon: const Icon(CupertinoIcons.ellipsis, size: 16),
-              onSelected: (v) {
-                if (v == 'edit') _edit(context, ref, c);
-                if (v == 'copy') _edit(context, ref, c, true);
-                if (v == 'delete') _delete(context, ref, c);
-              },
-              itemBuilder: (_) => [
-                const PopupMenuItem(
-                  value: 'edit',
-                  height: 30,
-                  child: Text('编辑'),
-                ),
-                const PopupMenuItem(
-                  value: 'copy',
-                  height: 30,
-                  child: Text('复制（同一服务器的另一个文件夹）'),
-                ),
-                PopupMenuItem(
-                  value: 'delete',
-                  height: 30,
-                  child: Text('删除', style: TextStyle(color: p.danger)),
-                ),
-              ],
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -322,7 +477,7 @@ class _RecentTask extends ConsumerWidget {
       children: [
         for (final w in works.take(4))
           Padding(
-            padding: const EdgeInsets.only(right: 14),
+            padding: const EdgeInsets.only(right: 12),
             child: Hoverable(
               key: ValueKey('recent ${task.id.value} ${w.tmdbId}'),
               onTap: () => context.go('/tasks/${task.id.value}'),
@@ -330,11 +485,11 @@ class _RecentTask extends ConsumerWidget {
                 duration: const Duration(milliseconds: 160),
                 offset: Offset(0, hover ? -0.02 : 0),
                 child: SizedBox(
-                  width: 92,
+                  width: 64,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Poster(posterPath: w.posterPath, width: 92, height: 138),
+                      Poster(posterPath: w.posterPath, width: 64, height: 96),
                       const SizedBox(height: 6),
                       Text(
                         w.title,

@@ -83,7 +83,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       title: '设置',
       maxWidth: 760,
       child: ListView(
-        padding: const EdgeInsets.fromLTRB(28, 0, 28, 28),
+        padding: const EdgeInsets.fromLTRB(48, 0, 40, 28),
         children: [
           const SectionLabel('TMDB 元数据'),
           Panel(

@@ -256,11 +256,11 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 28, 0),
+            padding: const EdgeInsets.fromLTRB(40, 0, 40, 0),
             child: _Breadcrumbs(dir: dir, onTap: _goto),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(28, 6, 28, 12),
+            padding: const EdgeInsets.fromLTRB(48, 6, 40, 12),
             child: Wrap(
               spacing: 8,
               runSpacing: 8,
@@ -315,7 +315,7 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
                 if (mapMode)
                   Positioned.fill(
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(28, 4, 28, 20),
+                      padding: const EdgeInsets.fromLTRB(48, 4, 40, 20),
                       child: RepoMapView(
                         connection: c.id,
                         dir: dir,
@@ -330,7 +330,7 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
                 else
                   Positioned.fill(
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(28, 0, 28, 20),
+                      padding: const EdgeInsets.fromLTRB(48, 0, 40, 20),
                       child: ContextMenuArea(
                         items: folderMenu,
                         child: Panel(
