@@ -575,6 +575,90 @@ void main() {
     expect(statusCounts(await history.records(b)), {OpStatus.done: 2});
   });
 
+  group('swaps and chains on resume / retry', () {
+    test('a same-dir swap and a 3-cycle land on resume', () async {
+      final f = MemoryStorageBackend({
+        '/d/01.mkv': 1,
+        '/d/02.mkv': 2,
+        '/d/a.mkv': 3,
+        '/d/b.mkv': 4,
+        '/d/c.mkv': 5,
+      });
+      final ops = [
+        reloc('/d/01.mkv', '/d/02.mkv'),
+        reloc('/d/02.mkv', '/d/01.mkv'),
+        reloc('/d/a.mkv', '/d/b.mkv'),
+        reloc('/d/b.mkv', '/d/c.mkv'),
+        reloc('/d/c.mkv', '/d/a.mkv'),
+      ];
+      final b = await history.beginBatch(task, conn, ops);
+      final be = HookBackend(f);
+      await run(executor(history).resume(b, be));
+      expect(statusCounts(await history.records(b)), {OpStatus.done: 5});
+      // Sizes stand in for contents: each file ended up under its new name.
+      final sizes = {for (final e in await f.list('/d')) e.name: e.size};
+      expect(sizes, {
+        '01.mkv': 2,
+        '02.mkv': 1,
+        'a.mkv': 5,
+        'b.mkv': 3,
+        'c.mkv': 4,
+      });
+    });
+
+    test('retryFailed-style resume of a chain parks the blocked op', () async {
+      final f = MemoryStorageBackend({'/d/E01.mkv': 1, '/d/E02.mkv': 2});
+      final ops = [
+        reloc('/d/E01.mkv', '/d/E02.mkv'),
+        reloc('/d/E02.mkv', '/d/E03.mkv'),
+      ];
+      final b = await history.beginBatch(task, conn, ops);
+      await run(executor(history).resume(b, f));
+      expect(statusCounts(await history.records(b)), {OpStatus.done: 2});
+      final sizes = {for (final e in await f.list('/d')) e.name: e.size};
+      expect(sizes, {'E02.mkv': 1, 'E03.mkv': 2});
+    });
+
+    test('a parked file is not mistaken for done while its target is '
+        'still occupied', () async {
+      final a = reloc('/d/a.mkv', '/d/b.mkv');
+      final f = MemoryStorageBackend({'/d/a.mkv': 1, '/d/b.mkv': 2});
+      final b = await history.beginBatch(task, conn, [a]);
+      // Crash after a was parked; b.mkv (another file) never moved out.
+      await f.rename('/d/a.mkv', '.tidyreel-tmp-${a.id.value}');
+      await run(executor(history).resume(b, f));
+      final recs = await history.records(b);
+      expect(recs.single.status, OpStatus.failed);
+      expect(f.files, ['/d/.tidyreel-tmp-${a.id.value}', '/d/b.mkv']);
+    });
+
+    test('crash mid-cycle: a landed but unmarked op does not grab the next '
+        "op's source", () async {
+      final f = MemoryStorageBackend({
+        '/d/a.mkv': 1,
+        '/d/b.mkv': 2,
+        '/d/c.mkv': 3,
+      });
+      final ab = reloc('/d/a.mkv', '/d/b.mkv');
+      final bc = reloc('/d/b.mkv', '/d/c.mkv');
+      final ca = reloc('/d/c.mkv', '/d/a.mkv');
+      final b = await history.beginBatch(task, conn, [ab, bc, ca]);
+      // State at the crash: all three were parked, a->b landed and was
+      // marked, b->c landed but the mark was lost, c->a still parked.
+      String tmp(RenameOp o) => '.tidyreel-tmp-${o.id.value}';
+      await f.rename('/d/a.mkv', tmp(ab));
+      await f.rename('/d/b.mkv', tmp(bc));
+      await f.rename('/d/c.mkv', tmp(ca));
+      await f.rename('/d/${tmp(ab)}', 'b.mkv');
+      await history.mark(b, ab.id, OpStatus.done);
+      await f.rename('/d/${tmp(bc)}', 'c.mkv');
+      await run(executor(history).resume(b, f));
+      expect(statusCounts(await history.records(b)), {OpStatus.done: 3});
+      final sizes = {for (final e in await f.list('/d')) e.name: e.size};
+      expect(sizes, {'a.mkv': 3, 'b.mkv': 1, 'c.mkv': 2});
+    });
+  });
+
   test(
     'failed folder rename blocks cleanup delete targeting post-rename path',
     () async {

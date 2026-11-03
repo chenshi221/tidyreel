@@ -170,6 +170,13 @@ class DefaultExecutor implements Executor {
           for (final r in records)
             if (r.status == OpStatus.failed) r.op,
         ],
+        landed: {
+          for (final r in records)
+            if (r.status == OpStatus.done &&
+                r.op.phase == ExecPhase.files &&
+                r.op.kind == OpKind.relocate)
+              _mapPath(r.op.dst, doneFolders),
+        },
       );
     },
   );
@@ -362,13 +369,21 @@ class DefaultExecutor implements Executor {
     bool Function() cancelled, {
     required bool resuming,
     required List<RenameOp> failed,
+    Set<String> landed = const {},
   }) async {
     final ordered = _ordered(ops);
+    // Paths a done relocate put its file at. A pending op whose src is one of
+    // them no longer finds its own file there (that one already left: the done
+    // op could not have landed otherwise), so its src counts as gone.
+    final taken = {...landed};
     for (final phase in ExecPhase.values) {
       final inPhase = ordered.where((o) => o.phase == phase).toList();
       var done = 0;
       Future<void> record(RenameOp op, OpStatus status, String? error) async {
         await history.mark(batch, op.id, status, error: error);
+        if (status == OpStatus.done && op.kind == OpKind.relocate) {
+          taken.add(op.dst);
+        }
         emit(
           ExecProgress(
             phase: phase,
@@ -393,7 +408,12 @@ class DefaultExecutor implements Executor {
               '依赖的操作失败：${blocker.kind == OpKind.mkdir ? blocker.dst : blocker.src}';
         } else {
           try {
-            await _apply(be, op, resuming: resuming || retry);
+            await _apply(
+              be,
+              op,
+              resuming: resuming || retry,
+              srcTaken: taken.contains(op.src),
+            );
           } on Object catch (e) {
             status = OpStatus.failed;
             error = e.toString();
@@ -411,6 +431,43 @@ class DefaultExecutor implements Executor {
         if (phase == ExecPhase.files && !resuming) {
           group = await _batched(group, be, blockerOf, record, one, cancelled);
         }
+        // Swaps and chains (a target that another op still has to vacate):
+        // park those files under their tmp name first and land them after
+        // everything else ran. Resume mode never gets here via _batched, so
+        // this is what keeps a retried EP01 <-> EP02 from colliding.
+        final staged = phase == ExecPhase.files
+            ? _occupiedByPeer(group)
+            : const <RenameOp>[];
+        final parked = <RenameOp>[];
+        if (staged.isNotEmpty) {
+          final ids = {for (final o in staged) o.id};
+          group = [
+            for (final o in group)
+              if (!ids.contains(o.id)) o,
+          ];
+          for (final o in staged) {
+            if (cancelled()) return;
+            if (blockerOf(o) != null) {
+              parked.add(o); // one() records the skip
+              continue;
+            }
+            try {
+              // When resuming, the file may already be parked, or have landed
+              // (src then holds the file of the op that moved in).
+              final tmp = p.posix.join(p.posix.dirname(o.src), _tmpName(o.id));
+              if (!resuming ||
+                  (!taken.contains(o.src) &&
+                      !await be.exists(tmp) &&
+                      await be.exists(o.src))) {
+                await be.rename(o.src, _tmpName(o.id));
+              }
+              parked.add(o);
+            } on Object catch (e) {
+              failed.add(o);
+              await record(o, OpStatus.failed, e.toString());
+            }
+          }
+        }
         var next = 0;
         Future<void> worker() async {
           while (!cancelled() && next < group.length) {
@@ -423,9 +480,40 @@ class DefaultExecutor implements Executor {
         await Future.wait([
           for (var i = 0; i < width && i < group.length; i++) worker(),
         ]);
+        // Their targets are free now; resume mode finds them under tmp.
+        for (final o in parked) {
+          if (cancelled()) return;
+          await one(o, retry: true);
+        }
       }
       if (cancelled()) return;
     }
+  }
+
+  static String _tmpName(OpId id) => '.tidyreel-tmp-${id.value}';
+
+  /// Relocates whose target is the source of another op in [ops].
+  static List<RenameOp> _occupiedByPeer(List<RenameOp> ops) {
+    final sources = {
+      for (final o in ops)
+        if (o.kind == OpKind.relocate) o.src,
+    };
+    return [
+      for (final o in ops)
+        if (o.kind == OpKind.relocate &&
+            o.src != o.dst &&
+            sources.contains(o.dst))
+          o,
+    ];
+  }
+
+  /// Is [op]'s file parked under its tmp name (by a swap or a crash)?
+  Future<bool> _parked(StorageBackend be, RenameOp op) async {
+    final srcDir = p.posix.dirname(op.src);
+    final dstDir = p.posix.dirname(op.dst);
+    final tmp = _tmpName(op.id);
+    if (await be.exists(p.posix.join(srcDir, tmp))) return true;
+    return srcDir != dstDir && await be.exists(p.posix.join(dstDir, tmp));
   }
 
   /// Runs the file relocates of each source folder as one batch rename plus one
@@ -492,8 +580,7 @@ class DefaultExecutor implements Executor {
         for (final o in batch)
           if (p.posix.basename(o.src) != p.posix.basename(o.dst))
             p.posix.basename(o.src): p.posix.basename(o.dst),
-        for (final o in viaTmp)
-          p.posix.basename(o.src): '.tidyreel-tmp-${o.id.value}',
+        for (final o in viaTmp) p.posix.basename(o.src): _tmpName(o.id),
       };
       try {
         if (renames.isNotEmpty) await be.renameMany(dir, renames);
@@ -542,8 +629,7 @@ class DefaultExecutor implements Executor {
       if (viaTmp.isNotEmpty) {
         try {
           await be.renameMany(dir, {
-            for (final o in viaTmp)
-              '.tidyreel-tmp-${o.id.value}': p.posix.basename(o.dst),
+            for (final o in viaTmp) _tmpName(o.id): p.posix.basename(o.dst),
           });
           batch.addAll(viaTmp);
         } on Object {
@@ -578,6 +664,7 @@ class DefaultExecutor implements Executor {
     StorageBackend be,
     RenameOp op, {
     required bool resuming,
+    bool srcTaken = false,
   }) async {
     switch (op.kind) {
       case OpKind.mkdir:
@@ -586,39 +673,52 @@ class DefaultExecutor implements Executor {
         if (resuming && !await be.exists(op.src)) return;
         await be.remove(p.posix.dirname(op.src), [p.posix.basename(op.src)]);
       case OpKind.relocate:
+        // The tmp name carries this op's id, so a file there is ours whatever
+        // sits at src or dst (another op's file may have landed on either).
+        final parked = resuming && await _parked(be, op);
+        final srcGone =
+            parked || (resuming && (srcTaken || !await be.exists(op.src)));
         // After a crash the op may have finished without being marked.
-        if (resuming && !await be.exists(op.src) && await be.exists(op.dst)) {
-          return;
-        }
-        await _relocate(be, op.src, op.dst, op.id, resuming: resuming);
+        if (srcGone && !parked && await be.exists(op.dst)) return;
+        await _relocate(
+          be,
+          op.src,
+          op.dst,
+          op.id,
+          resuming: resuming,
+          srcGone: srcGone,
+        );
     }
   }
 
   /// PLAN §4.3 rule 3. Same dir: rename. Otherwise rename to the final name in the
-  /// source dir (via a tmp name if taken), then move.
+  /// source dir (via a tmp name if taken), then move. When [resuming],
+  /// [srcGone] says the file is no longer at [src] (checked by the caller).
   Future<void> _relocate(
     StorageBackend be,
     String src,
     String dst,
     OpId id, {
     required bool resuming,
+    bool srcGone = false,
   }) async {
     final srcDir = p.posix.dirname(src);
     final dstDir = p.posix.dirname(dst);
     final name = p.posix.basename(dst);
     if (src == dst) return;
-    final tmp = '.tidyreel-tmp-${id.value}';
+    final tmp = _tmpName(id);
     if (srcDir == dstDir) {
-      if (resuming && !await be.exists(src)) {
+      if (resuming && srcGone) {
         final tmpPath = p.posix.join(srcDir, tmp);
         if (await be.exists(tmpPath)) {
           return be.rename(tmpPath, name);
         }
+        throw StorageException(StorageErrorCode.notFound, src);
       }
       return be.rename(src, name);
     }
 
-    if (resuming && !await be.exists(src)) {
+    if (resuming && srcGone) {
       // Crashed between steps: continue from wherever the file got to.
       final dstTmp = p.posix.join(dstDir, tmp);
       final srcTmp = p.posix.join(srcDir, tmp);
