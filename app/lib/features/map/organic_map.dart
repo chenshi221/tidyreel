@@ -62,12 +62,23 @@ class _OrganicMapState extends State<OrganicMap> {
   String? _hover;
   List<_PlacedBlock> _placed = const [];
   Size? _size;
-  List<MapBlock>? _laidOut;
+  String? _laidOut;
 
+  /// Relayout only when sizes really change: hover, repaints and rebuilds
+  /// with an equal block list reuse the last (costly) Voronoi layout.
   List<_PlacedBlock> _layout(Size size) {
-    if (size == _size && identical(widget.blocks, _laidOut)) return _placed;
+    final key = [for (final b in widget.blocks) '${b.id}\u0000${b.bytes}']
+        .join('\u0001');
+    if (size == _size && key == _laidOut) {
+      // Same shapes; labels/states may still differ.
+      final byId = {for (final b in widget.blocks) b.id: b};
+      return _placed = [
+        for (final x in _placed)
+          _PlacedBlock(byId[x.block.id] ?? x.block, x.polygon),
+      ];
+    }
     _size = size;
-    _laidOut = widget.blocks;
+    _laidOut = key;
     final byId = {for (final b in widget.blocks) b.id: b};
     // A floor on the drawn area keeps the long tail visible and clickable;
     // labels still show real sizes.
