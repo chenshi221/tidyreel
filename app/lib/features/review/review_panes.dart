@@ -17,6 +17,12 @@ final seasonEpisodesProvider = FutureProvider.autoDispose
       (ref, k) => ref.watch(metadataProvider).season(k.$1, k.$2),
     );
 
+/// Seasons of a show the user matched by hand; group.show only has the show
+/// the recognizer found.
+final showDetailProvider = FutureProvider.autoDispose.family<ShowDetail, int>(
+  (ref, id) => ref.watch(metadataProvider).show(id),
+);
+
 String _country(String? code) => switch (code) {
   null => '',
   'CN' => '中国大陆',
@@ -615,6 +621,7 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
           _ => _RowKind.main,
         };
   late var season = current?.season ?? 1;
+  EpisodeRef? picked;
   var manual = false;
 
   MediaKind? get _kind => switch (kind) {
@@ -627,8 +634,10 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
     _RowKind.ignore => row.override?.kind,
   };
 
-  void _pick(int s, int e) =>
-      Navigator.pop(context, FileOverride(season: s, episode: e, kind: _kind));
+  void _confirm(EpisodeRef e) => Navigator.pop(
+    context,
+    FileOverride(season: e.season, episode: e.episode, kind: _kind),
+  );
 
   void _save() => Navigator.pop(
     context,
@@ -650,10 +659,22 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final sizes = seasonSizes(widget.group, widget.decision);
-    final tmdbId = effectiveMatch(widget.group, widget.decision)?.tmdbId;
-    final hasSpecials =
-        widget.group.show?.seasons.any((s) => s.number == 0) ?? false;
+    final match = effectiveMatch(widget.group, widget.decision);
+    final tmdbId = match?.tmdbId;
+    final fetch =
+        isTv &&
+        tmdbId != null &&
+        widget.group.show?.info.tmdbId != tmdbId &&
+        widget.decision?.episodeGroupId == null;
+    final fetched = fetch ? ref.watch(showDetailProvider(tmdbId)) : null;
+    final show = fetch ? fetched!.value : widget.group.show;
+    final sizes = fetch
+        ? {
+            for (final s in show?.seasons ?? const <SeasonInfo>[])
+              if (s.number > 0) s.number: s.episodeCount,
+          }
+        : seasonSizes(widget.group, widget.decision);
+    final hasSpecials = show?.seasons.any((s) => s.number == 0) ?? false;
     final seasons = switch (kind) {
       _RowKind.main => (sizes.keys.toList()..sort()),
       _RowKind.special when hasSpecials && sizes.isNotEmpty => [0],
@@ -661,11 +682,19 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
     };
     final picking = isTv && tmdbId != null && seasons.isNotEmpty && !manual;
     if (picking && !seasons.contains(season)) season = seasons.first;
+    final waiting =
+        !manual &&
+        (fetched?.isLoading ?? false) &&
+        (kind == _RowKind.main || kind == _RowKind.special);
     final fields =
-        isTv && (!picking) && kind != _RowKind.ignore && kind != _RowKind.extra;
+        isTv &&
+        !picking &&
+        !waiting &&
+        kind != _RowKind.ignore &&
+        kind != _RowKind.extra;
     return MacSheet(
       child: SizedBox(
-        width: 460,
+        width: picking ? 620 : 460,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
           child: Column(
@@ -690,31 +719,38 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
                     _RowKind.ignore: '忽略',
                   },
                   value: kind,
-                  onChanged: (v) => setState(() => kind = v),
+                  onChanged: (v) => setState(() {
+                    kind = v;
+                    picked = null;
+                  }),
                 ),
               ),
+              if (waiting)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 40),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
               if (picking) ...[
+                const SizedBox(height: 14),
+                _showHeader(match!),
                 const SizedBox(height: 12),
-                if (seasons.length > 1)
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: [
-                      for (final s in seasons)
-                        ChoiceChip(
-                          key: ValueKey('pick-season-$s'),
-                          label: Text(seasonTabLabel(s)),
-                          selected: s == season,
-                          onSelected: (_) => setState(() => season = s),
-                        ),
-                    ],
-                  ),
-                const SizedBox(height: 8),
-                SizedBox(
-                  height: 300,
-                  child: Panel(
-                    framed: true,
-                    child: _episodeList(tmdbId, season),
+                Flexible(
+                  child: SizedBox(
+                    height: 300,
+                    child: Panel(
+                      framed: true,
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          SizedBox(width: 110, child: _seasonList(seasons)),
+                          Container(
+                            width: hairline,
+                            color: Palette.of(context).line,
+                          ),
+                          Expanded(child: _episodeList(tmdbId, season)),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               ],
@@ -756,7 +792,17 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
                     onPressed: () => Navigator.pop(context),
                     child: const Text('取消'),
                   ),
-                  if (!picking) ...[
+                  if (picking) ...[
+                    const SizedBox(width: 8),
+                    FilledButton(
+                      key: const ValueKey('pick-confirm'),
+                      onPressed: picked == null
+                          ? null
+                          : () => _confirm(picked!),
+                      child: const Text('确认'),
+                    ),
+                  ],
+                  if (!picking && !waiting) ...[
                     const SizedBox(width: 8),
                     FilledButton(
                       key: const ValueKey('edit-save'),
@@ -770,6 +816,78 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _showHeader(Candidate m) {
+    final p = Palette.of(context);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Poster(posterPath: m.posterPath, width: 46, height: 69),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                m.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                [
+                  if (m.year != null) '${m.year}',
+                  if (m.overview != null) m.overview!,
+                ].join(' | '),
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 12, color: p.textMuted),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _seasonList(List<int> seasons) {
+    final p = Palette.of(context);
+    return ListView(
+      children: [
+        for (final s in seasons)
+          Hoverable(
+            key: ValueKey('pick-season-$s'),
+            onTap: () => setState(() => season = s),
+            builder: (context, hover) => Container(
+              height: 38,
+              alignment: Alignment.centerLeft,
+              padding: const EdgeInsets.only(left: 11),
+              decoration: BoxDecoration(
+                color: hover ? p.hover : Colors.transparent,
+                border: Border(
+                  left: BorderSide(
+                    width: 3,
+                    color: s == season ? p.accent : Colors.transparent,
+                  ),
+                ),
+              ),
+              child: Text(
+                seasonTabLabel(s),
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: s == season ? FontWeight.w600 : FontWeight.w400,
+                  color: s == season ? null : p.textMuted,
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 
@@ -798,7 +916,8 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
               for (final e in eps)
                 Hoverable(
                   key: ValueKey('pick-ep-$season-${e.number}'),
-                  onTap: () => _pick(season, e.number),
+                  onTap: () =>
+                      setState(() => picked = EpisodeRef(season, e.number)),
                   builder: (context, hover) {
                     final ref = EpisodeRef(season, e.number);
                     final isCurrent = ref == current;
@@ -809,7 +928,7 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
                         vertical: 7,
                       ),
                       decoration: BoxDecoration(
-                        color: isCurrent
+                        color: ref == picked
                             ? p.selected
                             : hover
                             ? p.hover

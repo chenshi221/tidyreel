@@ -385,13 +385,14 @@ class AnchorRecognizer implements Recognizer {
     );
   }
 
-  /// 75% title similarity (best of the three TMDB titles) + 25% year agreement
+  /// 75% title similarity (best of the TMDB titles) + 25% year agreement
   /// (unknown = 0.5, exact = 1, off by one = 0.7, else 0).
   double _score(String query, int? year, Candidate c) {
     final titleSim = [
       c.title,
       c.englishTitle,
       c.originalTitle,
+      ...c.aliases,
     ].whereType<String>().map((t) => similarity(query, t)).fold(0.0, max);
     final yearScore = (year == null || c.year == null)
         ? 0.5

@@ -5,7 +5,8 @@ import '../model/metadata.dart';
 import 'scoring.dart';
 import 'tmdb_client.dart';
 
-export 'scoring.dart' show scoreCandidate, normalizeQuery;
+export 'scoring.dart'
+    show scoreCandidate, normalizeQuery, sameTitle, sharesToken;
 export 'tmdb_client.dart' show TmdbException, TmdbResponseCache;
 
 /// Owner: Agent B. PLAN §4.6.
@@ -49,6 +50,10 @@ class TmdbProvider implements MetadataProvider {
       );
 
   static const _en = 'en-US';
+
+  /// How deep to look when page 1 has no exact title.
+  static const _maxPages = 3;
+  static const _maxAliasLookups = 10;
 
   /// Candidates sorted best first by [scoreCandidate]. Normalizes [query]
   /// (a year inside it is used when [year] is null).
@@ -108,13 +113,79 @@ class TmdbProvider implements MetadataProvider {
     if (results.isEmpty) return [];
     // English titles: one more (cached) search, joined by id.
     final en = lang == _en ? res : await _http.get(path, params(_en));
+    final enResults = _list(en['results']);
+    String? original(Map<String, dynamic> r) =>
+        _str(r[movie ? 'original_title' : 'original_name']);
+
+    // TMDB also matches alternative titles ("流人" -> Slow Horses) but ranks
+    // those hits low and doesn't say which title matched, so dig them out.
+    final exact = [...results, ...enResults].any(
+      (r) =>
+          sameTitle(text, _title(r, movie)) ||
+          sameTitle(text, original(r) ?? ''),
+    );
+    if (!exact) {
+      results.addAll(await _laterPages(path, params(lang), res));
+      enResults.addAll(await _laterPages(path, params(_en), en));
+    }
     final enTitles = {
-      for (final r in _list(en['results'])) r['id'] as int: _title(r, movie),
+      for (final r in enResults) r['id'] as int: _title(r, movie),
     };
+    final hits = {for (final r in results) r['id'] as int: r};
+    final aliases = <int, List<String>>{};
+    if (!exact) {
+      final unexplained = hits.entries
+          .where(
+            (h) => ![
+              _title(h.value, movie),
+              original(h.value) ?? '',
+              enTitles[h.key] ?? '',
+            ].any((t) => sharesToken(text, t)),
+          )
+          .map((h) => h.key)
+          .take(_maxAliasLookups);
+      await Future.wait(
+        unexplained.map((id) async => aliases[id] = await _aliases(id, movie)),
+      );
+    }
     return [
-      for (final r in results)
-        _candidate(r, kind, englishTitle: enTitles[r['id'] as int]),
+      for (final h in hits.entries)
+        _candidate(
+          h.value,
+          kind,
+          englishTitle: enTitles[h.key],
+          aliases: aliases[h.key] ?? const [],
+        ),
     ];
+  }
+
+  Future<List<Map<String, dynamic>>> _laterPages(
+    String path,
+    Map<String, String> params,
+    Map<String, dynamic> first,
+  ) async {
+    final total = (first['total_pages'] as int?) ?? 1;
+    final pages = await Future.wait([
+      for (var p = 2; p <= total && p <= _maxPages; p++)
+        _http.get(path, {...params, 'page': '$p'}),
+    ]);
+    return [for (final p in pages) ..._list(p['results'])];
+  }
+
+  /// Best effort: search results are still useful without aliases.
+  Future<List<String>> _aliases(int id, bool movie) async {
+    try {
+      final res = await _http.get(
+        '/${movie ? 'movie' : 'tv'}/$id/alternative_titles',
+        const {},
+      );
+      return [
+        for (final t in _list(res[movie ? 'titles' : 'results']))
+          ?_str(t['title']),
+      ];
+    } on TmdbException {
+      return const [];
+    }
   }
 
   @override
@@ -228,6 +299,7 @@ class TmdbProvider implements MetadataProvider {
     Map<String, dynamic> r,
     MediaKind kind, {
     String? englishTitle,
+    List<String> aliases = const [],
   }) {
     final movie = kind == MediaKind.movie;
     final date = _date(r[movie ? 'release_date' : 'first_air_date']);
@@ -252,6 +324,7 @@ class TmdbProvider implements MetadataProvider {
       overview: _str(r['overview']),
       backdropPath: _str(r['backdrop_path']),
       genres: [for (final g in _list(r['genres'])) ?_str(g['name'])],
+      aliases: aliases,
     );
   }
 }
