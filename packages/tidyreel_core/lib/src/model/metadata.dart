@@ -27,6 +27,10 @@ class Candidate {
   /// zh-CN genre names; only filled by detail calls (search returns ids).
   final List<String> genres;
 
+  /// TMDB alternative titles, e.g. "流人" for Slow Horses. Only filled for
+  /// search hits whose own titles don't explain the match.
+  final List<String> aliases;
+
   const Candidate({
     required this.tmdbId,
     required this.kind,
@@ -40,6 +44,7 @@ class Candidate {
     this.overview,
     this.backdropPath,
     this.genres = const [],
+    this.aliases = const [],
   });
 }
 

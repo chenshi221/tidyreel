@@ -33,7 +33,7 @@ NormalizedQuery normalizeQuery(String raw) {
 /// Scores how well [c] matches a user/parsed [query], in 0..1 (higher is better).
 ///
 /// - 0.7 * title similarity: the best of comparing the query against the zh
-///   title, original title and English title. Case, punctuation and
+///   title, original title, English title and aliases. Case, punctuation and
 ///   simplified/traditional Chinese (small built-in map) are ignored. Exact = 1,
 ///   substring = 0.7..1 by length ratio, otherwise character-bigram Dice.
 /// - 0.2 year bonus when both years are known: same year 0.2, off by one 0.1.
@@ -50,7 +50,7 @@ double scoreCandidate(
   final y = year ?? q.year;
   final qs = _fold(q.text);
   var sim = 0.0;
-  for (final t in [c.title, c.originalTitle, c.englishTitle]) {
+  for (final t in [c.title, c.originalTitle, c.englishTitle, ...c.aliases]) {
     if (t == null) continue;
     final v = _similarity(qs, _fold(t));
     if (v > sim) sim = v;
@@ -67,6 +67,24 @@ double scoreCandidate(
     score += 0.1;
   }
   return score;
+}
+
+/// Same title once case, punctuation and traditional/simplified are ignored.
+bool sameTitle(String a, String b) => _fold(a) == _fold(b);
+
+/// Whether [title] has any word of [query] (any character, for CJK). TMDB
+/// matches on any token, so a hit with none matched on another title.
+bool sharesToken(String query, String title) {
+  final t = _fold(title);
+  for (final word in query.split(' ')) {
+    final w = _fold(word);
+    if (w.isEmpty) continue;
+    final found = w.runes.every((r) => r < 0x80)
+        ? t.contains(w)
+        : w.runes.any((r) => t.contains(String.fromCharCode(r)));
+    if (found) return true;
+  }
+  return false;
 }
 
 String _fold(String s) {

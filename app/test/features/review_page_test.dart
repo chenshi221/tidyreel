@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tidyreel/features/review/review_page.dart';
 import 'package:tidyreel/ui/widgets.dart';
+import 'package:tidyreel_core/testing.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
 import 'helpers.dart';
@@ -85,6 +86,9 @@ void main() {
     // TMDB episode list; picking E03 moves this file and renumbers the rest.
     await tester.tap(find.byKey(const ValueKey('pick-ep-1-3')));
     await tester.pumpAndSettle();
+    expect((await decision()).overrides, isEmpty); // only selected so far
+    await tester.tap(find.byKey(const ValueKey('pick-confirm')));
+    await tester.pumpAndSettle();
     var d = await decision();
     expect(d.overrides[_file]!.episode, 3);
     expect(d.overrides[_file]!.season, 1);
@@ -115,6 +119,35 @@ void main() {
     d = await decision();
     expect(d.overrides[_file]!.kind, MediaKind.extra);
     expect(d.overrides, hasLength(1));
+  });
+
+  testWidgets('a show matched by hand still offers its seasons and episodes', (
+    tester,
+  ) async {
+    final (tm, id) = await open(tester);
+    await tm.updateDecision(
+      id,
+      _g1,
+      const GroupDecision(match: Demo.friends, selected: true),
+    );
+    await pumpPage(tester, ReviewPage(taskId: id.value), tm: tm);
+
+    await tester.tap(find.text('[Sub] Dorohedoro S01E01 [1080p].mkv'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('edit-episode')), findsNothing);
+    expect(find.byKey(const ValueKey('pick-season-1')), findsOneWidget);
+    expect(
+      tester
+          .widget<FilledButton>(find.byKey(const ValueKey('pick-confirm')))
+          .onPressed,
+      isNull,
+    );
+    await tester.tap(find.byKey(const ValueKey('pick-ep-1-2')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('pick-confirm')));
+    await tester.pumpAndSettle();
+    final d = (await tm.review(id) as TaskReview).decisions[_g1]!;
+    expect(d.overrides[_file]!.episode, 2);
   });
 
   testWidgets('right pane: strategy, offset, manual match', (tester) async {
