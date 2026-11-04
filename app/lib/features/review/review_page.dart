@@ -102,7 +102,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                   effectiveMatch(g, r.decisions[g.id])?.title,
                   effectiveMatch(g, r.decisions[g.id])?.originalTitle,
                 ].any((t) => t != null && t.toLowerCase().contains(q))))
-          g,
+          effectiveGroup(g, r.decisions[g.id]),
     ];
   }
 
@@ -113,9 +113,13 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
     if (!v.any((g) => g.id == _selected)) _selected = v.firstOrNull?.id;
   }
 
-  MediaGroup? get _selectedGroup => _withMatchedShow(
-    _review?.scan.groups.where((g) => g.id == _selected).firstOrNull,
-  );
+  /// The selected group as its current match makes it.
+  MediaGroup? get _rawSelected {
+    final g = _review?.scan.groups.where((g) => g.id == _selected).firstOrNull;
+    return g == null ? null : effectiveGroup(g, _review!.decisions[g.id]);
+  }
+
+  MediaGroup? get _selectedGroup => _withMatchedShow(_rawSelected);
 
   /// group.show only holds the recognizer's match; fill in a hand-picked one.
   MediaGroup? _withMatchedShow(MediaGroup? g) {
@@ -156,6 +160,9 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
           decisions: {...cur.decisions, id: d},
           preview: cur.preview,
         );
+        // The last unmatched work got matched: nothing left on this tab, and
+        // what's next is organizing it.
+        if (_tab == 1 && _groups(matched: false).isEmpty) _tab = 0;
         _selectFirstVisible();
       });
     }
@@ -254,8 +261,6 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
     final c = await showTmdbSearchDialog(
       context,
       initial: effectiveMatch(g, _decisionOf(g.id))?.title ?? g.anchorTitle,
-      kind: g.kind == MediaKind.unknown ? null : g.kind,
-      year: effectiveMatch(g, _decisionOf(g.id))?.year ?? g.anchorYear,
     );
     // Picking a match means "organize this": an unmatched group starts unchecked.
     if (c != null) {
@@ -368,9 +373,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
 
   @override
   Widget build(BuildContext context) {
-    final missingShow = _fetchShowFor(
-      _review?.scan.groups.where((g) => g.id == _selected).firstOrNull,
-    );
+    final missingShow = _fetchShowFor(_rawSelected);
     if (missingShow != null) ref.watch(showDetailProvider(missingShow));
     final r = _review;
     ref.listen(

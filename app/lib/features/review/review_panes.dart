@@ -99,16 +99,12 @@ class CandidateTile extends StatelessWidget {
 /// and the inline box on unmatched groups.
 class TmdbSearchBox extends ConsumerStatefulWidget {
   final String initial;
-  final MediaKind? kind;
-  final int? year;
   final ValueChanged<Candidate> onPick;
   final bool autoSearch;
 
   const TmdbSearchBox({
     super.key,
     required this.initial,
-    this.kind,
-    this.year,
     required this.onPick,
     this.autoSearch = false,
   });
@@ -119,9 +115,10 @@ class TmdbSearchBox extends ConsumerStatefulWidget {
 
 class _TmdbSearchBoxState extends ConsumerState<TmdbSearchBox> {
   late final _c = TextEditingController(text: widget.initial);
-  late final _yearC = TextEditingController(text: widget.year?.toString());
-  // MediaKind.unknown = 全部
-  late var _kind = widget.kind ?? MediaKind.unknown;
+  // Both filters start open: the guess being corrected may be what's wrong
+  // (a year taken from a wrong match hides the right one). MediaKind.unknown = 全部.
+  final _yearC = TextEditingController();
+  var _kind = MediaKind.unknown;
   List<Candidate>? _results;
   var _busy = false;
   var _searchSeq = 0;
@@ -136,12 +133,10 @@ class _TmdbSearchBoxState extends ConsumerState<TmdbSearchBox> {
   @override
   void didUpdateWidget(TmdbSearchBox oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.initial != widget.initial ||
-        oldWidget.kind != widget.kind ||
-        oldWidget.year != widget.year) {
+    if (oldWidget.initial != widget.initial) {
       _c.text = widget.initial;
-      _yearC.text = widget.year?.toString() ?? '';
-      _kind = widget.kind ?? MediaKind.unknown;
+      _yearC.text = '';
+      _kind = MediaKind.unknown;
       _results = null;
       _error = null;
       if (widget.autoSearch) _search();
@@ -293,8 +288,6 @@ class _TmdbSearchBoxState extends ConsumerState<TmdbSearchBox> {
 Future<Candidate?> showTmdbSearchDialog(
   BuildContext context, {
   required String initial,
-  MediaKind? kind,
-  int? year,
 }) => showDialog<Candidate>(
   context: context,
   builder: (ctx) => MacSheet(
@@ -312,8 +305,6 @@ Future<Candidate?> showTmdbSearchDialog(
               child: SingleChildScrollView(
                 child: TmdbSearchBox(
                   initial: initial,
-                  kind: kind,
-                  year: year,
                   autoSearch: true,
                   onPick: (c) => Navigator.pop(ctx, c),
                 ),
@@ -552,7 +543,6 @@ class _GroupCard extends StatelessWidget {
                 child: TmdbSearchBox(
                   key: ValueKey('inline-search-${g.id.value}'),
                   initial: g.anchorTitle,
-                  kind: g.kind == MediaKind.unknown ? null : g.kind,
                   onPick: onPick,
                 ),
               ),
@@ -566,6 +556,57 @@ class _GroupCard extends StatelessWidget {
 // ---------------------------------------------------------------- middle pane
 
 const folderTab = -2;
+
+/// Text cut to [maxLines] with 展开 / 收起 when it doesn't fit.
+class ExpandableText extends StatefulWidget {
+  final String text;
+  final TextStyle style;
+  final int maxLines;
+
+  const ExpandableText(
+    this.text, {
+    super.key,
+    required this.style,
+    this.maxLines = 3,
+  });
+
+  @override
+  State<ExpandableText> createState() => _ExpandableTextState();
+}
+
+class _ExpandableTextState extends State<ExpandableText> {
+  var _open = false;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, box) {
+      final overflows = (TextPainter(
+        text: TextSpan(text: widget.text, style: widget.style),
+        textDirection: TextDirection.ltr,
+        textScaler: MediaQuery.textScalerOf(context),
+        maxLines: widget.maxLines,
+      )..layout(maxWidth: box.maxWidth)).didExceedMaxLines;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            widget.text,
+            maxLines: _open ? null : widget.maxLines,
+            overflow: _open ? null : TextOverflow.ellipsis,
+            style: widget.style,
+          ),
+          if (overflows)
+            LinkText(
+              _open ? '收起' : '展开',
+              key: const ValueKey('expand-overview'),
+              onTap: () => setState(() => _open = !_open),
+            ),
+        ],
+      );
+    },
+  );
+}
 
 String seasonTabLabel(int season) => season == 0 ? '特别篇' : '第 $season 季';
 
@@ -1196,10 +1237,9 @@ class WorkHeader extends StatelessWidget {
                       ],
                       if (overview != null) ...[
                         const SizedBox(height: 10),
-                        Text(
+                        ExpandableText(
+                          key: ValueKey(overview),
                           overview,
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontSize: 12.5,
                             height: 1.5,
@@ -1612,7 +1652,9 @@ class _SeasonChip extends StatelessWidget {
       onTap: onTap,
       builder: (context, hover) => AnimatedContainer(
         duration: const Duration(milliseconds: 120),
-        padding: EdgeInsets.fromLTRB(posterPath != null ? 4 : 10, 4, 11, 4),
+        // Fixed: a chip with a poster and one with an icon line up.
+        height: 34,
+        padding: EdgeInsets.fromLTRB(posterPath != null ? 4 : 10, 0, 11, 0),
         decoration: BoxDecoration(
           color: selected
               ? (color ?? p.text)

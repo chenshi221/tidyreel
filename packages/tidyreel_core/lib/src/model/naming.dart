@@ -13,6 +13,17 @@ enum EpisodeStyle { upperPadded, lowerPadded, lowerShort, cross, lowerDotted }
 
 enum NameField { title, year, episode, episodeTitle, extraInfo }
 
+/// One find/replace applied to every generated name, after the template.
+class NameRewrite {
+  /// Regular expression.
+  final String pattern;
+
+  /// Replacement; `$1` is the first capture group.
+  final String replacement;
+
+  const NameRewrite(this.pattern, this.replacement);
+}
+
 class NamingOptions {
   final TitleLanguage titleLanguage;
 
@@ -50,6 +61,9 @@ class NamingOptions {
   /// Advanced: when set, used verbatim for the file name and the options above are ignored.
   final String? customTemplate;
 
+  /// Applied in order to file, media-folder and season-folder names.
+  final List<NameRewrite> rewrites;
+
   const NamingOptions({
     this.titleLanguage = TitleLanguage.chineseFirst,
     this.bilingual = true,
@@ -73,6 +87,7 @@ class NamingOptions {
     this.seasonFolderTemplate = 'Season {season:02}',
     this.singleSeasonFolder = true,
     this.customTemplate,
+    this.rewrites = const [],
   });
 
   NamingOptions copyWith({
@@ -92,6 +107,7 @@ class NamingOptions {
     String? seasonFolderTemplate,
     bool? singleSeasonFolder,
     String? Function()? customTemplate,
+    List<NameRewrite>? rewrites,
   }) => NamingOptions(
     titleLanguage: titleLanguage ?? this.titleLanguage,
     bilingual: bilingual ?? this.bilingual,
@@ -111,6 +127,7 @@ class NamingOptions {
     customTemplate: customTemplate != null
         ? customTemplate()
         : this.customTemplate,
+    rewrites: rewrites ?? this.rewrites,
   );
 }
 

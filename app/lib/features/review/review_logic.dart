@@ -7,6 +7,23 @@ Candidate? effectiveMatch(MediaGroup g, GroupDecision? d) =>
 
 bool isMatched(MediaGroup g, GroupDecision? d) => effectiveMatch(g, d) != null;
 
+/// [g] as the match in [d] makes it: picking a show for a folder recognized
+/// as a movie makes it a show (the planner goes by the match too).
+MediaGroup effectiveGroup(MediaGroup g, GroupDecision? d) {
+  final m = effectiveMatch(g, d);
+  if (m == null || m.kind == g.kind) return g;
+  return MediaGroup(
+    id: g.id,
+    kind: m.kind,
+    anchorTitle: g.anchorTitle,
+    anchorYear: g.anchorYear,
+    rootDir: g.rootDir,
+    files: g.files,
+    match: g.match,
+    matchScore: g.matchScore,
+  );
+}
+
 /// Season bucket used for the tabs: -1 for movies / unknown groups.
 const noSeason = -1;
 

@@ -164,7 +164,9 @@ class _PlanBuilder {
   }
 
   Future<void> _group(MediaGroup g, GroupDecision d, Candidate match) async {
-    final isTv = g.kind == MediaKind.episode;
+    // What it was matched to decides, not the first guess from file names:
+    // picking a show for a folder recognized as a movie makes it a show.
+    final isTv = match.kind == MediaKind.episode;
     final naming = isTv ? opts.naming.tv : opts.naming.movie;
     final template = compileTemplate(
       naming,
@@ -328,7 +330,10 @@ class _PlanBuilder {
       'year': match.year,
     };
     final folderName = sanitizeName(
-      renderTemplate(naming.folderTemplate, folderVars),
+      applyRewrites(
+        renderTemplate(naming.folderTemplate, folderVars),
+        naming.rewrites,
+      ),
     );
     String curBase;
     if (opts.mode == OrganizeMode.inPlace) {
@@ -425,15 +430,20 @@ class _PlanBuilder {
             : joinPath(
                 curBase,
                 sanitizeName(
-                  renderTemplate(naming.seasonFolderTemplate, {
-                    'season': r.season,
-                  }),
+                  applyRewrites(
+                    renderTemplate(naming.seasonFolderTemplate, {
+                      'season': r.season,
+                    }),
+                    naming.rewrites,
+                  ),
                 ),
               );
       } else {
         it.dstDir = curBase;
       }
-      it.newBase = sanitizeName(renderTemplate(template, vars));
+      it.newBase = sanitizeName(
+        applyRewrites(renderTemplate(template, vars), naming.rewrites),
+      );
     }
     if (isTv && opts.mode == OrganizeMode.inPlace) {
       _reuseSeasonFolders(g, items, curBase);

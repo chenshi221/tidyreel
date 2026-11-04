@@ -133,4 +133,16 @@ void main() {
       expect(polygonArea(smooth), greaterThan(c.area * 0.8));
     }
   });
+
+  test('a crowded map keeps every small cell near its target', () {
+    final items = [
+      for (var i = 0; i < 120; i++) MapItem('未来日记 $i', i < 8 ? 200000 : 14000),
+    ];
+    final total = items.fold(0.0, (t, x) => t + x.value);
+    final cells = layoutOrganic(items, Offset.zero & Size(1600, total / 1600));
+    expect(cells, hasLength(items.length));
+    for (final c in cells) {
+      expect(c.area, greaterThan(c.value * 0.45), reason: c.id);
+    }
+  });
 }

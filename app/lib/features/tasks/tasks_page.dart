@@ -37,8 +37,10 @@ class TasksPage extends ConsumerStatefulWidget {
   ConsumerState<TasksPage> createState() => _TasksPageState();
 }
 
+enum _Filter { all, active, finished }
+
 class _TasksPageState extends ConsumerState<TasksPage> {
-  var _finished = false;
+  var _filter = _Filter.all;
 
   @override
   Widget build(BuildContext context) {
@@ -46,26 +48,50 @@ class _TasksPageState extends ConsumerState<TasksPage> {
     final all = tasks.value ?? const <TaskSummary>[];
     final active = all.where((t) => t.stage.isActive).toList();
     final finished = all.where((t) => !t.stage.isActive).toList();
-    final shown = _finished ? finished : active;
+    final waiting = active
+        .where((t) => t.stage == TaskStage.awaitingReview)
+        .length;
+
+    Widget section(String? title, List<TaskSummary> list) => Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (title != null) SectionLabel(title),
+        Panel(
+          child: Rows(
+            indent: 70,
+            children: [
+              for (final (i, t) in list.indexed)
+                FadeIn(
+                  index: i,
+                  child: TaskCard(task: t),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+
+    final showActive = _filter != _Filter.finished && active.isNotEmpty;
+    final showFinished = _filter != _Filter.active && finished.isNotEmpty;
     return PageScaffold(
       title: '任务',
       subtitle: '扫描和识别在后台进行，识别完成后在这里确认和执行',
-      maxWidth: 1000,
       actions: [
-        if (_finished && finished.isNotEmpty)
+        if (showFinished)
           TextButton.icon(
             key: const ValueKey('clear-finished'),
             onPressed: () => confirmDeleteTask(context, ref, finished),
             icon: const Icon(CupertinoIcons.trash, size: 13),
-            label: const Text('清空'),
+            label: const Text('清空已完成'),
           ),
-        Segmented<bool>(
+        Segmented<_Filter>(
           options: {
-            false: '进行中 (${active.length})',
-            true: '已完成 (${finished.length})',
+            _Filter.all: '全部 (${all.length})',
+            _Filter.active: '进行中 (${active.length})',
+            _Filter.finished: '已完成 (${finished.length})',
           },
-          value: _finished,
-          onChanged: (v) => setState(() => _finished = v),
+          value: _filter,
+          onChanged: (v) => setState(() => _filter = v),
         ),
       ],
       child: tasks.when(
@@ -75,32 +101,35 @@ class _TasksPageState extends ConsumerState<TasksPage> {
           title: '无法读取任务',
           message: '$e',
         ),
-        data: (_) => shown.isEmpty
+        data: (_) => !showActive && !showFinished
             ? EmptyState(
-                icon: _finished
+                icon: _filter == _Filter.finished
                     ? CupertinoIcons.checkmark_seal
                     : CupertinoIcons.tray,
-                title: _finished ? '还没有已完成的任务' : '没有进行中的任务',
-                message: _finished ? null : '去「来源」选择文件夹，提交一个整理任务',
+                title: switch (_filter) {
+                  _Filter.all => '还没有任务',
+                  _Filter.active => '没有进行中的任务',
+                  _Filter.finished => '还没有已完成的任务',
+                },
+                message: _filter == _Filter.finished
+                    ? null
+                    : '去「来源」选择文件夹，提交一个整理任务',
               )
             : ListView(
-                padding: const EdgeInsets.fromLTRB(48, 14, 40, 28),
+                padding: const EdgeInsets.fromLTRB(48, 0, 40, 28),
                 children: [
-                  if (!_finished) ...[
-                    BigNumber(
-                      '${active.where((t) => t.stage == TaskStage.awaitingReview).length}',
-                      captions: const [Text('个待确认')],
-                    ),
-                    const SizedBox(height: 28),
-                  ],
-                  for (final (i, t) in shown.indexed)
-                    FadeIn(
-                      index: i,
-                      child: Padding(
-                        padding: const EdgeInsets.only(bottom: 26),
-                        child: TaskCard(task: t),
+                  if (waiting > 0 && _filter != _Filter.finished)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6, bottom: 6),
+                      child: BigNumber(
+                        '$waiting',
+                        captions: const [Text('个待确认')],
                       ),
                     ),
+                  // Sections only when both are on screen.
+                  if (showActive) section(showFinished ? '进行中' : null, active),
+                  if (showFinished)
+                    section(showActive ? '已完成' : null, finished),
                 ],
               ),
       ),
@@ -257,10 +286,9 @@ class TaskCard extends ConsumerWidget {
 
     final running = t.stage.isActive && t.stage != TaskStage.awaitingReview;
     final counts = [
-      '导入 ${t.importedCount}',
       '视频 ${t.videoCount}',
-      '文件夹 ${t.folderCount}',
-      '字幕 ${t.subtitleCount}',
+      if (t.subtitleCount > 0) '字幕 ${t.subtitleCount}',
+      if (t.folderCount > 0) '文件夹 ${t.folderCount}',
       if (unassigned > 0) '未归类 $unassigned',
     ].join(' · ');
 
@@ -269,137 +297,123 @@ class TaskCard extends ConsumerWidget {
       child: Hoverable(
         key: ValueKey('task ${t.id.value}'),
         onTap: () => context.go(target),
-        builder: (context, hover) => Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Flexible(
-                  child: Text(
-                    title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: p.text,
-                      decoration: hover ? TextDecoration.underline : null,
-                      decorationColor: p.textFaint,
+        builder: (context, hover) => Container(
+          color: hover ? p.hover : Colors.transparent,
+          padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
+          child: Row(
+            children: [
+              Poster(
+                posterPath: works.firstOrNull?.posterPath,
+                icon: CupertinoIcons.folder,
+                width: 42,
+                height: 63,
+                radius: 5,
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w500,
+                        color: p.text,
+                      ),
                     ),
-                  ),
-                ),
-                const Spacer(),
-                MoreButton(items: menu),
-              ],
-            ),
-            const SizedBox(height: 2),
-            Row(
-              children: [
-                Flexible(
-                  child: Tooltip(
-                    message: t.paths.join('\n'),
-                    child: Text(
-                      [
-                        connName ?? t.connection.value,
-                        where,
-                        t.mode == OrganizeMode.inPlace ? '原地整理' : '移动到媒体库',
-                      ].join(' · '),
-                      style: theme.textTheme.bodySmall,
+                    const SizedBox(height: 3),
+                    Tooltip(
+                      message: t.paths.join('\n'),
+                      child: Text(
+                        [
+                          connName ?? t.connection.value,
+                          where,
+                          t.mode == OrganizeMode.inPlace ? '原地整理' : '移动到媒体库',
+                        ].join(' · '),
+                        style: theme.textTheme.bodySmall,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      t.message.isNotEmpty && t.stage != TaskStage.done
+                          ? t.message
+                          : works.length > 1
+                          ? works.map((w) => w.title).join('、')
+                          : counts,
+                      style: TextStyle(fontSize: 12, color: p.textFaint),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
-                  ),
+                    if (running && t.progress != null) ...[
+                      const SizedBox(height: 6),
+                      GradientProgress(
+                        value: t.progress!,
+                        color: p.text,
+                        height: 3,
+                      ),
+                    ],
+                  ],
                 ),
-                const SizedBox(width: 10),
-                Tooltip(
-                  message: '点击复制任务 ID',
-                  child: Hoverable(
-                    onTap: () {
-                      Clipboard.setData(ClipboardData(text: t.id.value));
-                      ScaffoldMessenger.of(
-                        context,
-                      ).showSnackBar(const SnackBar(content: Text('已复制任务 ID')));
-                    },
-                    builder: (context, hover) => Text(
-                      t.id.value,
-                      style: TextStyle(
-                        fontFamily: monoFamily,
-                        fontFamilyFallback: monoFallback,
-                        fontSize: 11.5,
-                        color: hover ? p.text : p.textMuted,
+              ),
+              const SizedBox(width: 16),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  StatusPill(
+                    label: running
+                        ? _runningLabel(t.stage, t.progress)
+                        : stageLabel(t.stage),
+                    color: statusColor,
+                    busy: running,
+                  ),
+                  Tooltip(
+                    message: '点击复制任务 ID',
+                    child: Hoverable(
+                      onTap: () {
+                        Clipboard.setData(ClipboardData(text: t.id.value));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('已复制任务 ID')),
+                        );
+                      },
+                      builder: (context, hover) => Text(
+                        t.id.value,
+                        style: TextStyle(
+                          fontFamily: monoFamily,
+                          fontFamilyFallback: monoFallback,
+                          fontSize: 11,
+                          color: hover ? p.text : p.textFaint,
+                        ),
                       ),
                     ),
                   ),
-                ),
-              ],
-            ),
-            if (works.length > 1) ...[
-              const SizedBox(height: 2),
-              Text(
-                works.map((w) => w.title).join('、'),
-                style: theme.textTheme.bodySmall,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ],
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                if (running) ...[
-                  const Spinner(size: 12),
-                  const SizedBox(width: 6),
-                ],
-                Text(
-                  running
-                      ? _runningLabel(t.stage, t.progress)
-                      : stageLabel(t.stage),
-                  style: TextStyle(fontSize: 12.5, color: statusColor),
-                ),
-                if (t.message.isNotEmpty) ...[
-                  const SizedBox(width: 10),
-                  Flexible(
-                    child: Text(
-                      t.message,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 12.5, color: p.textMuted),
-                    ),
-                  ),
-                ],
-              ],
-            ),
-            const SizedBox(height: 2),
-            Text(counts, style: TextStyle(fontSize: 11.5, color: p.textMuted)),
-            if (running ||
-                t.stage == TaskStage.awaitingReview ||
-                t.stage == TaskStage.done ||
-                t.stage == TaskStage.partiallyFailed) ...[
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  if (t.stage == TaskStage.awaitingReview) ...[
-                    OutlinedButton(
-                      onPressed: () =>
-                          context.go('/tasks/${t.id.value}/review'),
-                      child: const Text('去确认'),
-                    ),
-                    const SizedBox(width: 4),
-                    TextButton(
-                      onPressed: runConfident,
-                      child: const Text('立即执行'),
-                    ),
-                  ],
-                  if (running)
-                    TextButton(
-                      onPressed: () => tm.cancel(t.id),
-                      child: const Text('取消'),
-                    ),
-                  if (t.stage == TaskStage.done ||
-                      t.stage == TaskStage.partiallyFailed)
-                    TextButton(onPressed: undo, child: const Text('撤销')),
                 ],
               ),
+              const SizedBox(width: 12),
+              if (t.stage == TaskStage.awaitingReview) ...[
+                TextButton(onPressed: runConfident, child: const Text('立即执行')),
+                const SizedBox(width: 4),
+                FilledButton(
+                  onPressed: () => context.go('/tasks/${t.id.value}/review'),
+                  child: const Text('去确认'),
+                ),
+              ],
+              if (running)
+                TextButton(
+                  onPressed: () => tm.cancel(t.id),
+                  child: const Text('取消'),
+                ),
+              if (t.stage == TaskStage.done ||
+                  t.stage == TaskStage.partiallyFailed)
+                TextButton(onPressed: undo, child: const Text('撤销')),
+              const SizedBox(width: 2),
+              MoreButton(items: menu),
             ],
-          ],
+          ),
         ),
       ),
     );

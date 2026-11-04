@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -35,10 +37,28 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
     super.dispose();
   }
 
+  /// The 连接路径: the browser never goes above it.
+  String get _root => normalizeDir(widget.connection.startDir);
+
   void _goto(String path) {
     _search.clear();
     ref.read(browserSearchProvider.notifier).set('');
-    ref.read(browserDirProvider.notifier).set(path);
+    ref
+        .read(browserDirProvider.notifier)
+        .set(isWithinDir(path, _root) ? path : _root);
+  }
+
+  void _refresh(String dir) {
+    ref
+        .read(browserRefreshProvider.notifier)
+        .set(ref.read(browserRefreshProvider) + 1);
+    final s = ref.read(sizeScannerProvider(widget.connection.id));
+    // The map's counts are cached for the session: recount what's on screen.
+    if (ref.read(browserMapModeProvider)) {
+      unawaited(s.scan(dir, fresh: true));
+    } else {
+      unawaited(s.forget(dir));
+    }
   }
 
   /// The selection, which may span folders: remove items or jump to one.
@@ -197,6 +217,22 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
               ? CupertinoIcons.star_slash
               : CupertinoIcons.star,
         ),
+      if (ref.read(organizedMarksProvider(c.id))[e.path] != true)
+        MenuAction(
+          '标记为已整理',
+          () => ref
+              .read(organizedMarksProvider(c.id).notifier)
+              .mark(e.path, true),
+          icon: CupertinoIcons.checkmark_seal,
+        ),
+      if (ref.read(organizedMarksProvider(c.id))[e.path] != false)
+        MenuAction(
+          '标记为未整理',
+          () => ref
+              .read(organizedMarksProvider(c.id).notifier)
+              .mark(e.path, false),
+          icon: CupertinoIcons.circle,
+        ),
       MenuAction(
         '复制路径',
         () => copyPath(e.path),
@@ -205,11 +241,11 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
     ];
 
     List<MenuAction?> folderMenu() => [
-      MenuAction('刷新', () {
-        ref
-            .read(browserRefreshProvider.notifier)
-            .set(ref.read(browserRefreshProvider) + 1);
-      }, icon: CupertinoIcons.arrow_clockwise),
+      MenuAction(
+        '刷新',
+        () => _refresh(dir),
+        icon: CupertinoIcons.arrow_clockwise,
+      ),
       MenuAction('全选 / 取消全选', selectAll, icon: CupertinoIcons.checkmark_square),
       null,
       ...organizeItems(dir),
@@ -237,9 +273,7 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
         IconButton(
           tooltip: '刷新',
           icon: const Icon(CupertinoIcons.arrow_clockwise),
-          onPressed: () => ref
-              .read(browserRefreshProvider.notifier)
-              .set(ref.read(browserRefreshProvider) + 1),
+          onPressed: () => _refresh(dir),
         ),
         IconButton(
           tooltip: fav ? '取消收藏此文件夹' : '收藏此文件夹',
@@ -257,7 +291,34 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(40, 0, 40, 0),
-            child: _Breadcrumbs(dir: dir, onTap: _goto),
+            child: Row(
+              children: [
+                IconButton(
+                  key: const ValueKey('browser-home'),
+                  tooltip: '回到主页',
+                  iconSize: 15,
+                  icon: const Icon(CupertinoIcons.house),
+                  onPressed: dir == _root ? null : () => _goto(_root),
+                ),
+                IconButton(
+                  key: const ValueKey('browser-up'),
+                  tooltip: '上一级',
+                  iconSize: 15,
+                  icon: const Icon(CupertinoIcons.arrow_up),
+                  onPressed: dir == _root
+                      ? null
+                      : () => _goto(
+                          dir.substring(0, dir.lastIndexOf('/')).isEmpty
+                              ? '/'
+                              : dir.substring(0, dir.lastIndexOf('/')),
+                        ),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: _Breadcrumbs(dir: dir, root: _root, onTap: _goto),
+                ),
+              ],
+            ),
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(48, 6, 40, 12),
@@ -324,6 +385,10 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
                         onShowList: () => ref
                             .read(browserMapModeProvider.notifier)
                             .set(false),
+                        selected: selection,
+                        onToggleSelect: ref
+                            .read(browserSelectionProvider.notifier)
+                            .toggle,
                       ),
                     ),
                   )
@@ -593,14 +658,26 @@ class _SortMenu extends StatelessWidget {
 
 class _Breadcrumbs extends StatelessWidget {
   final String dir;
+
+  /// First crumb; nothing above it is reachable.
+  final String root;
   final void Function(String) onTap;
 
-  const _Breadcrumbs({required this.dir, required this.onTap});
+  const _Breadcrumbs({
+    required this.dir,
+    required this.root,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
-    final parts = dir.split('/').where((s) => s.isNotEmpty).toList();
+    final rootParts = root.split('/').where((s) => s.isNotEmpty).toList();
+    final parts = dir
+        .split('/')
+        .where((s) => s.isNotEmpty)
+        .skip(rootParts.length)
+        .toList();
     Widget crumb(String label, String path, bool last) => TextButton(
       style: TextButton.styleFrom(
         foregroundColor: p.textMuted,
@@ -619,12 +696,12 @@ class _Breadcrumbs extends StatelessWidget {
     return Wrap(
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
-        crumb('根目录', '/', parts.isEmpty),
+        crumb(rootParts.lastOrNull ?? '根目录', root, parts.isEmpty),
         for (var i = 0; i < parts.length; i++) ...[
           Icon(CupertinoIcons.chevron_right, size: 11, color: p.textFaint),
           crumb(
             parts[i],
-            '/${parts.take(i + 1).join('/')}',
+            '${root == '/' ? '' : root}/${parts.take(i + 1).join('/')}',
             i == parts.length - 1,
           ),
         ],

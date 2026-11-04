@@ -71,6 +71,30 @@ String renderTemplate(String template, Map<String, Object?> vars) {
       .replaceAll(RegExp(r'^[._\- ]+|[._\- ]+$'), '');
 }
 
+/// Runs [rewrites] over [name] in order. A rule with a bad pattern is skipped
+/// and one that would empty the name is ignored: a typo must not lose names.
+String applyRewrites(String name, List<NameRewrite> rewrites) {
+  var out = name;
+  for (final r in rewrites) {
+    if (r.pattern.isEmpty) continue;
+    final RegExp re;
+    try {
+      re = RegExp(r.pattern);
+    } on FormatException {
+      continue;
+    }
+    final next = out.replaceAllMapped(
+      re,
+      (m) => r.replacement.replaceAllMapped(RegExp(r'\$(\d)'), (g) {
+        final i = int.parse(g[1]!);
+        return i <= m.groupCount ? m[i] ?? '' : g[0]!;
+      }),
+    );
+    if (next.trim().isNotEmpty) out = next;
+  }
+  return out;
+}
+
 class _Renderer {
   final String t;
   final Map<String, Object?> vars;

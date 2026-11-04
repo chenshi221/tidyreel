@@ -16,8 +16,8 @@ class ConnectionConfig {
   final String? libraryRoot;
   final List<String> favorites;
 
-  /// Folder the file browser opens at, e.g. "/PC". Only a starting point:
-  /// paths (and history) stay relative to the connection root.
+  /// 连接路径, e.g. "/PC": the file browser opens here and can't go above it.
+  /// Paths (and history) stay relative to the server root.
   final String startDir;
 
   const ConnectionConfig({
@@ -56,6 +56,10 @@ String normalizeDir(String path) {
   final segs = path.split('/').where((s) => s.trim().isNotEmpty);
   return segs.isEmpty ? '/' : '/${segs.join('/')}';
 }
+
+/// Whether [path] is [root] or below it.
+bool isWithinDir(String path, String root) =>
+    root == '/' || path == root || path.startsWith('$root/');
 
 /// Secrets kept in secure storage, handed to the backend at creation time.
 class Credentials {

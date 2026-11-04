@@ -50,25 +50,39 @@ class SourcesPage extends ConsumerWidget {
       );
     }
     Widget label(String text) => Padding(
-      padding: const EdgeInsets.only(top: 36, bottom: 10),
+      padding: const EdgeInsets.only(top: 26, bottom: 8),
       child: Text(text, style: theme.textTheme.labelSmall),
     );
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(48, 30, 32, 32),
       children: [
-        Text(
-          '来源',
-          key: const ValueKey('page-title'),
-          style: theme.textTheme.displaySmall,
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                '来源',
+                key: const ValueKey('page-title'),
+                style: theme.textTheme.displaySmall,
+              ),
+            ),
+            add,
+          ],
         ),
-        const SizedBox(height: 28),
+        const SizedBox(height: 8),
         label('连接'),
-        for (var i = 0; i < conns.length; i++)
-          FadeIn(
-            index: i,
-            child: _ConnectionRow(connection: conns[i]),
+        Panel(
+          padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
+          child: Rows(
+            children: [
+              for (var i = 0; i < conns.length; i++)
+                FadeIn(
+                  index: i,
+                  child: _ConnectionRow(connection: conns[i]),
+                ),
+            ],
           ),
+        ),
         label('收藏'),
         if (favorites.isEmpty)
           Text(
@@ -76,12 +90,20 @@ class SourcesPage extends ConsumerWidget {
             style: theme.textTheme.bodySmall,
           )
         else
-          for (final f in favorites)
-            _FavoriteRow(connection: f.conn, path: f.path),
+          Panel(
+            padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
+            child: Rows(
+              children: [
+                for (final f in favorites)
+                  _FavoriteRow(connection: f.conn, path: f.path),
+              ],
+            ),
+          ),
         if (done.isNotEmpty) ...[
           label('最近整理'),
           SizedBox(
-            height: 128,
+            // Poster 96 + gap 6 + two lines, with room for CJK line heights.
+            height: 142,
             child: ListView(
               scrollDirection: Axis.horizontal,
               children: [
@@ -94,17 +116,19 @@ class SourcesPage extends ConsumerWidget {
             ),
           ),
         ],
-        const SizedBox(height: 36),
-        Align(alignment: Alignment.centerLeft, child: add),
       ],
     );
   }
 }
 
-/// Opens [c] at [path], or at its 默认打开目录 when none is given.
+/// Opens [c] at [path], or at its 连接路径 when none is given or [path] (an old
+/// favorite, say) lies above it.
 void openBrowser(WidgetRef ref, ConnectionConfig c, [String? path]) {
   ref.read(openConnectionProvider.notifier).set(c);
-  ref.read(browserDirProvider.notifier).set(path ?? normalizeDir(c.startDir));
+  final root = normalizeDir(c.startDir);
+  ref
+      .read(browserDirProvider.notifier)
+      .set(path != null && isWithinDir(path, root) ? path : root);
   ref.read(browserSearchProvider.notifier).set('');
   ref.read(browserSelectionProvider.notifier).clear();
 }
@@ -173,6 +197,7 @@ class _ConnectionRow extends ConsumerWidget {
     final meta = [
       connectionTypeLabel(c.type),
       c.endpoint,
+      if (normalizeDir(c.startDir) != '/') '路径 ${normalizeDir(c.startDir)}',
       if (c.libraryRoot != null) '媒体库 ${c.libraryRoot}',
     ].join('  ·  ');
 

@@ -74,7 +74,7 @@ PreviewResult renderNaming(
   try {
     final tpl = compileTemplate(options, kind);
     return PreviewResult.ok(
-      '${renderTemplate(tpl, sample.vars)}.${sample.ext}',
+      '${applyRewrites(renderTemplate(tpl, sample.vars), options.rewrites)}.${sample.ext}',
     );
   } on UnimplementedError {
     return const PreviewResult.pending();
@@ -84,9 +84,15 @@ PreviewResult renderNaming(
 }
 
 /// Renders a folder-style template (no extension).
-PreviewResult renderFolder(String template, NamingSample sample) {
+PreviewResult renderFolder(
+  String template,
+  NamingSample sample, [
+  List<NameRewrite> rewrites = const [],
+]) {
   try {
-    return PreviewResult.ok(renderTemplate(template, sample.vars));
+    return PreviewResult.ok(
+      applyRewrites(renderTemplate(template, sample.vars), rewrites),
+    );
   } on UnimplementedError {
     return const PreviewResult.pending();
   } catch (e) {

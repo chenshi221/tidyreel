@@ -69,4 +69,22 @@ void main() {
       },
     );
   });
+
+  test('effectiveGroup follows the match, not the first guess', () {
+    final movie = MediaGroup(
+      id: const GroupId('m'),
+      kind: MediaKind.movie,
+      anchorTitle: '翠鸟',
+      rootDir: '/s',
+      files: files,
+      match: Demo.inception,
+    );
+    expect(identical(effectiveGroup(movie, null), movie), isTrue);
+    final show = effectiveGroup(
+      movie,
+      const GroupDecision(match: Demo.friends),
+    );
+    expect(show.kind, MediaKind.episode);
+    expect(show.files, files);
+  });
 }
