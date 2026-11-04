@@ -172,7 +172,12 @@ class _RepoMapViewState extends ConsumerState<RepoMapView> {
           ),
         Expanded(
           child: blocks.isEmpty
-              ? (busy || !s.isListed(dir)
+              ? (!busy && s.error != null
+                    ? const EmptyState(
+                        icon: CupertinoIcons.exclamationmark_triangle,
+                        title: '这里统计不了', // the summary says why
+                      )
+                    : busy || !s.isListed(dir)
                     ? const Center(child: Spinner(size: 22))
                     : const EmptyState(
                         icon: CupertinoIcons.folder,
@@ -201,6 +206,11 @@ class _RepoMapViewState extends ConsumerState<RepoMapView> {
     );
   }
 }
+
+String scanErrorText(Object e) =>
+    e is StorageException && e.code == StorageErrorCode.notFound
+    ? '统计出错：找不到这个文件夹，看看连接的媒体库路径对不对'
+    : '统计出错：$e';
 
 /// Big size number with file count, 未整理 total and count progress.
 class RepoMapSummary extends StatelessWidget {
@@ -237,7 +247,7 @@ class RepoMapSummary extends StatelessWidget {
             ],
           )
         : s.error != null
-        ? Text('统计出错：${s.error}', style: TextStyle(color: p.danger))
+        ? Text(scanErrorText(s.error!), style: TextStyle(color: p.danger))
         : s.isComplete(dir)
         ? Text(
             [

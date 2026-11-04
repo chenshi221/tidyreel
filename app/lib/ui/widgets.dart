@@ -10,16 +10,24 @@ class Panel extends StatelessWidget {
   final EdgeInsetsGeometry padding;
   final Color? color;
 
+  /// Draw a box. Only for scrolling lists that need a visible edge; page
+  /// sections group by space alone.
+  final bool framed;
+
   const Panel({
     super.key,
     required this.child,
     this.padding = EdgeInsets.zero,
     this.color,
+    this.framed = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
+    if (!framed && color == null) {
+      return Padding(padding: padding, child: child);
+    }
     return Container(
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(

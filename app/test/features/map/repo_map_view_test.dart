@@ -9,6 +9,7 @@ import 'package:tidyreel/features/map/organic_map.dart';
 import 'package:tidyreel/features/map/repo_map_view.dart';
 import 'package:tidyreel/features/sources/sources_page.dart';
 import 'package:tidyreel/features/sources/sources_providers.dart';
+import 'package:tidyreel/ui/widgets.dart';
 import 'package:tidyreel_core/testing.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
@@ -65,6 +66,28 @@ Offset _centerOf(WidgetTester tester, ProviderContainer c, String label) {
 }
 
 void main() {
+  testWidgets('a missing library root says so and stops spinning', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final tm = FakeTaskManager(step: Duration.zero);
+    addTearDown(tm.dispose);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          taskManagerProvider.overrideWithValue(tm),
+          demoBackendProvider.overrideWithValue(MemoryStorageBackend()),
+        ],
+        child: const MaterialApp(home: Scaffold(body: SourcesPage())),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('找不到这个文件夹'), findsOneWidget);
+    expect(find.byType(Spinner), findsNothing);
+  });
+
   testWidgets('地图 counts the folder and clicking a block opens it', (
     tester,
   ) async {

@@ -712,7 +712,10 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
                 const SizedBox(height: 8),
                 SizedBox(
                   height: 300,
-                  child: Panel(child: _episodeList(tmdbId, season)),
+                  child: Panel(
+                    framed: true,
+                    child: _episodeList(tmdbId, season),
+                  ),
                 ),
               ],
               if (fields) ...[
