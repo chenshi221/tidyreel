@@ -83,14 +83,25 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                 title: _finished ? '还没有已完成的任务' : '没有进行中的任务',
                 message: _finished ? null : '去「来源」选择文件夹，提交一个整理任务',
               )
-            : ListView.separated(
+            : ListView(
                 padding: const EdgeInsets.fromLTRB(48, 14, 40, 28),
-                itemCount: shown.length,
-                separatorBuilder: (_, _) => const SizedBox(height: 10),
-                itemBuilder: (_, i) => FadeIn(
-                  index: i,
-                  child: TaskCard(task: shown[i]),
-                ),
+                children: [
+                  if (!_finished) ...[
+                    BigNumber(
+                      '${active.where((t) => t.stage == TaskStage.awaitingReview).length}',
+                      captions: const [Text('个待确认')],
+                    ),
+                    const SizedBox(height: 28),
+                  ],
+                  for (final (i, t) in shown.indexed)
+                    FadeIn(
+                      index: i,
+                      child: Padding(
+                        padding: const EdgeInsets.only(bottom: 26),
+                        child: TaskCard(task: t),
+                      ),
+                    ),
+                ],
               ),
       ),
     );
@@ -98,6 +109,18 @@ class _TasksPageState extends ConsumerState<TasksPage> {
 }
 
 const _steps = ['导入', '识别', '待确认', '文件', '文件夹'];
+
+/// One line of progress while a stage runs.
+String _runningLabel(TaskStage s, double? progress) {
+  final what = switch (s) {
+    TaskStage.importing => '正在导入',
+    TaskStage.recognizing => '正在识别',
+    TaskStage.renamingFiles => '正在改名文件',
+    TaskStage.renamingFolders => '正在改名文件夹',
+    _ => stageLabel(s),
+  };
+  return progress == null ? what : '$what ${(progress * 100).round()}%';
+}
 
 /// Index of the step currently running; 5 = all complete; -1 = none (stopped).
 int _currentStep(TaskStage s) => switch (s) {
@@ -154,16 +177,12 @@ class TaskCard extends ConsumerWidget {
     final where = t.paths.length == 1
         ? t.paths.single
         : '${t.paths.length} 个文件夹';
-    final (statusColor, statusIcon) = switch (t.stage) {
-      TaskStage.awaitingReview => (p.accent, CupertinoIcons.eye),
-      TaskStage.done => (p.success, CupertinoIcons.checkmark_circle_fill),
-      TaskStage.partiallyFailed => (
-        p.warning,
-        CupertinoIcons.exclamationmark_triangle_fill,
-      ),
-      TaskStage.cancelled ||
-      TaskStage.undone => (p.textFaint, CupertinoIcons.arrow_uturn_left_circle),
-      _ => (p.textMuted, CupertinoIcons.hourglass),
+    final statusColor = switch (t.stage) {
+      TaskStage.awaitingReview => p.accent,
+      TaskStage.done => p.success,
+      TaskStage.partiallyFailed => p.warning,
+      TaskStage.cancelled || TaskStage.undone => p.textFaint,
+      _ => p.textMuted,
     };
 
     Future<void> runConfident() async {
@@ -237,212 +256,150 @@ class TaskCard extends ConsumerWidget {
         : '/tasks/${t.id.value}';
 
     final running = t.stage.isActive && t.stage != TaskStage.awaitingReview;
-    final body = Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _PosterStack(works: works, stage: t.stage),
-        const SizedBox(width: 16),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Flexible(
-                    child: Text(
-                      title,
-                      style: theme.textTheme.titleMedium,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  StatusPill(
-                    label: stageLabel(t.stage),
-                    color: statusColor,
-                    busy: running,
-                    icon: running ? null : statusIcon,
-                  ),
-                  const Spacer(),
-                  MoreButton(items: menu),
-                ],
-              ),
-              const SizedBox(height: 3),
-              Row(
-                children: [
-                  Tooltip(
-                    message: '点击复制任务 ID',
-                    child: Hoverable(
-                      onTap: () {
-                        Clipboard.setData(ClipboardData(text: t.id.value));
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('已复制任务 ID')),
-                        );
-                      },
-                      builder: (context, hover) => Text(
-                        t.id.value,
-                        style: TextStyle(
-                          fontFamily: monoFamily,
-                          fontFamilyFallback: monoFallback,
-                          fontSize: 11.5,
-                          color: hover ? p.text : p.textMuted,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Tag(t.mode == OrganizeMode.inPlace ? '原地整理' : '移动到媒体库'),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Tooltip(
-                      message: t.paths.join('\n'),
-                      child: Text(
-                        '${connName ?? t.connection.value} · $where',
-                        style: theme.textTheme.bodySmall,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              if (works.length > 1) ...[
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: [for (final w in works) _WorkChip(work: w)],
-                ),
-              ],
-              const SizedBox(height: 12),
-              _Stepper(stage: t.stage, progress: t.progress),
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (t.message.isNotEmpty)
-                          Text(
-                            t.message,
-                            style: TextStyle(fontSize: 12.5, color: p.text),
-                          ),
-                        const SizedBox(height: 4),
-                        Wrap(
-                          spacing: 14,
-                          children: [
-                            _Count(
-                              CupertinoIcons.tray_arrow_down,
-                              '导入',
-                              t.importedCount,
-                            ),
-                            _Count(CupertinoIcons.film, '视频', t.videoCount),
-                            _Count(CupertinoIcons.folder, '文件夹', t.folderCount),
-                            _Count(
-                              CupertinoIcons.captions_bubble,
-                              '字幕',
-                              t.subtitleCount,
-                            ),
-                            if (unassigned > 0)
-                              _Count(CupertinoIcons.tray, '未归类', unassigned),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                  if (t.stage.isActive)
-                    TextButton(
-                      onPressed: () => tm.cancel(t.id),
-                      child: const Text('取消'),
-                    ),
-                  if (t.stage == TaskStage.awaitingReview) ...[
-                    const SizedBox(width: 4),
-                    OutlinedButton(
-                      onPressed: runConfident,
-                      child: const Text('立即执行'),
-                    ),
-                    const SizedBox(width: 8),
-                    FilledButton(
-                      onPressed: () =>
-                          context.go('/tasks/${t.id.value}/review'),
-                      child: const Text('去确认'),
-                    ),
-                  ],
-                  if (t.stage == TaskStage.done ||
-                      t.stage == TaskStage.partiallyFailed)
-                    OutlinedButton.icon(
-                      onPressed: undo,
-                      icon: const Icon(
-                        CupertinoIcons.arrow_uturn_left,
-                        size: 13,
-                      ),
-                      label: const Text('撤销'),
-                    ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-
-    final backdrop = works.map((w) => w.backdropPath).nonNulls.firstOrNull;
-    // Cards that want attention get a coloured edge.
-    final edge = switch (t.stage) {
-      TaskStage.awaitingReview => p.text.withValues(alpha: 0.45),
-      TaskStage.partiallyFailed => p.warning.withValues(alpha: 0.6),
-      _ => null,
-    };
+    final counts = [
+      '导入 ${t.importedCount}',
+      '视频 ${t.videoCount}',
+      '文件夹 ${t.folderCount}',
+      '字幕 ${t.subtitleCount}',
+      if (unassigned > 0) '未归类 $unassigned',
+    ].join(' · ');
 
     return ContextMenuArea(
       items: menu,
       child: Hoverable(
         key: ValueKey('task ${t.id.value}'),
         onTap: () => context.go(target),
-        builder: (context, hover) => AnimatedContainer(
-          duration: const Duration(milliseconds: 160),
-          curve: Curves.easeOutCubic,
-          transform: Matrix4.translationValues(0, hover ? -2 : 0, 0),
-          clipBehavior: Clip.antiAlias,
-          decoration: BoxDecoration(
-            color: p.panel,
-            borderRadius: BorderRadius.circular(Radii.xl),
-            border: Border.all(
-              color: edge?.withValues(alpha: 0.55) ?? p.line,
-              width: edge == null ? hairline : 1,
-            ),
-            boxShadow: hover ? floatShadow(0.6) : panelShadow(),
-          ),
-          child: Stack(
-            children: [
-              if (backdrop != null) ...[
-                Positioned.fill(
-                  child: Image.network(
-                    tmdbImage(backdrop, 'w780'),
-                    fit: BoxFit.cover,
-                    alignment: Alignment.centerRight,
-                    errorBuilder: (_, _, _) => const SizedBox.shrink(),
+        builder: (context, hover) => Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Flexible(
+                  child: Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: p.text,
+                      decoration: hover ? TextDecoration.underline : null,
+                      decorationColor: p.textFaint,
+                    ),
                   ),
                 ),
-                Positioned.fill(
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        stops: const [0, 0.55, 1],
-                        colors: [
-                          p.panel,
-                          p.panel.withValues(alpha: 0.95),
-                          p.panel.withValues(alpha: 0.72),
-                        ],
+                const Spacer(),
+                MoreButton(items: menu),
+              ],
+            ),
+            const SizedBox(height: 2),
+            Row(
+              children: [
+                Flexible(
+                  child: Tooltip(
+                    message: t.paths.join('\n'),
+                    child: Text(
+                      [
+                        connName ?? t.connection.value,
+                        where,
+                        t.mode == OrganizeMode.inPlace ? '原地整理' : '移动到媒体库',
+                      ].join(' · '),
+                      style: theme.textTheme.bodySmall,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Tooltip(
+                  message: '点击复制任务 ID',
+                  child: Hoverable(
+                    onTap: () {
+                      Clipboard.setData(ClipboardData(text: t.id.value));
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(const SnackBar(content: Text('已复制任务 ID')));
+                    },
+                    builder: (context, hover) => Text(
+                      t.id.value,
+                      style: TextStyle(
+                        fontFamily: monoFamily,
+                        fontFamilyFallback: monoFallback,
+                        fontSize: 11.5,
+                        color: hover ? p.text : p.textMuted,
                       ),
                     ),
                   ),
                 ),
               ],
-              Padding(padding: const EdgeInsets.all(16), child: body),
+            ),
+            if (works.length > 1) ...[
+              const SizedBox(height: 2),
+              Text(
+                works.map((w) => w.title).join('、'),
+                style: theme.textTheme.bodySmall,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
             ],
-          ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                if (running) ...[
+                  const Spinner(size: 12),
+                  const SizedBox(width: 6),
+                ],
+                Text(
+                  running
+                      ? _runningLabel(t.stage, t.progress)
+                      : stageLabel(t.stage),
+                  style: TextStyle(fontSize: 12.5, color: statusColor),
+                ),
+                if (t.message.isNotEmpty) ...[
+                  const SizedBox(width: 10),
+                  Flexible(
+                    child: Text(
+                      t.message,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12.5, color: p.textMuted),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: 2),
+            Text(counts, style: TextStyle(fontSize: 11.5, color: p.textMuted)),
+            if (running ||
+                t.stage == TaskStage.awaitingReview ||
+                t.stage == TaskStage.done ||
+                t.stage == TaskStage.partiallyFailed) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  if (t.stage == TaskStage.awaitingReview) ...[
+                    OutlinedButton(
+                      onPressed: () =>
+                          context.go('/tasks/${t.id.value}/review'),
+                      child: const Text('去确认'),
+                    ),
+                    const SizedBox(width: 4),
+                    TextButton(
+                      onPressed: runConfident,
+                      child: const Text('立即执行'),
+                    ),
+                  ],
+                  if (running)
+                    TextButton(
+                      onPressed: () => tm.cancel(t.id),
+                      child: const Text('取消'),
+                    ),
+                  if (t.stage == TaskStage.done ||
+                      t.stage == TaskStage.partiallyFailed)
+                    TextButton(onPressed: undo, child: const Text('撤销')),
+                ],
+              ),
+            ],
+          ],
         ),
       ),
     );
@@ -506,201 +463,5 @@ Future<void> confirmUndo(BuildContext context, WidgetRef ref, TaskId id) async {
         ..hideCurrentSnackBar()
         ..showSnackBar(SnackBar(content: Text(e.message)));
     }
-  }
-}
-
-/// Up to three posters fanned out; an icon tile before recognition.
-class _PosterStack extends StatelessWidget {
-  final List<Candidate> works;
-  final TaskStage stage;
-
-  const _PosterStack({required this.works, required this.stage});
-
-  @override
-  Widget build(BuildContext context) {
-    final p = Palette.of(context);
-    if (works.isEmpty) {
-      return Container(
-        width: 56,
-        height: 84,
-        decoration: BoxDecoration(
-          color: p.sidebar,
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: p.line, width: hairline),
-        ),
-        child: Center(
-          child: stage.isActive && stage != TaskStage.awaitingReview
-              ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 1.6),
-                )
-              : Icon(CupertinoIcons.folder, size: 20, color: p.textFaint),
-        ),
-      );
-    }
-    final shown = works.take(3).toList();
-    return SizedBox(
-      width: 56 + 10.0 * (shown.length - 1),
-      height: 84,
-      child: Stack(
-        children: [
-          for (var i = shown.length - 1; i >= 0; i--)
-            Positioned(
-              left: 10.0 * i,
-              top: 3.0 * i,
-              child: Opacity(
-                opacity: i == 0 ? 1 : 0.85,
-                child: Poster(
-                  posterPath: shown[i].posterPath,
-                  icon: shown[i].kind == MediaKind.movie
-                      ? CupertinoIcons.film
-                      : CupertinoIcons.tv,
-                  width: 56 - 4.0 * i,
-                  height: 84 - 6.0 * i,
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-class _Count extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final int value;
-
-  const _Count(this.icon, this.label, this.value);
-
-  @override
-  Widget build(BuildContext context) {
-    final p = Palette.of(context);
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 12, color: p.textFaint),
-        const SizedBox(width: 4),
-        Text(
-          '$label $value',
-          style: TextStyle(fontSize: 11.5, color: p.textMuted),
-        ),
-      ],
-    );
-  }
-}
-
-/// 导入 → 识别 → 待确认 → 文件 → 文件夹 as a segmented track.
-class _Stepper extends StatelessWidget {
-  final TaskStage stage;
-  final double? progress;
-
-  const _Stepper({required this.stage, this.progress});
-
-  @override
-  Widget build(BuildContext context) {
-    final p = Palette.of(context);
-    final cur = _currentStep(stage);
-    final dim = cur < 0;
-    return Row(
-      children: [
-        for (var i = 0; i < _steps.length; i++) ...[
-          if (i > 0) const SizedBox(width: 4),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(2),
-                  child: SizedBox(
-                    height: 3,
-                    width: double.infinity,
-                    child: i == cur && i != 2 && progress != null
-                        ? GradientProgress(
-                            value: progress!,
-                            color: p.text,
-                            height: 3,
-                          )
-                        : i == cur && i != 2
-                        ? LinearProgressIndicator(
-                            minHeight: 3,
-                            color: p.text,
-                            backgroundColor: p.selected,
-                          )
-                        : ColoredBox(
-                            color: dim
-                                ? p.selected
-                                : cur == _steps.length
-                                ? p.success.withValues(alpha: 0.7)
-                                : i < cur
-                                ? p.text.withValues(alpha: 0.5)
-                                : i == cur
-                                ? p.accent
-                                : p.selected,
-                          ),
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  _steps[i],
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: i == cur ? FontWeight.w600 : FontWeight.w400,
-                    color: i == cur
-                        ? p.text
-                        : (i < cur ? p.textMuted : p.textFaint),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ],
-    );
-  }
-}
-
-/// Small poster + title, one per recognized work on multi-work tasks.
-class _WorkChip extends StatelessWidget {
-  final Candidate work;
-
-  const _WorkChip({required this.work});
-
-  @override
-  Widget build(BuildContext context) {
-    final p = Palette.of(context);
-    return Container(
-      constraints: const BoxConstraints(maxWidth: 280),
-      padding: const EdgeInsets.fromLTRB(3, 3, 9, 3),
-      decoration: BoxDecoration(
-        color: p.sidebar,
-        borderRadius: BorderRadius.circular(Radii.md),
-        border: Border.all(color: p.line, width: hairline),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Poster(
-            posterPath: work.posterPath,
-            width: 16,
-            height: 24,
-            radius: 3,
-            icon: work.kind == MediaKind.movie
-                ? CupertinoIcons.film
-                : CupertinoIcons.tv,
-          ),
-          const SizedBox(width: 7),
-          Flexible(
-            child: Text(
-              [work.title, if (work.year != null) '${work.year}'].join(' · '),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: 12, color: p.text),
-            ),
-          ),
-        ],
-      ),
-    );
   }
 }

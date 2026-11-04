@@ -14,7 +14,7 @@ void main() {
     expect(find.text(id.value), findsOneWidget);
     expect(find.text('去确认'), findsOneWidget);
     expect(find.text('立即执行'), findsOneWidget);
-    expect(find.text('取消'), findsOneWidget);
+    expect(find.text('个待确认'), findsOneWidget);
     expect(find.text('识别完成，请确认结果后继续执行'), findsOneWidget);
 
     await tester.tap(find.text('去确认'));
@@ -22,9 +22,7 @@ void main() {
     expect(find.text('ROUTE review ${id.value}'), findsOneWidget);
   });
 
-  testWidgets('clicking a finished task card opens its details', (
-    tester,
-  ) async {
+  testWidgets('clicking a finished task opens its details', (tester) async {
     final (tm, _) = await pumpPage(tester, const TasksPage());
     final id = await submitAndWait(tester, tm);
     await tester.tap(find.text('立即执行'));
@@ -35,7 +33,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tapAt(
       tester.getTopLeft(find.byKey(ValueKey('task ${id.value}'))) +
-          const Offset(40, 40), // the poster
+          const Offset(40, 30), // the path line
     );
     await tester.pumpAndSettle();
     expect(find.text('ROUTE detail ${id.value}'), findsOneWidget);
