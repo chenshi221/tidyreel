@@ -16,6 +16,23 @@ class _Wrong extends FakeMetadataProvider {
   }) async => [Demo.friends];
 }
 
+/// TMDB knows the show only by an English title plus an alias.
+class _Aliased extends FakeMetadataProvider {
+  @override
+  Future<List<Candidate>> search(
+    String query, {
+    MediaKind? kind,
+    int? year,
+  }) async => [
+    Candidate(
+      tmdbId: Demo.friends.tmdbId,
+      kind: MediaKind.episode,
+      title: 'Slow Horses',
+      aliases: const ['流人'],
+    ),
+  ];
+}
+
 class _Alt implements AltTitleSource {
   final asked = <String>[];
   @override
@@ -44,6 +61,12 @@ void main() {
     '/下载/Inception.2010.1080p.mkv',
     '/下载/Unknown Thing 2001.mkv',
   ];
+
+  test('a folder named after an alias matches the show', () async {
+    final r = await recognizer(_Aliased())
+        .recognize(conn, ['/下载'], entriesOf(['/下载/流人/流人 S06E01.mkv']));
+    expect(r.groups.single.match?.title, 'Slow Horses');
+  });
 
   test('groups by title folder and by title for loose files', () async {
     final r = await recognizer().recognize(conn, ['/下载'], entriesOf(files));
