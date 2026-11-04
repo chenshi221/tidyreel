@@ -73,7 +73,7 @@ void main() {
     await tester.tap(find.text('地图'));
     await tester.pumpAndSettle();
     expect(find.byType(RepoMapView), findsOneWidget);
-    expect(find.text('统计完成'), findsOneWidget);
+    expect(find.textContaining('个文件 · 未整理'), findsOneWidget);
     expect(find.text('TB'), findsOneWidget);
     // List-only controls step aside.
     expect(find.text('只看未整理的'), findsNothing);

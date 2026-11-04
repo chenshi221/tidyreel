@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
@@ -117,7 +119,8 @@ class SizeScanner extends ChangeNotifier {
     _stop = false;
     _error = null;
     _dirsListed = 0;
-    _notify();
+    // Callers start a count from initState / didUpdateWidget, mid-build.
+    scheduleMicrotask(_notify);
     try {
       await walkDirs(
         [root],
