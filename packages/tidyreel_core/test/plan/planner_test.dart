@@ -24,6 +24,21 @@ Future<RenamePlan> plan(
 RenameOp opFor(RenamePlan p, String src) =>
     p.ops.firstWhere((o) => o.src == src);
 
+/// TMDB without a Chinese name: show() falls back to the CN alias.
+class _AliasShow extends FakeMetadataProvider {
+  @override
+  Future<ShowDetail> show(int tmdbId) async => const ShowDetail(
+    info: Candidate(
+      tmdbId: 95480,
+      kind: MediaKind.episode,
+      title: '流人',
+      englishTitle: 'Slow Horses',
+      year: 2022,
+    ),
+    seasons: [SeasonInfo(number: 6, episodeCount: 6)],
+  );
+}
+
 void main() {
   group('end to end (recognizer + planner + memory backend)', () {
     test('异兽魔都 two seasons with subtitles, in place', () async {
@@ -139,11 +154,64 @@ void main() {
         );
       });
 
-      test('a generic container keeps its name', () async {
+      test('any imported folder holding one work is renamed', () async {
         final files = await run('/dl/下载', [
           '/dl/下载/$inner/[Sub] Dorohedoro - 01 [1080p].mkv',
         ]);
-        expect(files.single, startsWith('/dl/下载/异兽魔都 (2020)/'));
+        expect(files.single, '$out/$name.S01E01.mkv');
+      });
+
+      test('with several works each subfolder is renamed instead', () async {
+        final files = await run('/dl/下载', [
+          '/dl/下载/$inner/[Sub] Dorohedoro - 01 [1080p].mkv',
+          '/dl/下载/Inception.2010.1080p/Inception.2010.1080p.mkv',
+        ]);
+        expect(files, contains(startsWith('/dl/下载/异兽魔都 (2020)/')));
+        expect(files, contains(startsWith('/dl/下载/盗梦空间 (2010)/')));
+      });
+
+      test('a top-level folder may be a mount and is kept', () async {
+        final files = await run('/下载', [
+          '/下载/$inner/[Sub] Dorohedoro - 01 [1080p].mkv',
+        ]);
+        expect(files.single, startsWith('/下载/'));
+      });
+
+      test('a hand-matched "4k" folder takes the Chinese alias', () async {
+        const paths = ['/PC/4k/01.mkv', '/PC/4k/02.mkv'];
+        final meta = _AliasShow();
+        final scan = await AnchorRecognizer(
+          const RuleBasedParser(),
+          meta,
+        ).recognize(conn, ['/PC/4k'], entriesOf(paths));
+        final backend = MemoryStorageBackend({for (final p in paths) p: 1});
+        final g = scan.groups.single;
+        final p = await planner(meta).build(
+          scan,
+          {
+            g.id: const GroupDecision(
+              match: Candidate(
+                tmdbId: 95480,
+                kind: MediaKind.episode,
+                title: 'Slow Horses',
+                englishTitle: 'Slow Horses',
+                year: 2022,
+              ),
+              selected: true,
+              overrides: {
+                '/PC/4k/01.mkv': FileOverride(season: 6, episode: 1),
+                '/PC/4k/02.mkv': FileOverride(season: 6, episode: 2),
+              },
+            ),
+          },
+          const PlanOptions(),
+          existing: {for (final f in backend.files) f},
+        );
+        await applyPlan(p, backend);
+        expect(
+          backend.files,
+          contains('/PC/流人 (2022)/Season 06/流人.Slow Horses.2022.S06E01.mkv'),
+        );
       });
     });
 

@@ -89,6 +89,29 @@ void main() {
     expect(r.single.aliases, isEmpty);
   });
 
+  test(
+    'show() uses the first CN alias when TMDB has no Chinese name',
+    () async {
+      final a = _Adapter({
+        '/tv/95480|1': {'id': 95480, 'name': 'Slow Horses', 'seasons': []},
+        '/tv/95480/alternative_titles|1': {
+          'results': [
+            {'iso_3166_1': 'RU', 'title': 'Хромые'},
+            {'iso_3166_1': 'CN', 'title': '流人'},
+            {'iso_3166_1': 'CN', 'title': '驽马'},
+          ],
+        },
+      });
+      final p = TmdbProvider(
+        const TmdbConfig(apiKey: 'k'),
+        dio: Dio()..httpClientAdapter = a,
+      );
+      final s = await p.show(95480);
+      expect(s.info.title, '流人');
+      expect(s.info.englishTitle, 'Slow Horses');
+    },
+  );
+
   test('sharesToken: per character for CJK, per word for Latin', () {
     expect(sharesToken('流人', '潮流合伙人'), isTrue);
     expect(sharesToken('流人', 'Slow Horses'), isFalse);

@@ -5,8 +5,6 @@ import 'package:go_router/go_router.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
 import '../../data/providers.dart';
-import '../map/map_providers.dart';
-import '../map/repo_map_view.dart';
 import '../tasks/tasks_page.dart' show taskWorksProvider;
 
 import '../../ui/tokens.dart';
@@ -39,7 +37,6 @@ class SourcesPage extends ConsumerWidget {
       icon: const Icon(CupertinoIcons.plus, size: 13),
       label: const Text('添加连接'),
     );
-    final p = Palette.of(context);
     final theme = Theme.of(context);
     if (conns.isEmpty) {
       return PageScaffold(
@@ -52,20 +49,12 @@ class SourcesPage extends ConsumerWidget {
         ),
       );
     }
-    final focusId = ref.watch(sourcesMapConnectionProvider);
-    final focus = conns.firstWhere(
-      (c) => c.id == focusId,
-      orElse: () => conns.first,
-    );
-    final mapDir = focus.libraryRoot ?? normalizeDir(focus.startDir);
-    final scanner = ref.watch(sizeScannerProvider(focus.id));
-
     Widget label(String text) => Padding(
       padding: const EdgeInsets.only(top: 36, bottom: 10),
       child: Text(text, style: theme.textTheme.labelSmall),
     );
 
-    final left = ListView(
+    return ListView(
       padding: const EdgeInsets.fromLTRB(48, 30, 32, 32),
       children: [
         Text(
@@ -74,25 +63,11 @@ class SourcesPage extends ConsumerWidget {
           style: theme.textTheme.displaySmall,
         ),
         const SizedBox(height: 28),
-        ListenableBuilder(
-          listenable: scanner,
-          builder: (_, _) => RepoMapSummary(
-            scanner: scanner,
-            dir: mapDir,
-            title: '${focus.name} · $mapDir',
-          ),
-        ),
         label('连接'),
         for (var i = 0; i < conns.length; i++)
           FadeIn(
             index: i,
-            child: _ConnectionRow(
-              connection: conns[i],
-              focused: conns[i].id == focus.id,
-              onFocus: () => ref
-                  .read(sourcesMapConnectionProvider.notifier)
-                  .set(conns[i].id),
-            ),
+            child: _ConnectionRow(connection: conns[i]),
           ),
         label('收藏'),
         if (favorites.isEmpty)
@@ -102,52 +77,7 @@ class SourcesPage extends ConsumerWidget {
           )
         else
           for (final f in favorites)
-            ContextMenuArea(
-              items: () => [
-                MenuAction(
-                  '打开',
-                  () => openBrowser(ref, f.conn, f.path),
-                  icon: CupertinoIcons.folder,
-                ),
-                MenuAction(
-                  '取消收藏',
-                  () => ref
-                      .read(connectionsEditorProvider.notifier)
-                      .toggleFavorite(f.conn.id, f.path),
-                  icon: CupertinoIcons.star_slash,
-                  destructive: true,
-                ),
-              ],
-              child: Hoverable(
-                key: ValueKey('fav ${f.conn.id.value} ${f.path}'),
-                onTap: () => openBrowser(ref, f.conn, f.path),
-                builder: (_, hover) => Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 5),
-                  child: Text.rich(
-                    TextSpan(
-                      children: [
-                        TextSpan(
-                          text: f.path,
-                          style: TextStyle(
-                            color: p.text,
-                            decoration: hover
-                                ? TextDecoration.underline
-                                : TextDecoration.none,
-                            decorationColor: p.textFaint,
-                          ),
-                        ),
-                        TextSpan(
-                          text: '  ${f.conn.name}',
-                          style: TextStyle(color: p.textFaint, fontSize: 12),
-                        ),
-                      ],
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ),
-            ),
+            _FavoriteRow(connection: f.conn, path: f.path),
         if (done.isNotEmpty) ...[
           label('最近整理'),
           SizedBox(
@@ -167,71 +97,6 @@ class SourcesPage extends ConsumerWidget {
         const SizedBox(height: 36),
         Align(alignment: Alignment.centerLeft, child: add),
       ],
-    );
-
-    void openAt(String path, {required bool map}) {
-      openBrowser(ref, focus, path);
-      ref.read(browserMapModeProvider.notifier).set(map);
-    }
-
-    return LayoutBuilder(
-      builder: (context, box) {
-        // Narrow windows: the list alone; the map lives in the browser.
-        if (box.maxWidth < 860) return left;
-        final leftWidth = (box.maxWidth * 0.36).clamp(360.0, 460.0);
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            SizedBox(width: leftWidth, child: left),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(0, 24, 24, 20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Expanded(
-                      child: RepoMapView(
-                        key: ValueKey('sources-map ${focus.id.value}'),
-                        connection: focus.id,
-                        dir: mapDir,
-                        showHeader: false,
-                        onOpen: (path) => openAt(path, map: true),
-                        onShowList: () => openAt(mapDir, map: false),
-                        menuFor: (e) => [
-                          if (e.isDir)
-                            MenuAction(
-                              '在地图中打开',
-                              () => openAt(e.path, map: true),
-                              icon: CupertinoIcons.circle_grid_hex,
-                            ),
-                          MenuAction(
-                            '在列表中显示',
-                            () => openAt(
-                              e.isDir
-                                  ? e.path
-                                  : e.path.substring(
-                                      0,
-                                      e.path.lastIndexOf('/'),
-                                    ),
-                              map: false,
-                            ),
-                            icon: CupertinoIcons.list_bullet,
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    const Align(
-                      alignment: Alignment.centerRight,
-                      child: MapLegend(),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        );
-      },
     );
   }
 }
@@ -289,14 +154,8 @@ Future<void> _delete(
 /// The ring on the left picks which connection the map shows.
 class _ConnectionRow extends ConsumerWidget {
   final ConnectionConfig connection;
-  final bool focused;
-  final VoidCallback onFocus;
 
-  const _ConnectionRow({
-    required this.connection,
-    required this.focused,
-    required this.onFocus,
-  });
+  const _ConnectionRow({required this.connection});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -357,28 +216,6 @@ class _ConnectionRow extends ConsumerWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Tooltip(
-                message: focused ? '右侧地图正在显示' : '在右侧地图中查看',
-                child: GestureDetector(
-                  onTap: onFocus,
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(0, 6, 14, 6),
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 160),
-                      width: 9,
-                      height: 9,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: focused ? p.text : Colors.transparent,
-                        border: Border.all(
-                          color: focused ? p.text : p.textFaint,
-                          width: 1,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -389,7 +226,7 @@ class _ConnectionRow extends ConsumerWidget {
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontSize: 16,
-                        color: focused || hover ? p.text : p.textMuted,
+                        color: p.text,
                         decoration: hover
                             ? TextDecoration.underline
                             : TextDecoration.none,
@@ -463,6 +300,81 @@ class _ConnectionRow extends ConsumerWidget {
 }
 
 /// Posters of what one finished task organized; click opens its details.
+/// A favorite folder: same two lines and … menu as a connection.
+class _FavoriteRow extends ConsumerWidget {
+  final ConnectionConfig connection;
+  final String path;
+
+  const _FavoriteRow({required this.connection, required this.path});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final p = Palette.of(context);
+    final name = path.split('/').where((s) => s.isNotEmpty).lastOrNull ?? '根目录';
+    List<MenuAction?> menu() => [
+      MenuAction(
+        '打开',
+        () => openBrowser(ref, connection, path),
+        icon: CupertinoIcons.folder,
+      ),
+      MenuAction(
+        '取消收藏',
+        () => ref
+            .read(connectionsEditorProvider.notifier)
+            .toggleFavorite(connection.id, path),
+        icon: CupertinoIcons.star_slash,
+        destructive: true,
+      ),
+    ];
+    return ContextMenuArea(
+      items: menu,
+      child: Hoverable(
+        key: ValueKey('fav ${connection.id.value} $path'),
+        onTap: () => openBrowser(ref, connection, path),
+        builder: (context, hover) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: 9),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: p.text,
+                        decoration: hover
+                            ? TextDecoration.underline
+                            : TextDecoration.none,
+                        decorationColor: p.textFaint,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      '${connection.name}  ·  $path',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12, color: p.textFaint),
+                    ),
+                  ],
+                ),
+              ),
+              AnimatedOpacity(
+                duration: const Duration(milliseconds: 120),
+                opacity: hover ? 1 : 0.35,
+                child: MoreButton(items: menu),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _RecentTask extends ConsumerWidget {
   final TaskSummary task;
 

@@ -113,8 +113,35 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
     if (!v.any((g) => g.id == _selected)) _selected = v.firstOrNull?.id;
   }
 
-  MediaGroup? get _selectedGroup =>
-      _review?.scan.groups.where((g) => g.id == _selected).firstOrNull;
+  MediaGroup? get _selectedGroup => _withMatchedShow(
+    _review?.scan.groups.where((g) => g.id == _selected).firstOrNull,
+  );
+
+  /// group.show only holds the recognizer's match; fill in a hand-picked one.
+  MediaGroup? _withMatchedShow(MediaGroup? g) {
+    final id = _fetchShowFor(g);
+    if (g == null || id == null) return g;
+    final show = ref.read(showDetailProvider(id)).value;
+    if (show == null) return g;
+    return MediaGroup(
+      id: g.id,
+      kind: g.kind,
+      anchorTitle: g.anchorTitle,
+      anchorYear: g.anchorYear,
+      rootDir: g.rootDir,
+      files: g.files,
+      match: g.match,
+      matchScore: g.matchScore,
+      show: show,
+    );
+  }
+
+  /// TMDB id whose show [g] is missing, if any.
+  int? _fetchShowFor(MediaGroup? g) {
+    if (g == null || g.kind != MediaKind.episode) return null;
+    final id = effectiveMatch(g, _decisionOf(g.id))?.tmdbId;
+    return id == null || g.show?.info.tmdbId == id ? null : id;
+  }
 
   // ---- mutations
 
@@ -341,6 +368,10 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
 
   @override
   Widget build(BuildContext context) {
+    final missingShow = _fetchShowFor(
+      _review?.scan.groups.where((g) => g.id == _selected).firstOrNull,
+    );
+    if (missingShow != null) ref.watch(showDetailProvider(missingShow));
     final r = _review;
     ref.listen(
       tasksProvider.select(

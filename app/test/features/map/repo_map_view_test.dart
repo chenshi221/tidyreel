@@ -17,7 +17,10 @@ import 'fake_library.dart';
 
 const _id = ConnectionId('demo-alist');
 
-Future<ProviderContainer> _pump(WidgetTester tester) async {
+Future<ProviderContainer> _pump(
+  WidgetTester tester, {
+  StorageBackend? backend,
+}) async {
   tester.view.physicalSize = const Size(1280, 800);
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.reset);
@@ -28,7 +31,7 @@ Future<ProviderContainer> _pump(WidgetTester tester) async {
       overrides: [
         taskManagerProvider.overrideWithValue(tm),
         demoBackendProvider.overrideWithValue(
-          MemoryStorageBackend(fakeLibrary),
+          backend ?? MemoryStorageBackend(fakeLibrary),
         ),
         mapOrganizedOfProvider.overrideWith(
           (ref, id) =>
@@ -66,26 +69,28 @@ Offset _centerOf(WidgetTester tester, ProviderContainer c, String label) {
 }
 
 void main() {
-  testWidgets('a missing library root says so and stops spinning', (
+  testWidgets('a missing folder says so and stops spinning', (tester) async {
+    await _pump(tester, backend: MemoryStorageBackend());
+    await tester.tap(find.text('地图'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('找不到这个文件夹'), findsOneWidget);
+    expect(find.byType(Spinner), findsNothing);
+  });
+
+  testWidgets('the sources page shows no map and counts nothing', (
     tester,
   ) async {
-    tester.view.physicalSize = const Size(1280, 800);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.reset);
     final tm = FakeTaskManager(step: Duration.zero);
     addTearDown(tm.dispose);
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [
-          taskManagerProvider.overrideWithValue(tm),
-          demoBackendProvider.overrideWithValue(MemoryStorageBackend()),
-        ],
+        overrides: [taskManagerProvider.overrideWithValue(tm)],
         child: const MaterialApp(home: Scaffold(body: SourcesPage())),
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.textContaining('找不到这个文件夹'), findsOneWidget);
-    expect(find.byType(Spinner), findsNothing);
+    expect(find.byType(RepoMapView), findsNothing);
+    expect(find.byType(OrganicMap), findsNothing);
   });
 
   testWidgets('地图 counts the folder and clicking a block opens it', (
@@ -110,6 +115,11 @@ void main() {
     await tester.tapAt(_centerOf(tester, c, '动漫'));
     await tester.pumpAndSettle();
     expect(c.read(browserDirProvider), '$root/动漫');
+    await tester.tap(find.byKey(const ValueKey('map-up')));
+    await tester.pumpAndSettle();
+    expect(c.read(browserDirProvider), root);
+    await tester.tapAt(_centerOf(tester, c, '动漫'));
+    await tester.pumpAndSettle();
     final shows = tester.widget<OrganicMap>(find.byType(OrganicMap)).blocks;
     expect(shows.map((b) => b.label), contains('海贼王 (1999)'));
 

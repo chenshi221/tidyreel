@@ -34,7 +34,3 @@ final sizeScannerProvider = Provider.family<SizeScanner, ConnectionId>((
   ref.onDispose(scanner.dispose);
   return scanner;
 });
-
-/// Which connection the 来源页 map shows; null = the first one.
-final sourcesMapConnectionProvider =
-    NotifierProvider<Val<ConnectionId?>, ConnectionId?>(() => Val(null));

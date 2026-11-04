@@ -896,9 +896,11 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
     // Which file each episode already gets, so double-booking shows.
     final taken = <EpisodeRef, String>{
       for (final r in widget.rows)
+        // Later files follow this one when it moves, so they never clash.
         if (r.file.path != row.file.path &&
             r.file.role == FileRole.video &&
-            !r.ignored)
+            !r.ignored &&
+            (episodeOf(r.file, null) ?? 0) < (episodeOf(row.file, null) ?? 0))
           ?targetRef(r): r.file.name,
     };
     return ref
@@ -997,7 +999,15 @@ class WorkHeader extends StatelessWidget {
   final MediaGroup group;
   final GroupDecision? decision;
 
-  const WorkHeader({super.key, required this.group, required this.decision});
+  /// Season shown below: its poster replaces the show's when TMDB has one.
+  final int? season;
+
+  const WorkHeader({
+    super.key,
+    required this.group,
+    required this.decision,
+    this.season,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1005,7 +1015,8 @@ class WorkHeader extends StatelessWidget {
     final theme = Theme.of(context);
     final g = group;
     final m = effectiveMatch(g, decision);
-    final detail = g.show?.info.tmdbId == m?.tmdbId ? g.show?.info : null;
+    final detailShow = g.show?.info.tmdbId == m?.tmdbId ? g.show : null;
+    final detail = detailShow?.info;
     final backdrop = m?.backdropPath ?? detail?.backdropPath;
     final overview = m?.overview ?? detail?.overview;
     final genres = (detail?.genres.isNotEmpty ?? false)
@@ -1088,7 +1099,12 @@ class WorkHeader extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Poster(
-                  posterPath: m?.posterPath,
+                  posterPath:
+                      detailShow?.seasons
+                          .where((x) => x.number == season)
+                          .firstOrNull
+                          ?.posterPath ??
+                      m?.posterPath,
                   icon: isTv ? CupertinoIcons.tv : CupertinoIcons.film,
                   width: 112,
                   height: 168,
@@ -1105,7 +1121,7 @@ class WorkHeader extends StatelessWidget {
                         children: [
                           Flexible(
                             child: Text(
-                              m?.title ?? g.anchorTitle,
+                              detail?.title ?? m?.title ?? g.anchorTitle,
                               style: theme.textTheme.headlineSmall?.copyWith(
                                 color: fg,
                               ),
@@ -1307,7 +1323,7 @@ class DetailPane extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
       children: [
-        WorkHeader(group: group, decision: decision),
+        WorkHeader(group: group, decision: decision, season: current),
         if (!(decision?.selected ?? true)) ...[
           const SizedBox(height: 10),
           Container(

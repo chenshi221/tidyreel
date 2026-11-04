@@ -50,6 +50,7 @@ class TmdbProvider implements MetadataProvider {
       );
 
   static const _en = 'en-US';
+  static final _han = RegExp(r'[\u4e00-\u9fff]');
 
   /// How deep to look when page 1 has no exact title.
   static const _maxPages = 3;
@@ -172,6 +173,20 @@ class TmdbProvider implements MetadataProvider {
     return [for (final p in pages) ..._list(p['results'])];
   }
 
+  /// The first mainland-China alternative title, when TMDB has no Chinese name.
+  Future<String?> _chineseAlias(int id, String title) async {
+    if (_han.hasMatch(title)) return null;
+    try {
+      final res = await _http.get('/tv/$id/alternative_titles', const {});
+      return _list(res['results'])
+          .where((t) => t['iso_3166_1'] == 'CN')
+          .map((t) => _str(t['title']))
+          .firstWhere((t) => t != null && _han.hasMatch(t), orElse: () => null);
+    } on TmdbException {
+      return null;
+    }
+  }
+
   /// Best effort: search results are still useful without aliases.
   Future<List<String>> _aliases(int id, bool movie) async {
     try {
@@ -195,9 +210,12 @@ class TmdbProvider implements MetadataProvider {
       _http.get(path, {'language': config.language}),
       _http.get(path, {'language': _en}),
     ]);
+    final alias = config.language.startsWith('zh')
+        ? await _chineseAlias(tmdbId, _title(res[0], false))
+        : null;
     return ShowDetail(
       info: _candidate(
-        res[0],
+        alias == null ? res[0] : {...res[0], 'name': alias},
         MediaKind.episode,
         englishTitle: _title(res[1], false),
       ),

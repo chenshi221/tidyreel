@@ -89,12 +89,16 @@ class SizeScanner extends ChangeNotifier {
   var _stop = false;
   var _dirsListed = 0;
   Object? _error;
+  final _skipped = <String, String>{};
   var _disposed = false;
 
   /// Root of the count in progress, if any.
   String? get running => _running;
   int get dirsListed => _dirsListed;
   Object? get error => _error;
+
+  /// Folders the last count could not read, with the reason; not in the totals.
+  Map<String, String> get skipped => _skipped;
 
   /// Whether [dir] and everything below it has been counted.
   bool isComplete(String dir) =>
@@ -119,6 +123,7 @@ class SizeScanner extends ChangeNotifier {
     _stop = false;
     _error = null;
     _dirsListed = 0;
+    _skipped.clear();
     // Callers start a count from initState / didUpdateWidget, mid-build.
     scheduleMicrotask(_notify);
     try {
@@ -126,7 +131,21 @@ class SizeScanner extends ChangeNotifier {
         [root],
         (dir) async {
           final cached = _listings[dir];
-          final list = cached ?? await backend.list(dir);
+          final List<RemoteEntry> list;
+          try {
+            list = cached ?? await backend.list(dir);
+          } on StorageException catch (e) {
+            // One unreadable folder ("G:\\System Volume Information") must not
+            // end the count; a dead connection or the root itself still does.
+            if (dir == root ||
+                e.code == StorageErrorCode.unauthorized ||
+                e.code == StorageErrorCode.network ||
+                e.code == StorageErrorCode.rateLimited) {
+              rethrow;
+            }
+            _skipped[dir] = e.message;
+            return const <String>[];
+          }
           if (cached == null) {
             _listings[dir] = list;
             final ask = [

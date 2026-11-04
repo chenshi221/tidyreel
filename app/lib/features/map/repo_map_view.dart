@@ -70,10 +70,6 @@ class RepoMapView extends ConsumerStatefulWidget {
   /// 「其余 N 项」 was clicked: show the list instead.
   final VoidCallback onShowList;
 
-  /// Big number + legend above the map. Off when the page shows a
-  /// [RepoMapSummary] elsewhere (来源页 puts it in the left column).
-  final bool showHeader;
-
   const RepoMapView({
     super.key,
     required this.connection,
@@ -81,7 +77,6 @@ class RepoMapView extends ConsumerStatefulWidget {
     required this.onOpen,
     required this.menuFor,
     required this.onShowList,
-    this.showHeader = true,
   });
 
   @override
@@ -158,18 +153,29 @@ class _RepoMapViewState extends ConsumerState<RepoMapView> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (widget.showHeader)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(4, 4, 4, 18),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                RepoMapSummary(scanner: s, dir: dir),
-                const Spacer(),
-                const MapLegend(),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 4, 4, 18),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: RepoMapSummary(scanner: s, dir: dir),
+              ),
+              if (dir != '/') ...[
+                LinkText(
+                  '↑ 上一级',
+                  key: const ValueKey('map-up'),
+                  onTap: () {
+                    final i = dir.lastIndexOf('/');
+                    widget.onOpen(i <= 0 ? '/' : dir.substring(0, i));
+                  },
+                ),
+                const SizedBox(width: 18),
               ],
-            ),
+              const MapLegend(),
+            ],
           ),
+        ),
         Expanded(
           child: blocks.isEmpty
               ? (!busy && s.error != null
@@ -210,7 +216,7 @@ class _RepoMapViewState extends ConsumerState<RepoMapView> {
 String scanErrorText(Object e) =>
     e is StorageException && e.code == StorageErrorCode.notFound
     ? '统计出错：找不到这个文件夹，看看连接的媒体库路径对不对'
-    : '统计出错：$e';
+    : '统计出错：${e is StorageException ? e.message : e}';
 
 /// Big size number with file count, 未整理 total and count progress.
 class RepoMapSummary extends StatelessWidget {
@@ -247,12 +253,21 @@ class RepoMapSummary extends StatelessWidget {
             ],
           )
         : s.error != null
-        ? Text(scanErrorText(s.error!), style: TextStyle(color: p.danger))
+        ? Tooltip(
+            message: '${s.error}',
+            child: Text(
+              scanErrorText(s.error!),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: p.danger),
+            ),
+          )
         : s.isComplete(dir)
         ? Text(
             [
               '${stats.files} 个文件',
               if (stats.unorganized > 0) '未整理 ${fmtSize(stats.unorganized)}',
+              if (s.skipped.isNotEmpty) '跳过 ${s.skipped.length} 个读不了的文件夹',
             ].join(' · '),
             style: TextStyle(color: p.textMuted),
           )
