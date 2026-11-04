@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
@@ -12,24 +13,23 @@ import 'map_providers.dart';
 import 'organic_map.dart';
 import 'size_scanner.dart';
 
-/// Blocks smaller than this share of the folder go into 「其余 N 项」.
-const _minShare = 0.012;
-const _maxBlocks = 36;
+/// More blocks than this can't be laid out smoothly: the smallest go into
+/// 「其余 N 项」.
+const _maxBlocks = 150;
 const restId = '__rest__';
 
 /// Folder [dir] as blocks: one per child, area = recursive size, tone =
-/// organize state; the long tail folds into one 「其余」 block.
+/// organize state; only past [_maxBlocks] does the tail fold into 「其余」.
 List<MapBlock> mapBlocksFor(SizeScanner s, String dir) {
   final entries = s.entriesOf(dir);
   final stats = [for (final e in entries) (e, s.statsOf(e))]
     ..removeWhere((x) => x.$2.total <= 0)
     ..sort((a, b) => b.$2.total.compareTo(a.$2.total));
-  final total = stats.fold(0, (t, x) => t + x.$2.total);
   final keep = <MapBlock>[];
   var rest = FolderStats.zero;
   var restCount = 0;
   for (final (e, st) in stats) {
-    if (keep.length < _maxBlocks && st.total >= total * _minShare) {
+    if (keep.length < _maxBlocks) {
       keep.add(
         MapBlock(
           id: e.path,
@@ -70,6 +70,10 @@ class RepoMapView extends ConsumerStatefulWidget {
   /// 「其余 N 项」 was clicked: show the list instead.
   final VoidCallback onShowList;
 
+  /// Selected paths, shared with the list.
+  final Set<String> selected;
+  final void Function(String path) onToggleSelect;
+
   const RepoMapView({
     super.key,
     required this.connection,
@@ -77,6 +81,8 @@ class RepoMapView extends ConsumerStatefulWidget {
     required this.onOpen,
     required this.menuFor,
     required this.onShowList,
+    this.selected = const {},
+    required this.onToggleSelect,
   });
 
   @override
@@ -161,17 +167,6 @@ class _RepoMapViewState extends ConsumerState<RepoMapView> {
               Expanded(
                 child: RepoMapSummary(scanner: s, dir: dir),
               ),
-              if (dir != '/') ...[
-                LinkText(
-                  '↑ 上一级',
-                  key: const ValueKey('map-up'),
-                  onTap: () {
-                    final i = dir.lastIndexOf('/');
-                    widget.onOpen(i <= 0 ? '/' : dir.substring(0, i));
-                  },
-                ),
-                const SizedBox(width: 18),
-              ],
               const MapLegend(),
             ],
           ),
@@ -194,10 +189,22 @@ class _RepoMapViewState extends ConsumerState<RepoMapView> {
                   child: OrganicMap(
                     key: ValueKey(dir),
                     blocks: blocks,
+                    selected: widget.selected,
+                    counting: busy,
                     onTap: (b) {
                       if (b.id == restId) return widget.onShowList();
                       final e = byPath[b.id];
-                      if (e != null && e.isDir) widget.onOpen(e.path);
+                      if (e == null) return;
+                      final k = HardwareKeyboard.instance;
+                      final adding =
+                          k.isMetaPressed ||
+                          k.isControlPressed ||
+                          k.isShiftPressed;
+                      if (e.isDir && !adding) {
+                        widget.onOpen(e.path);
+                      } else {
+                        widget.onToggleSelect(e.path);
+                      }
                     },
                     onSecondaryTap: (b, at) {
                       final e = byPath[b.id];

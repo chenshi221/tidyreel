@@ -1,5 +1,6 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tidyreel/data/providers.dart';
@@ -7,6 +8,7 @@ import 'package:tidyreel/features/map/map_providers.dart';
 import 'package:tidyreel/features/map/organic_layout.dart';
 import 'package:tidyreel/features/map/organic_map.dart';
 import 'package:tidyreel/features/map/repo_map_view.dart';
+import 'package:tidyreel/features/map/size_scanner.dart';
 import 'package:tidyreel/features/sources/sources_page.dart';
 import 'package:tidyreel/features/sources/sources_providers.dart';
 import 'package:tidyreel/ui/widgets.dart';
@@ -54,16 +56,8 @@ Future<ProviderContainer> _pump(
 Offset _centerOf(WidgetTester tester, ProviderContainer c, String label) {
   final map = tester.widget<OrganicMap>(find.byType(OrganicMap));
   final box = tester.renderObject<RenderBox>(find.byType(OrganicMap));
-  final total = map.blocks.fold(0, (t, b) => t + b.bytes);
-  final cells = layoutOrganic([
-    for (final b in map.blocks)
-      MapItem(
-        b.id,
-        b.bytes.toDouble() < total * minShareDrawn
-            ? total * minShareDrawn
-            : b.bytes.toDouble(),
-      ),
-  ], Offset.zero & box.size);
+  final items = mapItems(map.blocks, box.size);
+  final cells = layoutOrganic(items, Offset.zero & mapCanvas(items, box.size));
   final id = map.blocks.firstWhere((b) => b.label == label).id;
   return box.localToGlobal(cells.firstWhere((x) => x.id == id).centroid);
 }
@@ -115,7 +109,7 @@ void main() {
     await tester.tapAt(_centerOf(tester, c, '动漫'));
     await tester.pumpAndSettle();
     expect(c.read(browserDirProvider), '$root/动漫');
-    await tester.tap(find.byKey(const ValueKey('map-up')));
+    await tester.tap(find.byKey(const ValueKey('browser-up')));
     await tester.pumpAndSettle();
     expect(c.read(browserDirProvider), root);
     await tester.tapAt(_centerOf(tester, c, '动漫'));
@@ -138,5 +132,114 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(RepoMapView), findsNothing);
     expect(find.text('海贼王 (1999)'), findsOneWidget);
+  });
+
+  testWidgets('⌘-click selects, plain click still opens', (tester) async {
+    final c = await _pump(tester);
+    await tester.tap(find.text('地图'));
+    await tester.pumpAndSettle();
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+    await tester.tapAt(_centerOf(tester, c, '动漫'));
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+    await tester.pumpAndSettle();
+    expect(c.read(browserSelectionProvider), {'$root/动漫'});
+    expect(c.read(browserDirProvider), root);
+    final map = tester.widget<OrganicMap>(find.byType(OrganicMap));
+    expect(map.selected, {'$root/动漫'});
+
+    await tester.tapAt(_centerOf(tester, c, '动漫'));
+    await tester.pumpAndSettle();
+    expect(c.read(browserDirProvider), '$root/动漫');
+  });
+
+  testWidgets('a crowded folder gets a bigger canvas, not a 其余 block', (
+    tester,
+  ) async {
+    const viewport = Size(900, 450);
+    final blocks = [
+      const MapBlock(
+        id: 'big',
+        label: 'big',
+        bytes: 1 << 40,
+        state: BlockState.other,
+      ),
+      for (var i = 0; i < 100; i++)
+        MapBlock(id: 'b$i', label: 'b$i', bytes: 1, state: BlockState.other),
+    ];
+    final items = mapItems(blocks, viewport);
+    final canvas = mapCanvas(items, viewport);
+    expect(canvas.width, greaterThan(viewport.width));
+    expect(canvas.width / canvas.height, closeTo(2, 0.01));
+    expect(items.last.value, minBlockArea);
+
+    // Few blocks fit as they are.
+    final few = blocks.take(3).toList();
+    expect(mapCanvas(mapItems(few, viewport), viewport), viewport);
+  });
+
+  testWidgets('home and up stop at the connection path', (tester) async {
+    final c = await _pump(tester);
+    final conn = c.read(openConnectionProvider)!;
+    c.read(openConnectionProvider.notifier).set(conn.copyWith(startDir: root));
+    c.read(browserDirProvider.notifier).set('$root/动漫');
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('browser-up')));
+    await tester.pumpAndSettle();
+    expect(c.read(browserDirProvider), root);
+    expect(
+      tester
+          .widget<IconButton>(find.byKey(const ValueKey('browser-up')))
+          .onPressed,
+      isNull,
+    );
+    expect(find.text('根目录'), findsNothing);
+  });
+
+  testWidgets('dragging pans a crowded map and is not a click', (tester) async {
+    tester.view.physicalSize = const Size(900, 450);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final tapped = <String>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: OrganicMap(
+            blocks: [
+              for (var i = 0; i < 100; i++)
+                MapBlock(
+                  id: 'b$i',
+                  label: 'b$i',
+                  bytes: 1,
+                  state: BlockState.other,
+                ),
+            ],
+            onTap: (b) => tapped.add(b.id),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final viewer = tester.widget<InteractiveViewer>(
+      find.byKey(const ValueKey('map-viewer')),
+    );
+    await tester.drag(find.byType(OrganicMap), const Offset(-200, -100));
+    await tester.pumpAndSettle();
+    final moved = viewer.transformationController!.value.getTranslation();
+    expect(moved.x, lessThan(0));
+    expect(moved.y, lessThan(0));
+    expect(tapped, isEmpty);
+
+    // A click after panning still lands on a block.
+    await tester.tapAt(const Offset(450, 225));
+    expect(tapped, isNotEmpty);
+
+    await tester.tap(find.byKey(const ValueKey('map-fit')));
+    await tester.pump();
+    expect(
+      viewer.transformationController!.value.getMaxScaleOnAxis(),
+      lessThan(1),
+    );
   });
 }

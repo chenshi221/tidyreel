@@ -45,6 +45,9 @@ Map<String, Object?> namingOptionsToJson(NamingOptions o) => {
   'seasonFolderTemplate': o.seasonFolderTemplate,
   'singleSeasonFolder': o.singleSeasonFolder,
   'customTemplate': o.customTemplate,
+  'rewrites': [
+    for (final r in o.rewrites) {'p': r.pattern, 'r': r.replacement},
+  ],
 };
 
 NamingOptions namingOptionsFromJson(Map<String, Object?> j) {
@@ -76,6 +79,10 @@ NamingOptions namingOptionsFromJson(Map<String, Object?> j) {
     singleSeasonFolder:
         j['singleSeasonFolder'] as bool? ?? d.singleSeasonFolder,
     customTemplate: j['customTemplate'] as String?,
+    rewrites: [
+      for (final r in (j['rewrites'] as List?) ?? const [])
+        NameRewrite((r as Map)['p'] as String, r['r'] as String? ?? ''),
+    ],
   );
 }
 

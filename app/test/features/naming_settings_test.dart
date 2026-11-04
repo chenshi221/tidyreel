@@ -61,6 +61,54 @@ void main() {
     expect(p.tv.customTemplate, isNull);
   });
 
+  testWidgets('season presets and regex rules reach the profile', (
+    tester,
+  ) async {
+    final (_, c) = await pumpPage(tester, const NamingPage());
+    await tester.tap(find.text('剧集'));
+    await tester.pumpAndSettle();
+
+    final list = find
+        .ancestor(of: find.text('高级'), matching: find.byType(Scrollable))
+        .first;
+    final preset = find.byKey(const ValueKey('season-preset-S01'));
+    await tester.scrollUntilVisible(preset, 200, scrollable: list);
+    await tester.pumpAndSettle();
+    await tester.tap(preset);
+    await tester.pumpAndSettle();
+    expect(
+      c.read(namingProfileProvider).tv.seasonFolderTemplate,
+      'S{season:02}',
+    );
+
+    final add = find.byKey(const ValueKey('add-rewrite'));
+    await tester.scrollUntilVisible(
+      add,
+      200,
+      scrollable: find
+          .ancestor(of: preset, matching: find.byType(Scrollable))
+          .first,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(add);
+    await tester.pumpAndSettle();
+    final fields = find.descendant(
+      of: find.byKey(const ValueKey('rewrite-tv-0')),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(fields.first, '(');
+    await tester.pump();
+    expect(find.textContaining('正则有误'), findsOneWidget);
+    expect(c.read(namingProfileProvider).tv.rewrites.single.pattern, '');
+
+    await tester.enterText(fields.first, r'S(\d+)');
+    await tester.enterText(fields.last, r'第$1季');
+    await tester.pumpAndSettle();
+    expect(find.textContaining('正则有误'), findsNothing);
+    final r = c.read(namingProfileProvider).tv.rewrites.single;
+    expect(applyRewrites('S01', [r]), '第01季');
+  });
+
   testWidgets('settings fields bind to the settings provider', (tester) async {
     final (_, c) = await pumpPage(tester, const SettingsPage());
     await tester.enterText(find.byKey(const ValueKey('tmdb-key')), 'abc123');

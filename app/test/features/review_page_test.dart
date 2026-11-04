@@ -150,6 +150,22 @@ void main() {
     expect(d.overrides[_file]!.episode, 2);
   });
 
+  testWidgets('重新搜索 does not filter by the match being corrected', (
+    tester,
+  ) async {
+    await open(tester);
+    await tester.tap(find.text('异兽魔都').first);
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('重新搜索 TMDB'));
+    await tester.tap(find.text('重新搜索 TMDB'));
+    await tester.pumpAndSettle();
+    final year = tester.widget<TextField>(
+      find.byKey(const ValueKey('search-year')),
+    );
+    expect(year.controller!.text, isEmpty);
+    expect(find.text('全部'), findsWidgets);
+  });
+
   testWidgets('right pane: strategy, offset, manual match', (tester) async {
     final (tm, id) = await open(tester);
     await tapKey(tester, 'strategy-mergeIntoOne');
@@ -184,6 +200,11 @@ void main() {
     expect(d.match?.tmdbId, 27205);
     expect(d.selected, isTrue); // picking a match checks the group
     expect(find.text('可整理 (3)'), findsOneWidget);
+    // The manual tab just emptied: back to 可整理 by itself.
+    expect(
+      tester.widget<Segmented<int>>(find.byType(Segmented<int>).first).value,
+      0,
+    );
   });
 
   testWidgets('keyboard: arrows move, space toggles; execute opens the task', (

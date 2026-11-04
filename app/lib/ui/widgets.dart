@@ -3,15 +3,12 @@ import 'package:flutter/material.dart';
 
 import 'tokens.dart';
 
-/// Inset-grouped container: a slightly lighter sheet with a hairline edge.
-/// No shadow: grouping comes from tone and space, not elevation.
+/// A section of a page: a slightly lighter sheet on the paper. No shadow;
+/// [framed] adds a hairline for scrolling lists that need a visible edge.
 class Panel extends StatelessWidget {
   final Widget child;
   final EdgeInsetsGeometry padding;
   final Color? color;
-
-  /// Draw a box. Only for scrolling lists that need a visible edge; page
-  /// sections group by space alone.
   final bool framed;
 
   const Panel({
@@ -25,15 +22,12 @@ class Panel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
-    if (!framed && color == null) {
-      return Padding(padding: padding, child: child);
-    }
     return Container(
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: color ?? p.panel,
         borderRadius: BorderRadius.circular(Radii.lg),
-        border: Border.all(color: p.line, width: hairline),
+        border: framed ? Border.all(color: p.line, width: hairline) : null,
       ),
       padding: padding,
       child: child,

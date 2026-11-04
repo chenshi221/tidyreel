@@ -30,7 +30,9 @@ class Sidebar extends ConsumerWidget {
   const Sidebar({super.key});
 
   static const expandedWidth = 224.0;
-  static const collapsedWidth = 60.0;
+
+  /// Wide enough for the macOS traffic lights.
+  static const collapsedWidth = 78.0;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -135,8 +137,13 @@ class Sidebar extends ConsumerWidget {
       duration: const Duration(milliseconds: 180),
       curve: Curves.easeOutCubic,
       width: collapsed ? collapsedWidth : expandedWidth,
-      // One continuous sheet of paper with the content: no fill, no rule.
-      color: p.canvas,
+      // A shade off the content, with a rule: the page's first division.
+      decoration: BoxDecoration(
+        color: p.sidebar,
+        border: Border(
+          right: BorderSide(color: p.line, width: hairline),
+        ),
+      ),
       child: ClipRect(
         child: OverflowBox(
           alignment: Alignment.topLeft,
@@ -149,7 +156,8 @@ class Sidebar extends ConsumerWidget {
               children: [
                 if (mac)
                   SizedBox(
-                    height: 30,
+                    // Collapsed, the traffic lights take the whole first row.
+                    height: collapsed ? 58 : 30,
                     child: Align(
                       alignment: collapsed
                           ? Alignment.bottomCenter

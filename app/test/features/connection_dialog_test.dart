@@ -129,7 +129,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const ValueKey('field-主机')), 'nas');
     await tester.enterText(
-      find.byKey(const ValueKey('field-打开目录')),
+      find.byKey(const ValueKey('field-连接路径')),
       '/dav/外接硬盘/影视',
     );
     await tester.enterText(find.byKey(const ValueKey('field-媒体库')), '/dav/库');
@@ -154,7 +154,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       tester
-          .widget<TextField>(find.byKey(const ValueKey('field-打开目录')))
+          .widget<TextField>(find.byKey(const ValueKey('field-连接路径')))
           .controller!
           .text,
       '/下载',
@@ -174,7 +174,7 @@ void main() {
     await tester.tap(find.textContaining('复制'));
     await tester.pumpAndSettle();
     expect(find.text('添加连接'), findsWidgets);
-    await tester.enterText(find.byKey(const ValueKey('field-打开目录')), '/影视');
+    await tester.enterText(find.byKey(const ValueKey('field-连接路径')), '/影视');
     await tester.tap(find.text('保存'));
     await tester.pumpAndSettle();
     final all = c.read(connectionsProvider);
@@ -217,7 +217,7 @@ void main() {
     expect(c.read(connectionsProvider), hasLength(1));
   });
 
-  testWidgets('pasted /dav/PC URL becomes WebDAV /dav + 打开目录 /PC', (
+  testWidgets('pasted /dav/PC URL becomes WebDAV /dav + 连接路径 /PC', (
     tester,
   ) async {
     final (_, c) = await pumpPage(tester, const SourcesPage());
@@ -235,7 +235,7 @@ void main() {
         .text;
     expect(field('主机'), '127.0.0.1');
     expect(field('路径'), '/dav');
-    expect(field('打开目录'), '/PC');
+    expect(field('连接路径'), '/PC');
     await tester.tap(find.text('保存'));
     await tester.pumpAndSettle();
     final saved = c.read(connectionsProvider).last;
@@ -244,7 +244,7 @@ void main() {
     expect(saved.startDir, '/PC');
   });
 
-  testWidgets('Alist keeps a pasted path as 打开目录 and opens there', (
+  testWidgets('Alist keeps a pasted path as 连接路径 and opens there', (
     tester,
   ) async {
     final (_, c) = await pumpPage(tester, const SourcesPage());

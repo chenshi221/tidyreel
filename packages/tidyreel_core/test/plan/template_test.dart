@@ -230,4 +230,26 @@ void main() {
       expect(sanitizeName('盗梦空间.Inception.2010'), '盗梦空间.Inception.2010');
     });
   });
+
+  group('applyRewrites', () {
+    test('runs in order with capture groups', () {
+      expect(
+        applyRewrites('Season 01', const [
+          NameRewrite(r'Season (\d+)', r'S$1'),
+          NameRewrite('S0', 'S'),
+        ]),
+        'S1',
+      );
+    });
+
+    test('skips a bad pattern and never empties the name', () {
+      expect(
+        applyRewrites('老友记', const [
+          NameRewrite('(', 'x'),
+          NameRewrite('.*', ''),
+        ]),
+        '老友记',
+      );
+    });
+  });
 }

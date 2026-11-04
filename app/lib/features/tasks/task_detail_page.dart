@@ -120,7 +120,6 @@ class TaskDetailPage extends ConsumerWidget {
             },
           ),
       ],
-      maxWidth: 1000,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -128,7 +127,7 @@ class TaskDetailPage extends ConsumerWidget {
           if (task != null)
             Padding(
               padding: const EdgeInsets.fromLTRB(48, 0, 40, 12),
-              child: TaskCard(task: task),
+              child: Panel(child: TaskCard(task: task)),
             ),
           Expanded(
             child: detail.when(

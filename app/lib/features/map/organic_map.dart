@@ -3,11 +3,32 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../../ui/tokens.dart';
+import '../../ui/widgets.dart';
 import 'organic_layout.dart';
 import 'size_scanner.dart';
 
-/// Smallest share of the map a block is drawn with.
-const minShareDrawn = 0.025;
+/// Smallest area a block is drawn with (logical px²): room for its label.
+const minBlockArea = 14000.0;
+
+/// Each block's drawn area on a map shown in [viewport]: its share of the
+/// viewport, or [minBlockArea] for the long tail.
+List<MapItem> mapItems(List<MapBlock> blocks, Size viewport) {
+  final total = blocks.fold(0, (t, b) => t + b.bytes);
+  final perByte = total == 0 ? 0.0 : viewport.width * viewport.height / total;
+  return [
+    for (final b in blocks)
+      MapItem(b.id, math.max(b.bytes * perByte, minBlockArea)),
+  ];
+}
+
+/// The canvas [items] need: the viewport, or as much larger (same shape) as
+/// their areas add up to. What doesn't fit is reached by dragging.
+Size mapCanvas(List<MapItem> items, Size viewport) {
+  final need = items.fold(0.0, (t, i) => t + i.value);
+  final have = viewport.width * viewport.height;
+  // A little over still fits: not worth making anyone drag.
+  return need <= have * 1.25 ? viewport : viewport * math.sqrt(need / have);
+}
 
 /// One block on the map.
 @immutable
@@ -36,6 +57,13 @@ class OrganicMap extends StatefulWidget {
   final void Function(MapBlock)? onTap;
   final void Function(MapBlock, Offset globalPosition)? onSecondaryTap;
 
+  /// Ids drawn as selected.
+  final Set<String> selected;
+
+  /// Sizes are still streaming in: lay a crowded map out roughly (each round
+  /// costs n² clips on the UI thread), then properly once this turns false.
+  final bool counting;
+
   /// Space between pebbles.
   final double gap;
 
@@ -44,6 +72,8 @@ class OrganicMap extends StatefulWidget {
     required this.blocks,
     this.onTap,
     this.onSecondaryTap,
+    this.selected = const {},
+    this.counting = false,
     this.gap = 12,
   });
 
@@ -59,16 +89,27 @@ class _PlacedBlock {
 }
 
 class _OrganicMapState extends State<OrganicMap> {
+  final _view = TransformationController();
   String? _hover;
   List<_PlacedBlock> _placed = const [];
   Size? _size;
   String? _laidOut;
+  var _fitted = false;
+
+  @override
+  void dispose() {
+    _view.dispose();
+    super.dispose();
+  }
 
   /// Relayout only when sizes really change: hover, repaints and rebuilds
   /// with an equal block list reuse the last (costly) Voronoi layout.
-  List<_PlacedBlock> _layout(Size size) {
-    final key = [for (final b in widget.blocks) '${b.id}\u0000${b.bytes}']
-        .join('\u0001');
+  List<_PlacedBlock> _layout(List<MapItem> items, Size size) {
+    final rough = widget.counting && items.length > 60;
+    final key = [
+      rough,
+      for (final b in widget.blocks) '${b.id}\u0000${b.bytes}',
+    ].join('\u0001');
     if (size == _size && key == _laidOut) {
       // Same shapes; labels/states may still differ.
       final byId = {for (final b in widget.blocks) b.id: b};
@@ -80,13 +121,11 @@ class _OrganicMapState extends State<OrganicMap> {
     _size = size;
     _laidOut = key;
     final byId = {for (final b in widget.blocks) b.id: b};
-    // A floor on the drawn area keeps the long tail visible and clickable;
-    // labels still show real sizes.
-    final total = widget.blocks.fold(0, (t, b) => t + b.bytes);
-    final cells = layoutOrganic([
-      for (final b in widget.blocks)
-        MapItem(b.id, math.max(b.bytes.toDouble(), total * minShareDrawn)),
-    ], Offset.zero & size);
+    final cells = layoutOrganic(
+      items,
+      Offset.zero & size,
+      iterations: rough ? 30 : 120,
+    );
     // Each pebble shrinks by its own amount, so the gaps between neighbours
     // vary like stones laid by hand; bigger stones get a little more air.
     final scale = math.sqrt(size.width * size.height);
@@ -109,46 +148,138 @@ class _OrganicMapState extends State<OrganicMap> {
     return null;
   }
 
+  void _toggleFit(double fit) {
+    _fitted = !_fitted;
+    _view.value = _fitted
+        ? (Matrix4.identity()..scaleByDouble(fit, fit, fit, 1))
+        : Matrix4.identity();
+    setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
     final dark = Theme.of(context).brightness == Brightness.dark;
     return LayoutBuilder(
       builder: (context, box) {
-        final placed = _layout(box.biggest);
-        return MouseRegion(
-          cursor: _hover == null ? MouseCursor.defer : SystemMouseCursors.click,
-          onHover: (e) {
-            final id = _hit(e.localPosition)?.block.id;
-            if (id != _hover) setState(() => _hover = id);
-          },
-          onExit: (_) => setState(() => _hover = null),
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTapUp: (d) {
-              final b = _hit(d.localPosition);
-              if (b != null) widget.onTap?.call(b.block);
-            },
-            onSecondaryTapUp: (d) {
-              final b = _hit(d.localPosition);
-              if (b != null) {
-                widget.onSecondaryTap?.call(b.block, d.globalPosition);
-              }
-            },
-            child: CustomPaint(
-              size: box.biggest,
-              painter: _MapPainter(
-                placed: placed,
-                palette: p,
-                dark: dark,
-                hover: _hover,
-                textScaler: MediaQuery.textScalerOf(context),
-                baseStyle: DefaultTextStyle.of(context).style,
+        final viewport = box.biggest;
+        final items = mapItems(widget.blocks, viewport);
+        final canvas = mapCanvas(items, viewport);
+        final placed = _layout(items, canvas);
+        final fit = viewport.width / canvas.width;
+        final hovered = placed
+            .where((b) => b.block.id == _hover)
+            .firstOrNull
+            ?.block;
+        _MapPainter painter({String? only}) => _MapPainter(
+          placed: placed,
+          palette: p,
+          dark: dark,
+          hover: only,
+          selected: widget.selected,
+          textScaler: MediaQuery.textScalerOf(context),
+          baseStyle: DefaultTextStyle.of(context).style,
+        );
+        return Stack(
+          children: [
+            InteractiveViewer(
+              key: const ValueKey('map-viewer'),
+              transformationController: _view,
+              constrained: false,
+              minScale: fit,
+              maxScale: 4,
+              child: MouseRegion(
+                cursor: _hover == null
+                    ? MouseCursor.defer
+                    : SystemMouseCursors.click,
+                onHover: (e) {
+                  final id = _hit(e.localPosition)?.block.id;
+                  if (id != _hover) setState(() => _hover = id);
+                },
+                onExit: (_) => setState(() => _hover = null),
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTapUp: (d) {
+                    final b = _hit(d.localPosition);
+                    if (b != null) widget.onTap?.call(b.block);
+                  },
+                  onSecondaryTapUp: (d) {
+                    final b = _hit(d.localPosition);
+                    if (b != null) {
+                      widget.onSecondaryTap?.call(b.block, d.globalPosition);
+                    }
+                  },
+                  // The pebbles are one cached layer; hovering repaints only
+                  // the hovered one on top.
+                  child: RepaintBoundary(
+                    child: CustomPaint(
+                      size: canvas,
+                      painter: painter(),
+                      foregroundPainter: _hover == null
+                          ? null
+                          : painter(only: _hover),
+                    ),
+                  ),
+                ),
               ),
             ),
-          ),
+            if (hovered != null)
+              Positioned(
+                left: 0,
+                bottom: 0,
+                child: IgnorePointer(
+                  child: _MapPill(
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: viewport.width * 0.6,
+                      ),
+                      child: Text(
+                        [hovered.label, ?hovered.caption].join('  ·  '),
+                        key: const ValueKey('map-hover'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 12.5, color: p.text),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            if (fit < 1)
+              Positioned(
+                right: 0,
+                bottom: 0,
+                child: _MapPill(
+                  child: LinkText(
+                    _fitted ? '放大查看' : '看全部',
+                    key: const ValueKey('map-fit'),
+                    onTap: () => _toggleFit(fit),
+                  ),
+                ),
+              ),
+          ],
         );
       },
+    );
+  }
+}
+
+/// A small floating label over the map.
+class _MapPill extends StatelessWidget {
+  final Widget child;
+
+  const _MapPill({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: p.panel,
+        borderRadius: BorderRadius.circular(Radii.md),
+        border: Border.all(color: p.line, width: hairline),
+      ),
+      child: child,
     );
   }
 }
@@ -175,7 +306,10 @@ class _MapPainter extends CustomPainter {
   final List<_PlacedBlock> placed;
   final Palette palette;
   final bool dark;
+
+  /// When set, paints only this block, hovered, over the cached layer.
   final String? hover;
+  final Set<String> selected;
   final TextScaler textScaler;
   final TextStyle baseStyle;
 
@@ -184,6 +318,7 @@ class _MapPainter extends CustomPainter {
     required this.palette,
     required this.dark,
     required this.hover,
+    required this.selected,
     required this.textScaler,
     required this.baseStyle,
   });
@@ -195,6 +330,7 @@ class _MapPainter extends CustomPainter {
     final p = palette;
     for (final b in placed) {
       final hovered = b.block.id == hover;
+      if (hover != null && !hovered) continue;
       final fill = blockFill(b.block.state, p, dark: dark, id: b.block.id);
       final label = _labelFor(b, fill);
       if (fill == null) {
@@ -215,6 +351,20 @@ class _MapPainter extends CustomPainter {
             ? Color.lerp(fill, dark ? Colors.white : Colors.black, 0.08)!
             : fill;
         canvas.drawPath(pebblePath(b.polygon), Paint()..color = c);
+      }
+      if (selected.contains(b.block.id)) {
+        final path = pebblePath(b.polygon);
+        canvas.drawPath(
+          path,
+          Paint()..color = p.accent.withValues(alpha: 0.14),
+        );
+        canvas.drawPath(
+          path,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2
+            ..color = p.accent,
+        );
       }
       label?.paint(canvas);
     }
@@ -284,6 +434,7 @@ class _MapPainter extends CustomPainter {
   bool shouldRepaint(_MapPainter old) =>
       !identical(old.placed, placed) ||
       old.hover != hover ||
+      !identical(old.selected, selected) ||
       old.palette != palette ||
       old.dark != dark;
 }

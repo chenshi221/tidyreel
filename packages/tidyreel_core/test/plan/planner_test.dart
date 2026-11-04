@@ -1156,4 +1156,47 @@ void main() {
       );
     });
   });
+
+  group('the match decides movie or show', () {
+    final files = [
+      video('/d/翠鸟/翠鸟.E01.mkv', episode: 1, kind: MediaKind.movie),
+      video('/d/翠鸟/翠鸟.E02.mkv', episode: 2, kind: MediaKind.movie),
+    ];
+
+    test('a folder guessed as a movie, matched to a show, is a show', () async {
+      final g = MediaGroup(
+        id: const GroupId('g1'),
+        kind: MediaKind.movie,
+        anchorTitle: '翠鸟',
+        rootDir: '/d/翠鸟',
+        files: files,
+      );
+      final p = await planner().build(scanOf([g]), {
+        g.id: const GroupDecision(match: Demo.dorohedoro),
+      }, const PlanOptions(mode: OrganizeMode.inPlace));
+      final names = [
+        for (final o in p.ops)
+          if (o.kind == OpKind.relocate && o.phase == ExecPhase.files) o.dst,
+      ];
+      expect(names, hasLength(2));
+      expect(names.first, contains('Season 01'));
+      expect(names.first, contains('S01E01'));
+      expect(names.last, contains('S01E02'));
+    });
+
+    test('a show matched to a movie is named as the movie', () async {
+      final g = tvGroup([files.first]);
+      final p = await planner().build(scanOf([g]), {
+        g.id: const GroupDecision(match: Demo.inception),
+      }, const PlanOptions(mode: OrganizeMode.inPlace));
+      final dst = p.ops
+          .firstWhere(
+            (o) => o.kind == OpKind.relocate && o.phase == ExecPhase.files,
+          )
+          .dst;
+      expect(dst, contains('盗梦空间'));
+      expect(dst, isNot(contains('Season')));
+      expect(dst, isNot(contains('S01E01')));
+    });
+  });
 }

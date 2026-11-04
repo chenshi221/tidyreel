@@ -3,6 +3,8 @@ import 'package:tidyreel_core/tidyreel_core.dart';
 
 import '../../data/providers.dart';
 import '../../widgets/common.dart';
+import '../map/map_providers.dart';
+import '../map/size_scanner.dart';
 import '../settings/settings_providers.dart';
 
 export '../../data/providers.dart'
@@ -169,9 +171,8 @@ final browserModeProvider = NotifierProvider<_ModeNotifier, OrganizeMode>(
 );
 
 /// Entries of the current folder after search / filter / sort.
-/// 只看未整理的: a path counts as organized once a done op produced it.
-/// shortcut: doesn't yet check "name already matches the naming rules"; add when
-/// users report already-tidy folders showing up.
+/// 只看未整理的: hand marks first, then what a done op produced, then what
+/// looks tidy already (another tool organized it).
 final browserEntriesProvider = FutureProvider.autoDispose<List<RemoteEntry>>((
   ref,
 ) async {
@@ -197,7 +198,14 @@ final browserEntriesProvider = FutureProvider.autoDispose<List<RemoteEntry>>((
       conn.id,
       list.map((e) => e.path),
     );
-    list = list.where((e) => !organized.contains(e.path)).toList();
+    final marks = ref.watch(organizedMarksProvider(conn.id));
+    list = list
+        .where(
+          (e) =>
+              !(markFor(marks, e.path) ??
+                  (organized.contains(e.path) || looksOrganized(e))),
+        )
+        .toList();
   }
   int cmp(RemoteEntry a, RemoteEntry b) => switch (sort) {
     BrowserSort.name => a.name.toLowerCase().compareTo(b.name.toLowerCase()),

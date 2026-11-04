@@ -40,6 +40,15 @@ class NamingPage extends ConsumerStatefulWidget {
   ConsumerState<NamingPage> createState() => _NamingPageState();
 }
 
+/// 季文件夹 presets: (what it looks like, template).
+const _seasonPresets = [
+  ('Season 01', 'Season {season:02}'),
+  ('Season 1', 'Season {season}'),
+  ('season 01', 'season {season:02}'),
+  ('S01', 'S{season:02}'),
+  ('第 1 季', '第 {season} 季'),
+];
+
 class _NamingPageState extends ConsumerState<NamingPage> {
   var _tv = false;
 
@@ -159,8 +168,10 @@ class _Preview extends ConsumerWidget {
     final sample = isTv ? NamingSample.tv : NamingSample.movie;
     final kind = isTv ? MediaKind.episode : MediaKind.movie;
     final name = renderNaming(o, kind, sample);
-    final folder = renderFolder(o.folderTemplate, sample);
-    final season = isTv ? renderFolder(o.seasonFolderTemplate, sample) : null;
+    final folder = renderFolder(o.folderTemplate, sample, o.rewrites);
+    final season = isTv
+        ? renderFolder(o.seasonFolderTemplate, sample, o.rewrites)
+        : null;
     final tree = [
       isTv ? profile.tvDir : profile.movieDir,
       if (folder.text != null) folder.text!,
@@ -491,6 +502,7 @@ class _OptionsPanel extends ConsumerWidget {
               child: _TextOption(
                 key: ValueKey('folder-$suffix'),
                 value: o.folderTemplate,
+                vars: const ['{title}', '{en_title}', '{year}'],
                 onChanged: (v) =>
                     _edit(ref, (o) => o.copyWith(folderTemplate: v)),
               ),
@@ -498,11 +510,36 @@ class _OptionsPanel extends ConsumerWidget {
             if (isTv)
               FormRow(
                 label: '季文件夹',
-                child: _TextOption(
-                  key: const ValueKey('season-folder'),
-                  value: o.seasonFolderTemplate,
-                  onChanged: (v) =>
-                      _edit(ref, (o) => o.copyWith(seasonFolderTemplate: v)),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Wrap(
+                      spacing: 4,
+                      runSpacing: 4,
+                      children: [
+                        for (final (label, template) in _seasonPresets)
+                          _StyleChip(
+                            key: ValueKey('season-preset-$label'),
+                            label: label,
+                            selected: o.seasonFolderTemplate == template,
+                            onTap: () => _edit(
+                              ref,
+                              (o) => o.copyWith(seasonFolderTemplate: template),
+                            ),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    _TextOption(
+                      key: const ValueKey('season-folder'),
+                      value: o.seasonFolderTemplate,
+                      vars: const ['{season}', '{season:02}'],
+                      onChanged: (v) => _edit(
+                        ref,
+                        (o) => o.copyWith(seasonFolderTemplate: v),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             if (isTv)
@@ -553,6 +590,16 @@ class _OptionsPanel extends ConsumerWidget {
                     key: ValueKey('custom-$suffix'),
                     value: o.customTemplate!,
                     mono: true,
+                    vars: const [
+                      '{title}',
+                      '{en_title}',
+                      '{year}',
+                      '{season:02}',
+                      '{episode:02}',
+                      '{episode_title}',
+                      '{extra_info}',
+                      '{group}',
+                    ],
                     onChanged: (v) =>
                         _edit(ref, (o) => o.copyWith(customTemplate: () => v)),
                   ),
@@ -570,6 +617,48 @@ class _OptionsPanel extends ConsumerWidget {
               children: options,
             ),
           ),
+        ),
+        SectionLabel(
+          '替换规则',
+          trailing: TextButton.icon(
+            key: const ValueKey('add-rewrite'),
+            onPressed: () => _edit(
+              ref,
+              (o) => o.copyWith(
+                rewrites: [...o.rewrites, const NameRewrite('', '')],
+              ),
+            ),
+            icon: const Icon(CupertinoIcons.plus, size: 12),
+            label: const Text('添加'),
+          ),
+        ),
+        Panel(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          child: o.rewrites.isEmpty
+              ? Text(
+                  '生成名称后再按正则查找替换，文件和文件夹都生效。'
+                  r'比如把 Season (\d+) 换成 S$1',
+                  style: Theme.of(context).textTheme.bodySmall,
+                )
+              : Column(
+                  children: [
+                    for (final (i, r) in o.rewrites.indexed)
+                      _RewriteRow(
+                        key: ValueKey('rewrite-$suffix-$i'),
+                        value: r,
+                        onChanged: (v) => _edit(
+                          ref,
+                          (o) => o.copyWith(rewrites: [...o.rewrites]..[i] = v),
+                        ),
+                        onRemove: () => _edit(
+                          ref,
+                          (o) => o.copyWith(
+                            rewrites: [...o.rewrites]..removeAt(i),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
         ),
       ],
     );
@@ -617,17 +706,20 @@ class _StyleChip extends StatelessWidget {
   }
 }
 
-/// Text field that edits a provider-backed string.
+/// Text field that edits a provider-backed string; [vars] become buttons that
+/// insert a template variable at the cursor.
 class _TextOption extends StatefulWidget {
   final String value;
   final ValueChanged<String> onChanged;
   final bool mono;
+  final List<String> vars;
 
   const _TextOption({
     super.key,
     required this.value,
     required this.onChanged,
     this.mono = false,
+    this.vars = const [],
   });
 
   @override
@@ -655,16 +747,165 @@ class _TextOptionState extends State<_TextOption> {
     super.dispose();
   }
 
+  void _insert(String v) {
+    final sel = _c.selection;
+    final text = sel.isValid
+        ? _c.text.replaceRange(sel.start, sel.end, v)
+        : _c.text + v;
+    _c.value = TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(
+        offset: (sel.isValid ? sel.start : _c.text.length) + v.length,
+      ),
+    );
+    widget.onChanged(text);
+  }
+
   @override
-  Widget build(BuildContext context) => TextField(
-    controller: _c,
-    style: widget.mono
-        ? const TextStyle(
-            fontFamily: monoFamily,
-            fontFamilyFallback: [...monoFallback, ...sansFallback],
-            fontSize: 12.5,
-          )
-        : const TextStyle(fontSize: 13),
-    onChanged: widget.onChanged,
-  );
+  Widget build(BuildContext context) {
+    final field = TextField(
+      controller: _c,
+      style: widget.mono
+          ? const TextStyle(
+              fontFamily: monoFamily,
+              fontFamilyFallback: [...monoFallback, ...sansFallback],
+              fontSize: 12.5,
+            )
+          : const TextStyle(fontSize: 13),
+      onChanged: widget.onChanged,
+    );
+    if (widget.vars.isEmpty) return field;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        field,
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 4,
+          runSpacing: 4,
+          children: [
+            for (final v in widget.vars)
+              _StyleChip(label: v, selected: false, onTap: () => _insert(v)),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// One 查找 → 替换 rule. A pattern that doesn't compile is flagged and not saved.
+class _RewriteRow extends StatefulWidget {
+  final NameRewrite value;
+  final ValueChanged<NameRewrite> onChanged;
+  final VoidCallback onRemove;
+
+  const _RewriteRow({
+    super.key,
+    required this.value,
+    required this.onChanged,
+    required this.onRemove,
+  });
+
+  @override
+  State<_RewriteRow> createState() => _RewriteRowState();
+}
+
+class _RewriteRowState extends State<_RewriteRow> {
+  late final _find = TextEditingController(text: widget.value.pattern);
+  late final _to = TextEditingController(text: widget.value.replacement);
+  String? _error;
+
+  @override
+  void didUpdateWidget(_RewriteRow old) {
+    super.didUpdateWidget(old);
+    // Removing a row above shifts this one's value in.
+    if (old.value.pattern != widget.value.pattern ||
+        old.value.replacement != widget.value.replacement) {
+      if (_find.text != widget.value.pattern) {
+        _find.text = widget.value.pattern;
+        _error = null;
+      }
+      if (_to.text != widget.value.replacement) {
+        _to.text = widget.value.replacement;
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _find.dispose();
+    _to.dispose();
+    super.dispose();
+  }
+
+  void _changed() {
+    try {
+      RegExp(_find.text);
+    } on FormatException catch (e) {
+      setState(() => _error = '正则有误：${e.message}');
+      return;
+    }
+    setState(() => _error = null);
+    widget.onChanged(NameRewrite(_find.text, _to.text));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    const mono = TextStyle(
+      fontFamily: monoFamily,
+      fontFamilyFallback: [...monoFallback, ...sansFallback],
+      fontSize: 12.5,
+    );
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _find,
+                  style: mono,
+                  decoration: const InputDecoration(hintText: '查找（正则）'),
+                  onChanged: (_) => _changed(),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Icon(
+                  CupertinoIcons.arrow_right,
+                  size: 13,
+                  color: p.textFaint,
+                ),
+              ),
+              Expanded(
+                child: TextField(
+                  controller: _to,
+                  style: mono,
+                  decoration: const InputDecoration(hintText: r'替换为，$1 是分组'),
+                  onChanged: (_) => _changed(),
+                ),
+              ),
+              IconButton(
+                tooltip: '删除规则',
+                iconSize: 14,
+                icon: const Icon(CupertinoIcons.xmark),
+                onPressed: widget.onRemove,
+              ),
+            ],
+          ),
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                _error!,
+                style: TextStyle(fontSize: 12, color: p.danger),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 }

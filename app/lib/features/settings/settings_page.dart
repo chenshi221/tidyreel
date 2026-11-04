@@ -81,7 +81,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     final builtIn = ref.watch(builtInTmdbTokenProvider).isNotEmpty;
     return PageScaffold(
       title: '设置',
-      maxWidth: 760,
       child: ListView(
         padding: const EdgeInsets.fromLTRB(48, 0, 40, 28),
         children: [

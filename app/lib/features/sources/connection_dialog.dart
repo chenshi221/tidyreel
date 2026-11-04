@@ -252,7 +252,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
     return d == _davPath ? '/' : d.replaceFirst(RegExp('^$_davPath/'), '/');
   }
 
-  /// Empty 名称: last folder of 打开目录, else the host / local folder name.
+  /// Empty 名称: last folder of 连接路径, else the host / local folder name.
   String get _autoName {
     String last(String path) =>
         path.split(RegExp(r'[/\\]')).where((s) => s.isNotEmpty).lastOrNull ??
@@ -569,11 +569,11 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                       child: Divider(),
                     ),
                     FormRow(
-                      label: '打开目录',
-                      help: '点进这个连接时先打开这里，比如 /PC（可选）',
+                      label: '连接路径',
+                      help: '只能访问这个路径及以下，比如 /PC；留空可访问全部',
                       child: _withBrowse(
-                        field('打开目录', _start, hint: '/'),
-                        () => _browse(_start, '选择打开目录'),
+                        field('连接路径', _start, hint: '/'),
+                        () => _browse(_start, '选择连接路径'),
                       ),
                     ),
                     FormRow(

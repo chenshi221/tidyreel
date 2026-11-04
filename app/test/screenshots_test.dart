@@ -213,6 +213,13 @@ void main() {
     c.read(browserDirProvider.notifier).set('$root/动漫');
     await _settleTasks(tester);
     await _shot(tester, '13-map-anime');
+    c.read(browserDirProvider.notifier).set('$root/字幕包');
+    await _settleTasks(tester);
+    await _shot(tester, '15-map-crowded');
+    c.read(sidebarCollapsedProvider.notifier).set(true);
+    await _settleTasks(tester);
+    await _shot(tester, '16-sidebar-collapsed');
+    c.read(sidebarCollapsedProvider.notifier).set(false);
     c.read(browserDirProvider.notifier).set(root);
     c
         .read(settingsProvider.notifier)

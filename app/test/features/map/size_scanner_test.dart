@@ -51,7 +51,8 @@ void main() {
     expect(of('待分类'), BlockState.unorganized);
     expect(of('字幕包'), BlockState.other);
     expect(of('原声音乐'), BlockState.other);
-    expect(of('动漫'), BlockState.mixed);
+    // Named and foldered like a library, whoever did it.
+    expect(of('动漫'), BlockState.organized);
     // Subtitles inside an organized folder still count as 非视频.
     expect(s.statsOfDir('$root/电影').other, greaterThan(0));
   });
@@ -77,7 +78,7 @@ void main() {
     expect(s.statsOfDir(root).total, _sumUnder(root));
   });
 
-  test('map blocks: largest first, long tail folded into 其余', () async {
+  test('map blocks: every item shown until the cap, then 其余', () async {
     final s = _scanner(_Counting(MemoryStorageBackend(fakeLibrary)));
     await s.scan(root);
     final top = mapBlocksFor(s, root);
@@ -85,10 +86,112 @@ void main() {
     final bytes = top.map((b) => b.bytes).toList();
     expect(bytes.fold(0, (a, b) => a + b), _sumUnder(root));
 
-    // 字幕包: 120 near-equal tiny files → over the block cap, so 其余 appears.
     final subs = mapBlocksFor(s, '$root/字幕包');
-    expect(subs.length, lessThanOrEqualTo(37));
-    expect(subs.last.id, restId);
-    expect(subs.last.label, startsWith('其余 '));
+    expect(subs, hasLength(120));
+    expect(subs.any((b) => b.id == restId), isFalse);
+
+    final many = _scanner(
+      _Counting(
+        MemoryStorageBackend({
+          for (var i = 1; i <= 200; i++) '/x/f$i.mkv': 1000 + i,
+        }),
+      ),
+    );
+    await many.scan('/x');
+    final blocks = mapBlocksFor(many, '/x');
+    expect(blocks, hasLength(151));
+    expect(blocks.last.label, '其余 50 项');
+  });
+
+  test('fresh scan lists again and sees what changed', () async {
+    final mem = MemoryStorageBackend({'/x/a/1.mkv': 10});
+    final be = _Counting(mem);
+    final s = _scanner(be);
+    await s.scan('/x');
+    expect(s.statsOfDir('/x').total, 10);
+
+    final seen = be.lists;
+    await s.scan('/x');
+    expect(be.lists, seen);
+
+    await mem.remove('/x/a', ['1.mkv']);
+    await s.scan('/x', fresh: true);
+    expect(be.lists, greaterThan(seen));
+    expect(s.statsOfDir('/x').total, 0);
+  });
+
+  test('refreshing a subfolder leaves its parent to recount', () async {
+    final s = _scanner(_Counting(MemoryStorageBackend(fakeLibrary)));
+    await s.scan(root);
+    await s.forget('$root/下载');
+    expect(s.isComplete(root), isFalse);
+    expect(s.isListed('$root/剧集'), isTrue);
+    await s.scan(root);
+    expect(s.statsOfDir(root).total, _sumUnder(root));
+  });
+
+  test('hand marks beat everything, nearest one wins', () async {
+    var marks = <String, bool>{'$root/下载': true};
+    final s = SizeScanner(
+      backend: MemoryStorageBackend(fakeLibrary),
+      organizedOf: (paths) async => paths.where(fakeOrganized.contains).toSet(),
+      marks: () => marks,
+    );
+    await s.scan(root);
+    expect(blockStateOf(s.statsOfDir('$root/下载')), BlockState.organized);
+
+    marks = {'$root/动漫/海贼王 (1999)': false, '$root/动漫/咒术回战 (2020)': false};
+    s.marksChanged();
+    expect(
+      blockStateOf(s.statsOfDir('$root/动漫/海贼王 (1999)')),
+      BlockState.unorganized,
+    );
+    expect(blockStateOf(s.statsOfDir('$root/动漫')), BlockState.mixed);
+  });
+
+  group('looksOrganized', () {
+    RemoteEntry file(String path) => RemoteEntry(
+      path: path,
+      name: path.split('/').last,
+      isDir: false,
+      size: 1,
+    );
+    RemoteEntry dir(String path) => RemoteEntry(
+      path: path,
+      name: path.split('/').last,
+      isDir: true,
+      size: 0,
+    );
+
+    test('other tools\' libraries count', () {
+      for (final p in [
+        '/日漫/未来日记 (2011)/Season 01/未来日记 - S01E02.mkv',
+        '/日漫/未来日记 (2011)/未来日记.S01E02.mkv',
+        '/剧/The.Bear.2022/Season 1/the.bear.s01e02.mkv',
+        '/剧/老友记（1994）/老友记 1x02.mkv',
+        '/电影/盗梦空间 (2010)/盗梦空间.2010.2160p.mkv',
+        '/电影/Inception (2010) {tmdb-27205}/Inception (2010).mkv',
+      ]) {
+        expect(looksOrganized(file(p)), isTrue, reason: p);
+      }
+    });
+
+    test('raw downloads do not', () {
+      for (final p in [
+        '/下载/The.Bear.S03E02.2160p.mkv',
+        '/下载/Dune.Part.Two.2024.2160p.mkv',
+        '/下载/[Nekomoe] Dandadan/[Nekomoe] Dandadan - 01.mkv',
+        '/电影/盗梦空间 (2010)/movie.mkv',
+        '/合集2020/ep1.mkv',
+      ]) {
+        expect(looksOrganized(file(p)), isFalse, reason: p);
+      }
+    });
+
+    test('folders go by name', () {
+      expect(looksOrganized(dir('/剧/三体 (2023)')), isTrue);
+      expect(looksOrganized(dir('/下载/The.Bear.S03.2160p')), isFalse);
+      expect(looksOrganized(dir('/下载')), isFalse);
+    });
   });
 }

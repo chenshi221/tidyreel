@@ -71,8 +71,10 @@ List<MapCell> layoutOrganic(
     for (var i = 0; i < n; i++) {
       final a = polygonArea(cells[i]);
       if (a > 1e-6) sites[i] = polygonCentroid(cells[i]);
-      final ratio = a <= 1e-6 ? 1.5 : target[i] / a;
-      weights[i] = math.max(weights[i] * ratio, 1e-6);
+      // A cell of area A acts like a circle with r² = A/π, and a power cell's
+      // weight is that r². Additive, unlike scaling the weight by target/A,
+      // which starves small cells down to nothing on a crowded map.
+      weights[i] += (target[i] - a) / math.pi * 0.7;
     }
     // Site j stays inside its own cell iff w_j - w_i <= |p_i - p_j|² for
     // every i; trim weights that break it (the overgrown neighbour gives
