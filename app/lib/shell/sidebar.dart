@@ -127,7 +127,7 @@ class Sidebar extends ConsumerWidget {
     );
 
     Widget sectionTitle(String text) => Padding(
-      padding: const EdgeInsets.fromLTRB(10, 16, 10, 4),
+      padding: const EdgeInsets.fromLTRB(12, 22, 10, 6),
       child: Text(text, style: Theme.of(context).textTheme.labelSmall),
     );
 
@@ -135,12 +135,8 @@ class Sidebar extends ConsumerWidget {
       duration: const Duration(milliseconds: 180),
       curve: Curves.easeOutCubic,
       width: collapsed ? collapsedWidth : expandedWidth,
-      decoration: BoxDecoration(
-        color: p.sidebar,
-        border: Border(
-          right: BorderSide(color: p.line, width: hairline),
-        ),
-      ),
+      // One continuous sheet of paper with the content: no fill, no rule.
+      color: p.canvas,
       child: ClipRect(
         child: OverflowBox(
           alignment: Alignment.topLeft,
@@ -163,10 +159,7 @@ class Sidebar extends ConsumerWidget {
                   ),
                 if (collapsed && !mac) Center(child: toggle),
                 if (!collapsed) _Brand(trailing: mac ? null : toggle),
-                if (!collapsed)
-                  sectionTitle('资料库')
-                else
-                  const SizedBox(height: 12),
+                SizedBox(height: collapsed ? 12 : 26),
                 item(
                   '/sources',
                   CupertinoIcons.folder,
@@ -230,41 +223,16 @@ class _Brand extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = Palette.of(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 6, 0, 2),
+      padding: const EdgeInsets.fromLTRB(12, 6, 0, 2),
       child: Row(
         children: [
-          Container(
-            width: 22,
-            height: 22,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [Color.lerp(p.accent, Colors.white, 0.18)!, p.accent],
-              ),
-              borderRadius: BorderRadius.circular(6),
-              boxShadow: [
-                BoxShadow(
-                  color: p.accent.withValues(alpha: 0.35),
-                  blurRadius: 4,
-                  offset: const Offset(0, 1),
-                ),
-              ],
-            ),
-            child: const Icon(
-              CupertinoIcons.film_fill,
-              size: 12,
-              color: Colors.white,
-            ),
-          ),
-          const SizedBox(width: 9),
           Text(
             '理片',
             style: TextStyle(
               fontSize: 15,
-              fontWeight: FontWeight.w700,
+              fontWeight: FontWeight.w500,
               color: p.text,
-              letterSpacing: 0.5,
+              letterSpacing: 1,
             ),
           ),
           const SizedBox(width: 6),
@@ -304,23 +272,20 @@ class _NavItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
-    final iconW = Icon(
-      icon,
-      size: 16,
-      color: selected ? p.accent : p.textMuted,
-    );
+    final iconW = Icon(icon, size: 15, color: selected ? p.text : p.textFaint);
     final body = Hoverable(
       onTap: onTap,
       builder: (context, hover) => AnimatedContainer(
         duration: const Duration(milliseconds: 100),
-        height: 30,
-        margin: const EdgeInsets.only(bottom: 1),
-        padding: const EdgeInsets.symmetric(horizontal: 9),
+        height: 32,
+        margin: const EdgeInsets.only(bottom: 2),
+        padding: EdgeInsets.symmetric(horizontal: collapsed ? 9 : 12),
         decoration: BoxDecoration(
-          color: selected
-              ? p.accent.withValues(alpha: 0.13)
+          // Selection is the ink itself; only the collapsed rail gets a fill.
+          color: selected && collapsed
+              ? p.selected
               : (hover ? p.hover : Colors.transparent),
-          borderRadius: BorderRadius.circular(Radii.md),
+          borderRadius: BorderRadius.circular(Radii.lg),
         ),
         child: collapsed
             ? Center(
@@ -328,39 +293,30 @@ class _NavItem extends StatelessWidget {
                     ? iconW
                     : Badge(label: Text('$badge'), child: iconW),
               )
+            // Expanded: words only, like a table of contents.
             : Row(
                 children: [
-                  iconW,
-                  const SizedBox(width: 9),
                   Expanded(
                     child: Text(
                       label,
                       style: TextStyle(
-                        fontSize: 13,
-                        color: selected ? p.accent : p.text,
+                        fontSize: 14,
+                        color: selected ? p.text : p.textMuted,
                         fontWeight: selected
-                            ? FontWeight.w600
+                            ? FontWeight.w500
                             : FontWeight.w400,
                       ),
                     ),
                   ),
+                  // A quiet count in the accent: the one thing asking for you.
                   if (badge > 0)
-                    Container(
-                      constraints: const BoxConstraints(minWidth: 18),
-                      padding: const EdgeInsets.symmetric(horizontal: 5),
-                      decoration: BoxDecoration(
+                    Text(
+                      '$badge',
+                      style: TextStyle(
                         color: p.accent,
-                        borderRadius: BorderRadius.circular(9),
-                      ),
-                      child: Text(
-                        '$badge',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 11,
-                          height: 1.45,
-                          fontWeight: FontWeight.w600,
-                        ),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        fontFeatures: const [FontFeature.tabularFigures()],
                       ),
                     ),
                 ],
@@ -401,7 +357,7 @@ class _TaskItem extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(9, 6, 9, 7),
         decoration: BoxDecoration(
           color: hover ? p.hover : Colors.transparent,
-          borderRadius: BorderRadius.circular(Radii.md),
+          borderRadius: BorderRadius.circular(Radii.lg),
         ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -414,6 +370,8 @@ class _TaskItem extends StatelessWidget {
                       size: 14,
                       color: p.accent,
                     )
+                  : t.progress == null
+                  ? const Spinner(size: 14)
                   : SizedBox(
                       width: 14,
                       height: 14,
@@ -421,9 +379,9 @@ class _TaskItem extends StatelessWidget {
                         padding: const EdgeInsets.all(2),
                         child: CircularProgressIndicator(
                           value: t.progress,
-                          strokeWidth: 1.8,
-                          color: p.accent,
-                          backgroundColor: p.accent.withValues(alpha: 0.15),
+                          strokeWidth: 1.4,
+                          color: p.text,
+                          backgroundColor: p.selected,
                         ),
                       ),
                     ),
@@ -448,14 +406,6 @@ class _TaskItem extends StatelessWidget {
                       color: review ? p.accent : p.textFaint,
                     ),
                   ),
-                  if (!review && t.progress != null) ...[
-                    const SizedBox(height: 5),
-                    GradientProgress(
-                      value: t.progress!,
-                      color: p.accent,
-                      height: 3,
-                    ),
-                  ],
                 ],
               ),
             ),

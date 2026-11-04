@@ -10,6 +10,8 @@ import '../../data/settings.dart';
 import '../../ui/tokens.dart';
 import '../../ui/widgets.dart';
 import '../../widgets/common.dart';
+import '../map/map_providers.dart';
+import '../map/repo_map_view.dart';
 import 'connection_dialog.dart' show connectionTypeLabel;
 import 'scan_preview.dart';
 import 'sources_providers.dart';
@@ -135,6 +137,7 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
     final dir = ref.watch(browserDirProvider);
     final selection = ref.watch(browserSelectionProvider);
     final entries = ref.watch(browserEntriesProvider);
+    final mapMode = ref.watch(browserMapModeProvider);
     // Re-read favorites from the editor so the star reflects edits.
     final fav = ref
         .watch(connectionsEditorProvider)
@@ -253,113 +256,141 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 28, 0),
+            padding: const EdgeInsets.fromLTRB(40, 0, 40, 0),
             child: _Breadcrumbs(dir: dir, onTap: _goto),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(28, 6, 28, 12),
+            padding: const EdgeInsets.fromLTRB(48, 6, 40, 12),
             child: Wrap(
               spacing: 8,
               runSpacing: 8,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                SizedBox(
-                  width: 260,
-                  child: TextField(
-                    controller: _search,
-                    decoration: const InputDecoration(
-                      prefixIcon: Icon(CupertinoIcons.search, size: 14),
-                      hintText: '在当前文件夹内搜索',
+                Segmented<bool>(
+                  key: const ValueKey('browser-view'),
+                  options: const {false: '列表', true: '地图'},
+                  value: mapMode,
+                  onChanged: ref.read(browserMapModeProvider.notifier).set,
+                ),
+                if (!mapMode) ...[
+                  SizedBox(
+                    width: 260,
+                    child: TextField(
+                      controller: _search,
+                      decoration: const InputDecoration(
+                        prefixIcon: Icon(CupertinoIcons.search, size: 14),
+                        hintText: '在当前文件夹内搜索',
+                      ),
+                      onChanged: ref.read(browserSearchProvider.notifier).set,
                     ),
-                    onChanged: ref.read(browserSearchProvider.notifier).set,
                   ),
-                ),
-                _SortMenu(
-                  value: ref.watch(browserSortProvider),
-                  onChanged: ref.read(browserSortProvider.notifier).set,
-                ),
-                // Hook: browserEntriesProvider filters via HistoryStore.areOrganized.
-                FilterChip(
-                  label: const Text('只看未整理的'),
-                  selected: ref.watch(onlyUnorganizedProvider),
-                  onSelected: ref.read(onlyUnorganizedProvider.notifier).set,
-                ),
-                TextButton(
-                  onPressed: selectAll,
-                  child: Text(
-                    (entries.asData?.value ?? const []).isNotEmpty &&
-                            selection.containsAll(
-                              entries.asData!.value.map((e) => e.path),
-                            )
-                        ? '取消全选'
-                        : '全选',
+                  _SortMenu(
+                    value: ref.watch(browserSortProvider),
+                    onChanged: ref.read(browserSortProvider.notifier).set,
                   ),
-                ),
+                  // Hook: browserEntriesProvider filters via HistoryStore.areOrganized.
+                  FilterChip(
+                    label: const Text('只看未整理的'),
+                    selected: ref.watch(onlyUnorganizedProvider),
+                    onSelected: ref.read(onlyUnorganizedProvider.notifier).set,
+                  ),
+                  TextButton(
+                    onPressed: selectAll,
+                    child: Text(
+                      (entries.asData?.value ?? const []).isNotEmpty &&
+                              selection.containsAll(
+                                entries.asData!.value.map((e) => e.path),
+                              )
+                          ? '取消全选'
+                          : '全选',
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
           Expanded(
             child: Stack(
               children: [
-                Positioned.fill(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(28, 0, 28, 20),
-                    child: ContextMenuArea(
-                      items: folderMenu,
-                      child: Panel(
-                        child: entries.when(
-                          loading: () =>
-                              const Center(child: CircularProgressIndicator()),
-                          error: (e, _) => EmptyState(
-                            icon: CupertinoIcons.exclamationmark_triangle,
-                            title: '无法读取文件夹',
-                            message: '$e',
-                            action: OutlinedButton(
-                              onPressed: () =>
-                                  ref.invalidate(browserEntriesProvider),
-                              child: const Text('重试'),
+                if (mapMode)
+                  Positioned.fill(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(48, 4, 40, 20),
+                      child: RepoMapView(
+                        connection: c.id,
+                        dir: dir,
+                        onOpen: _goto,
+                        menuFor: entryMenu,
+                        onShowList: () => ref
+                            .read(browserMapModeProvider.notifier)
+                            .set(false),
+                      ),
+                    ),
+                  )
+                else
+                  Positioned.fill(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(48, 0, 40, 20),
+                      child: ContextMenuArea(
+                        items: folderMenu,
+                        child: Panel(
+                          child: entries.when(
+                            loading: () => const Center(
+                              child: CircularProgressIndicator(),
                             ),
-                          ),
-                          data: (list) => list.isEmpty
-                              ? const EmptyState(
-                                  icon: CupertinoIcons.folder,
-                                  title: '这个文件夹是空的',
-                                )
-                              : ListView.separated(
-                                  padding: EdgeInsets.fromLTRB(
-                                    6,
-                                    6,
-                                    6,
-                                    selection.isNotEmpty ? 96 : 6,
+                            error: (e, _) => EmptyState(
+                              icon: CupertinoIcons.exclamationmark_triangle,
+                              title: '无法读取文件夹',
+                              message: '$e',
+                              action: OutlinedButton(
+                                onPressed: () =>
+                                    ref.invalidate(browserEntriesProvider),
+                                child: const Text('重试'),
+                              ),
+                            ),
+                            data: (list) => list.isEmpty
+                                ? const EmptyState(
+                                    icon: CupertinoIcons.folder,
+                                    title: '这个文件夹是空的',
+                                  )
+                                : ListView.separated(
+                                    padding: EdgeInsets.fromLTRB(
+                                      6,
+                                      6,
+                                      6,
+                                      selection.isNotEmpty ? 96 : 6,
+                                    ),
+                                    itemCount: list.length,
+                                    separatorBuilder: (_, _) => const Divider(
+                                      indent: 16,
+                                      endIndent: 16,
+                                    ),
+                                    itemBuilder: (_, i) {
+                                      final e = list[i];
+                                      return ContextMenuArea(
+                                        key: ValueKey('menu ${e.name}'),
+                                        items: () => entryMenu(e),
+                                        child: _EntryTile(
+                                          entry: e,
+                                          anySelected: selection.isNotEmpty,
+                                          selected: selection.contains(e.path),
+                                          onToggle: () => ref
+                                              .read(
+                                                browserSelectionProvider
+                                                    .notifier,
+                                              )
+                                              .toggle(e.path),
+                                          onOpen: () => _goto(e.path),
+                                          onOrganize: () => _submit(e.path),
+                                        ),
+                                      );
+                                    },
                                   ),
-                                  itemCount: list.length,
-                                  separatorBuilder: (_, _) =>
-                                      const Divider(indent: 16, endIndent: 16),
-                                  itemBuilder: (_, i) {
-                                    final e = list[i];
-                                    return ContextMenuArea(
-                                      key: ValueKey('menu ${e.name}'),
-                                      items: () => entryMenu(e),
-                                      child: _EntryTile(
-                                        entry: e,
-                                        anySelected: selection.isNotEmpty,
-                                        selected: selection.contains(e.path),
-                                        onToggle: () => ref
-                                            .read(
-                                              browserSelectionProvider.notifier,
-                                            )
-                                            .toggle(e.path),
-                                        onOpen: () => _goto(e.path),
-                                        onOrganize: () => _submit(e.path),
-                                      ),
-                                    );
-                                  },
-                                ),
+                          ),
                         ),
                       ),
                     ),
                   ),
-                ),
                 if (selection.isNotEmpty)
                   Positioned(
                     left: 0,
@@ -603,10 +634,9 @@ class _Breadcrumbs extends StatelessWidget {
 }
 
 Color _entryColor(RemoteEntry e, Palette p) => switch (_entryIcon(e)) {
-  CupertinoIcons.folder_fill => p.accent.withValues(alpha: 0.85),
-  CupertinoIcons.film => seasonColor(2),
-  CupertinoIcons.captions_bubble => seasonColor(3),
-  _ => p.textMuted,
+  CupertinoIcons.folder_fill => p.textMuted,
+  CupertinoIcons.film => p.text,
+  _ => p.textFaint,
 };
 
 IconData _entryIcon(RemoteEntry e) {
@@ -651,10 +681,8 @@ class _EntryTile extends StatelessWidget {
         duration: const Duration(milliseconds: 100),
         padding: const EdgeInsets.fromLTRB(4, 7, 8, 7),
         decoration: BoxDecoration(
-          color: selected
-              ? p.accent.withValues(alpha: 0.10)
-              : (hover ? p.hover : Colors.transparent),
-          borderRadius: BorderRadius.circular(Radii.md),
+          color: selected ? p.selected : (hover ? p.hover : Colors.transparent),
+          borderRadius: BorderRadius.circular(Radii.lg),
         ),
         child: Row(
           children: [

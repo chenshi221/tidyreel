@@ -32,105 +32,71 @@ class SourcesPage extends ConsumerWidget {
       for (final c in conns)
         for (final f in c.favorites) (conn: c, path: f),
     ];
-    final add = FilledButton.icon(
+    final add = OutlinedButton.icon(
       onPressed: () => _edit(context, ref),
-      icon: const Icon(CupertinoIcons.plus, size: 14),
+      icon: const Icon(CupertinoIcons.plus, size: 13),
       label: const Text('添加连接'),
     );
-    return PageScaffold(
-      title: '来源',
-      subtitle: '连接 Alist、WebDAV 或本地文件夹，选择要整理的影视文件',
-      maxWidth: 1000,
-      actions: [if (conns.isNotEmpty) add],
-      child: conns.isEmpty
-          ? EmptyState(
-              icon: CupertinoIcons.cloud,
-              title: '还没有连接',
-              message: '添加一个 Alist、WebDAV 或本地文件夹，就可以开始整理了',
-              action: add,
-            )
-          : ListView(
-              padding: const EdgeInsets.fromLTRB(28, 0, 28, 28),
+    final theme = Theme.of(context);
+    if (conns.isEmpty) {
+      return PageScaffold(
+        title: '来源',
+        child: EmptyState(
+          icon: CupertinoIcons.cloud,
+          title: '还没有连接',
+          message: '添加一个 Alist、WebDAV 或本地文件夹，就可以开始整理了',
+          action: add,
+        ),
+      );
+    }
+    Widget label(String text) => Padding(
+      padding: const EdgeInsets.only(top: 36, bottom: 10),
+      child: Text(text, style: theme.textTheme.labelSmall),
+    );
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(48, 30, 32, 32),
+      children: [
+        Text(
+          '来源',
+          key: const ValueKey('page-title'),
+          style: theme.textTheme.displaySmall,
+        ),
+        const SizedBox(height: 28),
+        label('连接'),
+        for (var i = 0; i < conns.length; i++)
+          FadeIn(
+            index: i,
+            child: _ConnectionRow(connection: conns[i]),
+          ),
+        label('收藏'),
+        if (favorites.isEmpty)
+          Text(
+            '打开一个连接，在文件夹右上角点 ☆ 收藏，常用的下载目录就会出现在这里',
+            style: theme.textTheme.bodySmall,
+          )
+        else
+          for (final f in favorites)
+            _FavoriteRow(connection: f.conn, path: f.path),
+        if (done.isNotEmpty) ...[
+          label('最近整理'),
+          SizedBox(
+            height: 128,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
               children: [
-                if (done.isNotEmpty) ...[
-                  const SectionLabel('最近整理'),
-                  SizedBox(
-                    height: 186,
-                    child: ListView(
-                      scrollDirection: Axis.horizontal,
-                      children: [
-                        for (var i = 0; i < done.length; i++)
-                          FadeIn(
-                            index: i,
-                            child: _RecentTask(task: done[i]),
-                          ),
-                      ],
-                    ),
-                  ),
-                ],
-                const SectionLabel('连接'),
-                Panel(
-                  child: Rows(
-                    children: [
-                      for (var i = 0; i < conns.length; i++)
-                        FadeIn(
-                          index: i,
-                          child: _ConnectionRow(connection: conns[i]),
-                        ),
-                    ],
-                  ),
-                ),
-                const SectionLabel('收藏文件夹'),
-                if (favorites.isEmpty)
-                  Panel(
-                    padding: const EdgeInsets.all(Space.lg),
-                    child: Text(
-                      '打开一个连接，在文件夹右上角点 ☆ 收藏，常用的下载目录就会出现在这里',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  )
-                else
-                  Panel(
-                    child: Rows(
-                      children: [
-                        for (final f in favorites)
-                          ContextMenuArea(
-                            items: () => [
-                              MenuAction(
-                                '打开',
-                                () => openBrowser(ref, f.conn, f.path),
-                                icon: CupertinoIcons.folder,
-                              ),
-                              MenuAction(
-                                '取消收藏',
-                                () => ref
-                                    .read(connectionsEditorProvider.notifier)
-                                    .toggleFavorite(f.conn.id, f.path),
-                                icon: CupertinoIcons.star_slash,
-                                destructive: true,
-                              ),
-                            ],
-                            child: HoverRow(
-                              key: ValueKey('fav ${f.conn.id.value} ${f.path}'),
-                              leading: Icon(
-                                CupertinoIcons.star_fill,
-                                size: 20,
-                                color: Palette.of(context).accent,
-                              ),
-                              title: Text(f.path),
-                              subtitle: Text(f.conn.name),
-                              hoverTrailing: const Icon(
-                                CupertinoIcons.chevron_right,
-                                size: 13,
-                              ),
-                              onTap: () => openBrowser(ref, f.conn, f.path),
-                            ),
-                          ),
-                      ],
-                    ),
+                for (var i = 0; i < done.length; i++)
+                  FadeIn(
+                    index: i,
+                    child: _RecentTask(task: done[i]),
                   ),
               ],
             ),
+          ),
+        ],
+        const SizedBox(height: 36),
+        Align(alignment: Alignment.centerLeft, child: add),
+      ],
     );
   }
 }
@@ -184,6 +150,8 @@ Future<void> _delete(
   }
 }
 
+/// One connection as two lines of text: name, then type · address · status.
+/// The ring on the left picks which connection the map shows.
 class _ConnectionRow extends ConsumerWidget {
   final ConnectionConfig connection;
 
@@ -238,70 +206,93 @@ class _ConnectionRow extends ConsumerWidget {
           destructive: true,
         ),
       ],
-      child: HoverRow(
+      child: Hoverable(
         key: ValueKey('conn ${c.id.value}'),
-        padding: const EdgeInsets.fromLTRB(14, 11, 8, 11),
-        leading: IconTile(
-          connectionTypeIcon(c.type),
-          size: 34,
-          color: connectionTypeColor(c.type),
-          background: connectionTypeColor(c.type).withValues(alpha: 0.12),
-        ),
-        title: Text(c.name),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(meta, maxLines: 1, overflow: TextOverflow.ellipsis),
-            if (failed && value.detail != null) ...[
-              const SizedBox(height: 4),
-              Text(
-                value.detail!,
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: color, fontSize: 12),
+        onTap: () => openBrowser(ref, c),
+        builder: (context, hover) => AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          margin: const EdgeInsets.only(bottom: 2),
+          padding: const EdgeInsets.fromLTRB(0, 9, 0, 9),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      c.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: p.text,
+                        decoration: hover
+                            ? TextDecoration.underline
+                            : TextDecoration.none,
+                        decorationColor: p.textFaint,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      meta,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12, color: p.textFaint),
+                    ),
+                    const SizedBox(height: 2),
+                    StatusPill(label: label, color: color, busy: value == null),
+                    if (failed && value.detail != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        value.detail!,
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: color, fontSize: 12),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              if (failed)
+                IconButton(
+                  tooltip: '重新检测',
+                  icon: const Icon(CupertinoIcons.arrow_clockwise),
+                  onPressed: () =>
+                      ref.invalidate(connectionStatusProvider(c.id)),
+                ),
+              AnimatedOpacity(
+                duration: const Duration(milliseconds: 120),
+                opacity: hover || failed ? 1 : 0.35,
+                child: PopupMenuButton<String>(
+                  tooltip: '更多',
+                  icon: const Icon(CupertinoIcons.ellipsis, size: 16),
+                  onSelected: (v) {
+                    if (v == 'edit') _edit(context, ref, c);
+                    if (v == 'copy') _edit(context, ref, c, true);
+                    if (v == 'delete') _delete(context, ref, c);
+                  },
+                  itemBuilder: (_) => [
+                    const PopupMenuItem(
+                      value: 'edit',
+                      height: 30,
+                      child: Text('编辑'),
+                    ),
+                    const PopupMenuItem(
+                      value: 'copy',
+                      height: 30,
+                      child: Text('复制（同一服务器的另一个文件夹）'),
+                    ),
+                    PopupMenuItem(
+                      value: 'delete',
+                      height: 30,
+                      child: Text('删除', style: TextStyle(color: p.danger)),
+                    ),
+                  ],
+                ),
               ),
             ],
-          ],
-        ),
-        onTap: () => openBrowser(ref, c),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            StatusPill(label: label, color: color, busy: value == null),
-            const SizedBox(width: 4),
-            if (failed)
-              IconButton(
-                tooltip: '重新检测',
-                icon: const Icon(CupertinoIcons.arrow_clockwise),
-                onPressed: () => ref.invalidate(connectionStatusProvider(c.id)),
-              ),
-            PopupMenuButton<String>(
-              tooltip: '更多',
-              icon: const Icon(CupertinoIcons.ellipsis, size: 16),
-              onSelected: (v) {
-                if (v == 'edit') _edit(context, ref, c);
-                if (v == 'copy') _edit(context, ref, c, true);
-                if (v == 'delete') _delete(context, ref, c);
-              },
-              itemBuilder: (_) => [
-                const PopupMenuItem(
-                  value: 'edit',
-                  height: 30,
-                  child: Text('编辑'),
-                ),
-                const PopupMenuItem(
-                  value: 'copy',
-                  height: 30,
-                  child: Text('复制（同一服务器的另一个文件夹）'),
-                ),
-                PopupMenuItem(
-                  value: 'delete',
-                  height: 30,
-                  child: Text('删除', style: TextStyle(color: p.danger)),
-                ),
-              ],
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -309,6 +300,81 @@ class _ConnectionRow extends ConsumerWidget {
 }
 
 /// Posters of what one finished task organized; click opens its details.
+/// A favorite folder: same two lines and … menu as a connection.
+class _FavoriteRow extends ConsumerWidget {
+  final ConnectionConfig connection;
+  final String path;
+
+  const _FavoriteRow({required this.connection, required this.path});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final p = Palette.of(context);
+    final name = path.split('/').where((s) => s.isNotEmpty).lastOrNull ?? '根目录';
+    List<MenuAction?> menu() => [
+      MenuAction(
+        '打开',
+        () => openBrowser(ref, connection, path),
+        icon: CupertinoIcons.folder,
+      ),
+      MenuAction(
+        '取消收藏',
+        () => ref
+            .read(connectionsEditorProvider.notifier)
+            .toggleFavorite(connection.id, path),
+        icon: CupertinoIcons.star_slash,
+        destructive: true,
+      ),
+    ];
+    return ContextMenuArea(
+      items: menu,
+      child: Hoverable(
+        key: ValueKey('fav ${connection.id.value} $path'),
+        onTap: () => openBrowser(ref, connection, path),
+        builder: (context, hover) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: 9),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: p.text,
+                        decoration: hover
+                            ? TextDecoration.underline
+                            : TextDecoration.none,
+                        decorationColor: p.textFaint,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      '${connection.name}  ·  $path',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12, color: p.textFaint),
+                    ),
+                  ],
+                ),
+              ),
+              AnimatedOpacity(
+                duration: const Duration(milliseconds: 120),
+                opacity: hover ? 1 : 0.35,
+                child: MoreButton(items: menu),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _RecentTask extends ConsumerWidget {
   final TaskSummary task;
 
@@ -323,7 +389,7 @@ class _RecentTask extends ConsumerWidget {
       children: [
         for (final w in works.take(4))
           Padding(
-            padding: const EdgeInsets.only(right: 14),
+            padding: const EdgeInsets.only(right: 12),
             child: Hoverable(
               key: ValueKey('recent ${task.id.value} ${w.tmdbId}'),
               onTap: () => context.go('/tasks/${task.id.value}'),
@@ -331,11 +397,11 @@ class _RecentTask extends ConsumerWidget {
                 duration: const Duration(milliseconds: 160),
                 offset: Offset(0, hover ? -0.02 : 0),
                 child: SizedBox(
-                  width: 92,
+                  width: 64,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Poster(posterPath: w.posterPath, width: 92, height: 138),
+                      Poster(posterPath: w.posterPath, width: 64, height: 96),
                       const SizedBox(height: 6),
                       Text(
                         w.title,
@@ -343,8 +409,8 @@ class _RecentTask extends ConsumerWidget {
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: hover ? p.accent : p.text,
+                          fontWeight: FontWeight.w500,
+                          color: hover ? p.text : p.textMuted,
                         ),
                       ),
                       if (w.year != null)

@@ -438,13 +438,11 @@ class _GroupCard extends StatelessWidget {
         margin: const EdgeInsets.only(bottom: 4),
         padding: const EdgeInsets.fromLTRB(6, 8, 10, 8),
         decoration: BoxDecoration(
-          color: selected
-              ? p.accent.withValues(alpha: 0.10)
-              : (hover ? p.hover : Colors.transparent),
+          color: selected ? p.selected : (hover ? p.hover : Colors.transparent),
           borderRadius: BorderRadius.circular(Radii.lg),
           border: Border.all(
             color: selected
-                ? p.accent.withValues(alpha: 0.45)
+                ? p.text.withValues(alpha: 0.35)
                 : Colors.transparent,
           ),
         ),
@@ -740,6 +738,7 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
                   child: SizedBox(
                     height: 300,
                     child: Panel(
+                      framed: true,
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
@@ -897,9 +896,11 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
     // Which file each episode already gets, so double-booking shows.
     final taken = <EpisodeRef, String>{
       for (final r in widget.rows)
+        // Later files follow this one when it moves, so they never clash.
         if (r.file.path != row.file.path &&
             r.file.role == FileRole.video &&
-            !r.ignored)
+            !r.ignored &&
+            (episodeOf(r.file, null) ?? 0) < (episodeOf(row.file, null) ?? 0))
           ?targetRef(r): r.file.name,
     };
     return ref
@@ -930,7 +931,7 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
                       ),
                       decoration: BoxDecoration(
                         color: ref == picked
-                            ? p.accent.withValues(alpha: 0.10)
+                            ? p.selected
                             : hover
                             ? p.hover
                             : Colors.transparent,
@@ -998,7 +999,15 @@ class WorkHeader extends StatelessWidget {
   final MediaGroup group;
   final GroupDecision? decision;
 
-  const WorkHeader({super.key, required this.group, required this.decision});
+  /// Season shown below: its poster replaces the show's when TMDB has one.
+  final int? season;
+
+  const WorkHeader({
+    super.key,
+    required this.group,
+    required this.decision,
+    this.season,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1006,7 +1015,8 @@ class WorkHeader extends StatelessWidget {
     final theme = Theme.of(context);
     final g = group;
     final m = effectiveMatch(g, decision);
-    final detail = g.show?.info.tmdbId == m?.tmdbId ? g.show?.info : null;
+    final detailShow = g.show?.info.tmdbId == m?.tmdbId ? g.show : null;
+    final detail = detailShow?.info;
     final backdrop = m?.backdropPath ?? detail?.backdropPath;
     final overview = m?.overview ?? detail?.overview;
     final genres = (detail?.genres.isNotEmpty ?? false)
@@ -1089,7 +1099,12 @@ class WorkHeader extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Poster(
-                  posterPath: m?.posterPath,
+                  posterPath:
+                      detailShow?.seasons
+                          .where((x) => x.number == season)
+                          .firstOrNull
+                          ?.posterPath ??
+                      m?.posterPath,
                   icon: isTv ? CupertinoIcons.tv : CupertinoIcons.film,
                   width: 112,
                   height: 168,
@@ -1106,7 +1121,7 @@ class WorkHeader extends StatelessWidget {
                         children: [
                           Flexible(
                             child: Text(
-                              m?.title ?? g.anchorTitle,
+                              detail?.title ?? m?.title ?? g.anchorTitle,
                               style: theme.textTheme.headlineSmall?.copyWith(
                                 color: fg,
                               ),
@@ -1308,7 +1323,7 @@ class DetailPane extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
       children: [
-        WorkHeader(group: group, decision: decision),
+        WorkHeader(group: group, decision: decision, season: current),
         if (!(decision?.selected ?? true)) ...[
           const SizedBox(height: 10),
           Container(
@@ -2119,7 +2134,7 @@ class _OptionRow extends StatelessWidget {
                     ? CupertinoIcons.largecircle_fill_circle
                     : CupertinoIcons.circle,
                 size: 15,
-                color: selected ? p.accent : p.lineStrong,
+                color: selected ? p.text : p.lineStrong,
               ),
             ),
             const SizedBox(width: 10),

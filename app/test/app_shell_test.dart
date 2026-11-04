@@ -40,7 +40,7 @@ void main() {
     ], OrganizeMode.inPlace);
     await tester.pump(const Duration(milliseconds: 50));
     expect(find.text('后台任务'), findsOneWidget);
-    expect(find.text('完成'), findsOneWidget);
+    expect(find.text('完成'), findsWidgets); // sidebar task + favorite row
 
     await tester.tap(find.byTooltip('收起侧栏'));
     await tester.pumpAndSettle();

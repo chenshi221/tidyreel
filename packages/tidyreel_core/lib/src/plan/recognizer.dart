@@ -196,40 +196,23 @@ class AnchorRecognizer implements Recognizer {
     return drafts;
   }
 
-  /// A selected folder named after the only work inside it, one level down
-  /// ("Show/[Group] Show [01-12]/01.mkv"), becomes that work's folder: it is
-  /// the one renamed, and the inner folder turns into the season folder. With
-  /// several works inside, each keeps its own folder.
+  /// A selected folder holding a single work one level down ("Show/[Group] Show
+  /// [01-12]/01.mkv") becomes that work's folder: it is the one renamed, and the
+  /// inner folder turns into the season folder. With several works inside, each
+  /// keeps its own folder. A top-level folder may be a storage mount: left alone.
   List<_Draft> _promoteToRoots(List<_Draft> drafts, List<String> rootDirs) {
     final out = [...drafts];
     for (final root in rootDirs) {
-      if (root == '/' || _structural.hasMatch(baseOf(root))) continue;
+      if (root.lastIndexOf('/') <= 0 || _structural.hasMatch(baseOf(root))) {
+        continue;
+      }
       final inside = out
           .where((d) => d.dir == root || d.dir.startsWith('$root/'))
           .toList();
       if (inside.length != 1) continue;
       final d = inside.single;
       if (d.dir == root || dirOf(d.dir) != root) continue;
-      final title = parser
-          .parse(
-            baseOf(root),
-            parentDirs: [
-              for (var p = dirOf(root); p != '/'; p = dirOf(p)) baseOf(p),
-            ],
-          )
-          .title;
-      // Only when the folder is named after the work: "下载" holding one show
-      // is a container, not the show's folder.
-      final names = [
-        ?d.folderTitle,
-        for (final v in d.videos.take(5)) ?v.file.parsed?.title,
-      ];
-      if (title == null ||
-          normTitle(title).isEmpty ||
-          !names.any((n) => similarity(title, n) >= 0.8)) {
-        continue;
-      }
-      out[out.indexOf(d)] = _Draft(root, d.videos, title, true);
+      out[out.indexOf(d)] = _Draft(root, d.videos, d.folderTitle, true);
     }
     return out;
   }

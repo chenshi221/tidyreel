@@ -16,6 +16,8 @@ const _overflowWarning = '超出 TMDB 总集数';
 /// Owner: Agent D. Turns a recognized scan + user decisions into ops, with conflict
 /// detection (PLAN §4.3 rule 1). Subtitles follow their video, specials go to
 /// Season 00, extras to Extras/, junk becomes unselected delete ops.
+final _han = RegExp(r'[\u4e00-\u9fff]');
+
 abstract interface class Planner {
   /// [existing] lists paths already present at the targets (for conflict checks);
   /// the caller fetches it from the backend.
@@ -313,7 +315,11 @@ class _PlanBuilder {
 
     // --- folders
     final groupSelected = items.any((it) => it.selected);
-    final titleVars = _titleVars(match, naming, g.anchorTitle);
+    final titleVars = _titleVars(
+      _chineseNamed(match, show),
+      naming,
+      g.anchorTitle,
+    );
     final folderVars = {
       ...titleVars,
       if (naming.titleLanguage == TitleLanguage.englishFirst &&
@@ -571,8 +577,9 @@ class _PlanBuilder {
     }
   }
 
-  /// A group "owns" its folder when nothing else lives in it and its name is about the
-  /// same title; only then is the folder itself renamed.
+  /// A group "owns" its folder when nothing else lives in it and it is what the user
+  /// imported (or below it), or the folder is named after the title; only then is the
+  /// folder itself renamed. A top-level folder may be a storage mount: name match only.
   bool _owns(MediaGroup g, Candidate match) {
     final prefix = g.rootDir == '/' ? '/' : '${g.rootDir}/';
     final shared = scan.groups.any(
@@ -582,6 +589,12 @@ class _PlanBuilder {
               o.files.any((f) => f.path.startsWith(prefix))),
     );
     if (shared) return false;
+    final imported =
+        g.rootDir.lastIndexOf('/') > 0 &&
+        scan.roots.any(
+          (r) => r == '/' || r == g.rootDir || g.rootDir.startsWith('$r/'),
+        );
+    if (imported) return true;
     final folder = normTitle(baseOf(g.rootDir));
     return [g.anchorTitle, match.title, match.englishTitle, match.originalTitle]
         .whereType<String>()
@@ -624,6 +637,29 @@ class _PlanBuilder {
   }
 
   // ---- helpers ------------------------------------------------------------
+
+  /// TMDB has no Chinese name for some shows, and show() then falls back to a
+  /// Chinese alias: name the files with it ("流人", not "Slow Horses").
+  Candidate _chineseNamed(Candidate c, ShowDetail? show) {
+    final t = show?.info.title;
+    if (t == null || show!.info.tmdbId != c.tmdbId || t == c.title) return c;
+    if (_han.hasMatch(c.title) || !_han.hasMatch(t)) return c;
+    return Candidate(
+      tmdbId: c.tmdbId,
+      kind: c.kind,
+      title: t,
+      englishTitle: c.englishTitle ?? c.title,
+      originalTitle: c.originalTitle,
+      year: c.year,
+      posterPath: c.posterPath,
+      originCountry: c.originCountry,
+      voteAverage: c.voteAverage,
+      overview: c.overview,
+      backdropPath: c.backdropPath,
+      genres: c.genres,
+      aliases: c.aliases,
+    );
+  }
 
   /// [local] is the title already on disk: when TMDB's differs only in
   /// punctuation ("全金属狂潮" vs "全金属狂潮！"), keep it rather than rename

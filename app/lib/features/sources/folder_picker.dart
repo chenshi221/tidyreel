@@ -123,7 +123,7 @@ class _FolderPickerState extends State<_FolderPicker> {
                                     Icon(
                                       CupertinoIcons.folder_fill,
                                       size: 16,
-                                      color: p.accent.withValues(alpha: 0.85),
+                                      color: p.textMuted,
                                     ),
                                     const SizedBox(width: 10),
                                     Expanded(

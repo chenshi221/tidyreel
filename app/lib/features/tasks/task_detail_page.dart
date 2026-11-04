@@ -127,7 +127,7 @@ class TaskDetailPage extends ConsumerWidget {
           // Progress steps (导入 → 识别 → … → 文件夹) while it runs.
           if (task != null)
             Padding(
-              padding: const EdgeInsets.fromLTRB(28, 0, 28, 12),
+              padding: const EdgeInsets.fromLTRB(48, 0, 40, 12),
               child: TaskCard(task: task),
             ),
           Expanded(
@@ -207,7 +207,7 @@ class _Body extends StatelessWidget {
     ];
     final other = byGroup[null];
     return ListView(
-      padding: const EdgeInsets.fromLTRB(28, 0, 28, 24),
+      padding: const EdgeInsets.fromLTRB(48, 0, 40, 24),
       children: [
         for (final (g, rs) in sections) ...[
           _WorkSection(
