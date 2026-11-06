@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:path/path.dart' as p;
 
 import '../model/scan.dart';
@@ -8,6 +10,9 @@ import '../storage/storage_backend.dart';
 class MemoryStorageBackend implements StorageBackend {
   /// path -> size; directories are stored with size -1.
   final Map<String, int> _nodes = {'/': -1};
+
+  /// Content of files made by [write] (others read as empty).
+  final Map<String, List<int>> _content = {};
 
   MemoryStorageBackend([Map<String, int> files = const {}]) {
     files.forEach(addFile);
@@ -50,7 +55,9 @@ class MemoryStorageBackend implements StorageBackend {
       throw StorageException(StorageErrorCode.alreadyExists, to);
     }
     for (final k in _subtree(from)) {
-      _nodes['$to${k.substring(from.length)}'] = _nodes.remove(k)!;
+      final to2 = '$to${k.substring(from.length)}';
+      _nodes[to2] = _nodes.remove(k)!;
+      if (_content.remove(k) case final c?) _content[to2] = c;
     }
   }
 
@@ -105,12 +112,37 @@ class MemoryStorageBackend implements StorageBackend {
       if (!_nodes.containsKey(path)) {
         throw StorageException(StorageErrorCode.notFound, path);
       }
-      _subtree(path).forEach(_nodes.remove);
+      for (final k in _subtree(path)) {
+        _nodes.remove(k);
+        _content.remove(k);
+      }
     }
   }
 
   @override
   Future<bool> exists(String path) async => _nodes.containsKey(path);
+
+  @override
+  Future<List<int>> read(String path) async {
+    final size = _nodes[path];
+    if (size == null || size < 0) {
+      throw StorageException(StorageErrorCode.notFound, path);
+    }
+    return _content[path] ?? const [];
+  }
+
+  @override
+  Future<void> write(String path, List<int> bytes) async {
+    if (_nodes.containsKey(path)) {
+      throw StorageException(StorageErrorCode.alreadyExists, path);
+    }
+    addFile(path, bytes.length);
+    _content[path] = List.unmodifiable(bytes);
+  }
+
+  /// Text of a file made by [write] (for tests).
+  String? textOf(String path) =>
+      _content[path] == null ? null : utf8.decode(_content[path]!);
 
   @override
   Future<void> ping() async {}

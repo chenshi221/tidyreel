@@ -25,6 +25,12 @@ class HookBackend implements StorageBackend {
   Future<void> mkdirs(String dir) =>
       _c('mkdirs', [dir], () => inner.mkdirs(dir));
   @override
+  Future<List<int>> read(String path) =>
+      _c('read', [path], () => inner.read(path));
+  @override
+  Future<void> write(String path, List<int> bytes) =>
+      _c('write', [path], () => inner.write(path, bytes));
+  @override
   Future<void> rename(String path, String newName) =>
       _c('rename', [path, newName], () => inner.rename(path, newName));
   @override

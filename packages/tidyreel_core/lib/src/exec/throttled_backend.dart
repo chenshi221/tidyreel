@@ -97,5 +97,12 @@ class ThrottledBackend implements StorageBackend {
   Future<bool> exists(String path) => _call(() => inner.exists(path));
 
   @override
+  Future<List<int>> read(String path) => _call(() => inner.read(path));
+
+  @override
+  Future<void> write(String path, List<int> bytes) =>
+      _call(() => inner.write(path, bytes));
+
+  @override
   Future<void> ping() => _call(inner.ping);
 }

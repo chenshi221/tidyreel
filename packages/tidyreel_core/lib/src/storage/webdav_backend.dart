@@ -209,6 +209,58 @@ class WebDAVBackend implements StorageBackend {
   }
 
   @override
+  Future<List<int>> read(String path) async {
+    final Response<List<int>> r;
+    try {
+      r = await _dio.getUri<List<int>>(
+        _uri(path),
+        options: Options(responseType: ResponseType.bytes),
+      );
+    } on DioException catch (e) {
+      throw StorageException(
+        StorageErrorCode.network,
+        'GET $path: ${e.message}',
+      );
+    }
+    if (r.statusCode != 200) throw _fail(r, path);
+    return r.data ?? const [];
+  }
+
+  @override
+  Future<void> write(String path, List<int> bytes) async {
+    // Not every server honours If-None-Match, so check first as well.
+    if (await exists(path)) {
+      throw StorageException(StorageErrorCode.alreadyExists, path);
+    }
+    await mkdirs(p.posix.dirname(path));
+    final Response<dynamic> r;
+    try {
+      r = await _dio.putUri<dynamic>(
+        _uri(path),
+        data: Stream.value(bytes),
+        options: Options(
+          headers: {
+            'If-None-Match': '*',
+            Headers.contentLengthHeader: bytes.length,
+            Headers.contentTypeHeader: 'application/octet-stream',
+          },
+        ),
+      );
+    } on DioException catch (e) {
+      throw StorageException(
+        StorageErrorCode.network,
+        'PUT $path: ${e.message}',
+      );
+    }
+    if (r.statusCode == 412) {
+      throw StorageException(StorageErrorCode.alreadyExists, path);
+    }
+    if (r.statusCode != 201 && r.statusCode != 204 && r.statusCode != 200) {
+      throw _fail(r, path);
+    }
+  }
+
+  @override
   Future<void> mkdirs(String dir) async {
     // shortcut: MKCOL on an existing *file* also answers 405, so that case reads as
     // "exists" here; Memory/Local throw alreadyExists. Acceptable: planner never does it.

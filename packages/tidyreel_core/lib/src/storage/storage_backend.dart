@@ -27,6 +27,13 @@ abstract interface class StorageBackend {
 
   Future<bool> exists(String path);
 
+  /// The whole content of a (small) file: .nfo, artwork.
+  Future<List<int>> read(String path);
+
+  /// Creates file [path] (parents too) with [bytes]. Never overwrites: an
+  /// existing [path] throws [StorageErrorCode.alreadyExists].
+  Future<void> write(String path, List<int> bytes);
+
   /// Cheap connectivity / auth check for the 已连接 badge.
   Future<void> ping();
 }

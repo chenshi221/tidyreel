@@ -391,7 +391,12 @@ class DefaultTaskManager implements TaskManager {
           imported: files.length,
         ),
       );
-      final scan = await recognizer.recognize(s.connection, s.paths, files);
+      final scan = await recognizer.recognize(
+        s.connection,
+        s.paths,
+        files,
+        read: be.read,
+      );
       if (t.cancelled) return;
       _emit(
         t,

@@ -18,7 +18,9 @@ ConnectionConfig cfg(ConnectionType type, String endpoint) => ConnectionConfig(
 
 Future<(MockAlist, MockServer)> startAlist(Map<String, int> files) async {
   final mock = MockAlist(files);
-  return (mock, await MockServer.start(mock.handle));
+  final server = await MockServer.start(mock.handle);
+  mock.origin = server.url;
+  return (mock, server);
 }
 
 Future<StorageBackend> makeLocal(Map<String, int> files) async {

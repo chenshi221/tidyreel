@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:tidyreel_core/tidyreel_core.dart';
 import 'package:test/test.dart';
 
@@ -152,6 +154,25 @@ void storageContract(
         be.remove('/', ['nope.txt']),
         throwsStorage(StorageErrorCode.notFound),
       );
+    });
+
+    test(
+      'write creates parents and never overwrites; read returns it',
+      () async {
+        final bytes = utf8.encode('<tvshow><title>示例</title></tvshow>');
+        await be.write('/剧集/新 剧 (2024)/tvshow.nfo', bytes);
+        expect(await be.read('/剧集/新 剧 (2024)/tvshow.nfo'), bytes);
+        expect(await be.exists('/剧集/新 剧 (2024)/tvshow.nfo'), isTrue);
+        await expectLater(
+          be.write('/a.txt', [1, 2]),
+          throwsStorage(StorageErrorCode.alreadyExists),
+        );
+        expect(await sizes(be, '/'), containsPair('a.txt', 5));
+      },
+    );
+
+    test('read of a missing file is notFound', () {
+      expect(be.read('/nope.nfo'), throwsStorage(StorageErrorCode.notFound));
     });
 
     test('ping succeeds', () => be.ping());

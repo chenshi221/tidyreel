@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:math';
 
 import '../model/ids.dart';
@@ -14,12 +15,15 @@ import 'text.dart';
 
 /// Owner: Agent D. Classify + parse + anchor grouping + TMDB match (PLAN §1 step 4).
 abstract interface class Recognizer {
-  /// [files] is the recursive listing of [roots] (files only).
+  /// [files] is the recursive listing of [roots] (files only). [read]
+  /// fetches a file's content (already-scraped .nfo); without it nothing is
+  /// read.
   Future<ScanResult> recognize(
     ConnectionId connection,
     List<String> roots,
-    List<RemoteEntry> files,
-  );
+    List<RemoteEntry> files, {
+    Future<List<int>> Function(String path)? read,
+  });
 }
 
 /// Below this, a TMDB hit is not accepted and the group is left for manual matching.
@@ -68,9 +72,14 @@ class AnchorRecognizer implements Recognizer {
   Future<ScanResult> recognize(
     ConnectionId connection,
     List<String> roots,
-    List<RemoteEntry> files,
-  ) async {
+    List<RemoteEntry> files, {
+    Future<List<int>> Function(String path)? read,
+  }) async {
     final rootDirs = [for (final r in roots) _trimSlash(r)];
+    final nfos = {
+      for (final e in files)
+        if (!e.isDir && e.name.toLowerCase().endsWith('.nfo')) e.path,
+    };
     final entries = files.where((e) => !e.isDir).toList()
       ..sort((a, b) => a.path.compareTo(b.path));
 
@@ -124,7 +133,10 @@ class AnchorRecognizer implements Recognizer {
     for (var i = 0; i < drafts.length; i += 4) {
       looked.addAll(
         await Future.wait(
-          drafts.skip(i).take(4).map((d) => _lookup(d, cache, h, rules)),
+          drafts
+              .skip(i)
+              .take(4)
+              .map((d) => _lookup(d, cache, h, rules, nfos, read)),
         ),
       );
     }
@@ -258,6 +270,8 @@ class AnchorRecognizer implements Recognizer {
     Map<String, Future<List<Candidate>>> cache,
     MediaHint hint,
     TitleRules rules,
+    Set<String> nfos,
+    Future<List<int>> Function(String path)? read,
   ) async {
     final vids = [for (final v in d.videos) v.file];
     final main = vids.where((v) => v.parsed?.kind != MediaKind.extra).toList();
@@ -344,10 +358,14 @@ class AnchorRecognizer implements Recognizer {
               names.any((n) => n.contains(p.keyword.trim().toLowerCase())),
         )
         .firstOrNull;
-    if (pin != null) {
-      match = pin.match;
+    final scraped = pin == null && read != null
+        ? await _fromNfo(d, vids, nfos, read)
+        : null;
+    if (pin != null || scraped != null) {
+      // 指定匹配, or the TMDB id an earlier scrape left in tvshow/movie.nfo.
+      match = pin?.match ?? scraped;
       score = 1;
-      kind = pin.match.kind == MediaKind.movie
+      kind = match!.kind == MediaKind.movie
           ? MediaKind.movie
           : MediaKind.episode;
     } else {
@@ -394,6 +412,45 @@ class AnchorRecognizer implements Recognizer {
         ? await metadata.show(match!.tmdbId)
         : null;
     return _Lookup(d, vids, kind, anchor, year, match, score, show);
+  }
+
+  static final _nfoRootRe = RegExp(r'<(tvshow|movie)\b', caseSensitive: false);
+  static final _nfoTmdbRe = RegExp(
+    r'<uniqueid\b[^>]*type="tmdb"[^>]*>\s*(\d+)\s*<|<tmdbid>\s*(\d+)\s*<',
+    caseSensitive: false,
+  );
+
+  /// The work named by an already-scraped folder: `tvshow.nfo` / `movie.nfo`
+  /// in it, or `<video>.nfo` next to a lone video. Episode nfos are skipped
+  /// (their id is the episode's). Unreadable or id-less nfos give null.
+  Future<Candidate?> _fromNfo(
+    _Draft d,
+    List<ScanFile> vids,
+    Set<String> nfos,
+    Future<List<int>> Function(String path) read,
+  ) async {
+    final paths = [
+      joinPath(d.dir, 'tvshow.nfo'),
+      joinPath(d.dir, 'movie.nfo'),
+      if (vids.length == 1)
+        joinPath(dirOf(vids.single.path), '${stem(vids.single.name)}.nfo'),
+    ];
+    for (final path in paths.where(nfos.contains)) {
+      try {
+        final text = utf8.decode(await read(path), allowMalformed: true);
+        final root = _nfoRootRe.firstMatch(text)?[1]?.toLowerCase();
+        final m = _nfoTmdbRe.firstMatch(text);
+        final id = int.tryParse(m?[1] ?? m?[2] ?? '');
+        if (root == null || id == null) continue;
+        return root == 'movie'
+            ? (await metadata.movie(id)).info
+            : (await metadata.show(id)).info;
+      } on Object {
+        // A broken nfo or a TMDB hiccup: fall back to searching.
+        continue;
+      }
+    }
+    return null;
   }
 
   MediaGroup _toGroup(_Lookup l, Set<String> usedIds) {
