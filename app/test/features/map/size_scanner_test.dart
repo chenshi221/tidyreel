@@ -163,14 +163,17 @@ void main() {
       size: 0,
     );
 
-    test('other tools\' libraries count', () {
+    test('our layout counts', () {
       for (final p in [
         '/日漫/未来日记 (2011)/Season 01/未来日记 - S01E02.mkv',
-        '/日漫/未来日记 (2011)/未来日记.S01E02.mkv',
-        '/剧/The.Bear.2022/Season 1/the.bear.s01e02.mkv',
-        '/剧/老友记（1994）/老友记 1x02.mkv',
-        '/电影/盗梦空间 (2010)/盗梦空间.2010.2160p.mkv',
+        '/日漫/未来日记 (2011) {tmdb-1}/Season 1/未来日记 S01E02 1080p.mkv',
+        '/日漫/未来日记 (2011)/Specials/未来日记 - S00E01.mkv',
         '/电影/Inception (2010) {tmdb-27205}/Inception (2010).mkv',
+        '/电影/盗梦空间 (2010)/盗梦空间 (2010) - 2160p.mkv',
+        '/电影/盗梦空间 (2010)/盗梦空间.Inception.2010.mkv',
+        // Filmix: single digits, and no season folder for one season.
+        '/日漫/死神 (2004)/Season 2/死神 - S02E03.mkv',
+        '/日漫/未来日记 (2011)/未来日记 - S01E02.mkv',
       ]) {
         expect(looksOrganized(file(p)), isTrue, reason: p);
       }
@@ -183,6 +186,13 @@ void main() {
         '/下载/[Nekomoe] Dandadan/[Nekomoe] Dandadan - 01.mkv',
         '/电影/盗梦空间 (2010)/movie.mkv',
         '/合集2020/ep1.mkv',
+        // Close, but not our format.
+        '/日漫/未来日记 (2011)/Season 02/未来日记 - S01E02.mkv',
+        '/日漫/未来日记/Season 01/未来日记 - S01E02.mkv',
+        '/日漫/未来日记 (2011)/Season 01/[Sub] 未来日记 - 02.mkv',
+        '/剧/The.Bear.2022/Season 1/the.bear.s01e02.mkv',
+        '/剧/老友记（1994）/老友记 1x02.mkv',
+        '/电影/盗梦空间 (2010)/Inception.mkv',
       ]) {
         expect(looksOrganized(file(p)), isFalse, reason: p);
       }
@@ -190,6 +200,9 @@ void main() {
 
     test('folders go by name', () {
       expect(looksOrganized(dir('/剧/三体 (2023)')), isTrue);
+      expect(looksOrganized(dir('/剧/三体 (2023)/Season 01')), isTrue);
+      expect(looksOrganized(dir('/剧/The.Bear.2022')), isFalse);
+      expect(looksOrganized(dir('/下载/Season 01')), isFalse);
       expect(looksOrganized(dir('/下载/The.Bear.S03.2160p')), isFalse);
       expect(looksOrganized(dir('/下载')), isFalse);
     });

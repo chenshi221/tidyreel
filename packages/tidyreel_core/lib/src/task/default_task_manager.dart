@@ -503,35 +503,36 @@ class DefaultTaskManager implements TaskManager {
   Future<RenamePlan> _plan(_Task t) async {
     final s = t.summary;
     final opts = options(s.connection, s.mode);
-    var plan = await planner.build(t.scan!, t.decisions, opts);
-    final srcs = {
-      for (final o in plan.ops)
-        if (o.selected && o.src.isNotEmpty) o.src,
-    };
-    final dsts = [
-      for (final o in plan.ops)
-        if (o.selected && o.kind != OpKind.delete && !srcs.contains(o.dst))
-          o.dst,
-    ];
     final be = backendFor(s.connection);
-    // One listing per target folder instead of one request per target.
-    final byDir = <String, List<String>>{};
-    for (final d in dsts) {
-      (byDir[p.posix.dirname(d)] ??= []).add(d);
-    }
+    // What's already in each target folder: for conflicts (never overwrite),
+    // and so a show folder already there is merged into. Planning again can
+    // send files to new folders (a merge moves them), so look again until no
+    // new folder turns up.
     final existing = <String>{};
-    await walkDirs(byDir.keys, (dir) async {
-      final Set<String> names;
-      try {
-        names = {for (final e in await listFresh(be, dir)) e.path};
-      } on StorageException catch (e) {
-        if (e.code == StorageErrorCode.notFound) return const [];
-        rethrow;
-      }
-      existing.addAll(byDir[dir]!.where(names.contains));
-      return const [];
-    });
-    if (existing.isNotEmpty) {
+    final listed = <String>{};
+    var plan = await planner.build(t.scan!, t.decisions, opts);
+    for (var round = 0; round < 3; round++) {
+      final srcs = {
+        for (final o in plan.ops)
+          if (o.selected && o.src.isNotEmpty) o.src,
+      };
+      final dirs = {
+        for (final o in plan.ops)
+          if (o.selected && o.kind != OpKind.delete && !srcs.contains(o.dst))
+            p.posix.dirname(o.dst),
+      }.difference(listed);
+      if (dirs.isEmpty) break;
+      listed.addAll(dirs);
+      final before = existing.length;
+      await walkDirs(dirs, (dir) async {
+        try {
+          existing.addAll([for (final e in await listFresh(be, dir)) e.path]);
+        } on StorageException catch (e) {
+          if (e.code != StorageErrorCode.notFound) rethrow;
+        }
+        return const [];
+      });
+      if (existing.length == before) break;
       plan = await planner.build(
         t.scan!,
         t.decisions,
@@ -549,7 +550,12 @@ class DefaultTaskManager implements TaskManager {
       id: t.summary.id,
       scan: scan,
       decisions: Map.unmodifiable(t.decisions),
-      preview: t.plan ??= await _plan(t),
+      // Only a task waiting for review needs a fresh plan. A finished one is
+      // read for its works (its record is the history); replanning it would
+      // list folders that have moved since, and can fail.
+      preview: t.summary.stage == TaskStage.awaitingReview || t.plan != null
+          ? t.plan ??= await _plan(t)
+          : const RenamePlan(ops: []),
     );
   }
 

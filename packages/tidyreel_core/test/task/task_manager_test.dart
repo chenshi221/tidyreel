@@ -415,7 +415,7 @@ void main() {
     final fs = MemoryStorageBackend({...library(), '/in/Good/ok_a.mkv': 1});
     final rig = Rig(fs);
     final id = await rig.submitReady(['/in/Good/a.mkv']);
-    expect(rig.planner.seenExisting.last, {'/in/Good/ok_a.mkv'});
+    expect(rig.planner.seenExisting.last, contains('/in/Good/ok_a.mkv'));
     expect((await rig.tm.review(id)).preview.canExecute, isFalse);
     await expectLater(rig.tm.run(id), throwsStateError);
     expect(

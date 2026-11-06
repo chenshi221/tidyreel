@@ -8,8 +8,19 @@ import '../../ui/widgets.dart';
 import 'organic_layout.dart';
 import 'size_scanner.dart';
 
-/// Smallest area a block is drawn with (logical px²): room for its label.
-const minBlockArea = 14000.0;
+/// Smallest area a block is drawn with (logical px²): big enough to hover
+/// and click, small enough that areas still read as sizes.
+const minBlockArea = 2500.0;
+
+/// A folder name without the trailing year and id tags, for a block's label:
+/// 「死神 (2004) {tmdb-30984}」 → 「死神」.
+String shortName(String name) {
+  final s = name
+      .replaceAll(RegExp(r'\s*[\[{][^\]}]*[\]}]\s*$'), '')
+      .replaceAll(RegExp(r'[\s.]*[(（]?(?:19|20)\d{2}[)）]?\s*$'), '')
+      .trim();
+  return s.isEmpty ? name : s;
+}
 
 /// Each block's drawn area on a map shown in [viewport]: its share of the
 /// viewport, or [minBlockArea] for the long tail.
@@ -481,14 +492,17 @@ class _MapPainter extends CustomPainter {
     final width = chordWidth(b.polygon, c.dy) * 0.78;
     final height = chordHeight(b.polygon, c.dx) * 0.72;
     final z = zoom;
-    if (width * z < 36 || height * z < 22) return null;
-    final big = math.min(width, height) * z > 140;
+    if (width * z < 40 || height * z < 18) return null;
+    final side = math.min(width, height) * z;
+    final big = side > 140;
+    // Smaller blocks get smaller text, so nearly every block carries its name.
+    final nameSize = big ? 17.0 : (side > 80 ? 13.0 : 11.0);
     TextPainter line(
       String text,
       double size,
       FontWeight w,
       double alpha, {
-      int maxLines = 2,
+      int maxLines = 3,
     }) => TextPainter(
       text: TextSpan(
         text: text,
@@ -496,7 +510,7 @@ class _MapPainter extends CustomPainter {
           fontSize: size / z,
           fontWeight: w,
           color: ink.withValues(alpha: alpha),
-          height: 1.3,
+          height: 1.25,
           decoration: TextDecoration.none,
           fontFeatures: const [FontFeature.tabularFigures()],
         ),
@@ -507,7 +521,13 @@ class _MapPainter extends CustomPainter {
       ellipsis: '…',
       textScaler: textScaler,
     )..layout(maxWidth: width);
-    final name = line(b.block.label, big ? 17 : 13, FontWeight.w400, 1);
+    final label = shortName(b.block.label);
+    var name = line(label, nameSize, FontWeight.w400, 1);
+    // Fewer lines until the name fits the block's height.
+    for (var n = 2; name.height > height && n >= 1; n--) {
+      name = line(label, nameSize, FontWeight.w400, 1, maxLines: n);
+    }
+    if (name.height > height) return null;
     final caption = b.block.caption == null
         ? null
         : line(
@@ -517,13 +537,15 @@ class _MapPainter extends CustomPainter {
             0.72,
             maxLines: 1,
           );
-    // A cut-off number says nothing: drop the size rather than show "35.4…".
-    final size = caption == null || caption.didExceedMaxLines ? null : caption;
-    final lines = [
-      if (name.height + (size?.height ?? 0) + 2 <= height) name,
-      ?size,
-    ];
-    if (lines.isEmpty) return null;
+    // The size only when it fits whole next to the name; a bare size or a
+    // cut-off one ("35.4…") says nothing about which folder it is.
+    final size =
+        caption == null ||
+            caption.didExceedMaxLines ||
+            name.height + caption.height + 2 / z > height
+        ? null
+        : caption;
+    final lines = [name, ?size];
     final total = lines.fold(0.0, (s, l) => s + l.height) + 2 / z;
     if (total > height) return null;
     final w = lines.map((l) => l.width).reduce(math.max);

@@ -351,7 +351,10 @@ class _PlanBuilder {
     if (opts.mode == OrganizeMode.inPlace) {
       if (_owns(g, match)) {
         curBase = g.rootDir;
-        final finalBase = joinPath(dirOf(g.rootDir), folderName);
+        final there = _onDiskShow(dirOf(g.rootDir), folderName, match);
+        final finalBase = there != null && there != g.rootDir
+            ? there
+            : joinPath(dirOf(g.rootDir), folderName);
         final claimed = showFolders[finalBase];
         final onDisk = finalBase != g.rootDir && existing.contains(finalBase);
         if ((claimed != null || onDisk) && !d.separate) {
@@ -394,7 +397,9 @@ class _PlanBuilder {
         base = '$base/${sanitizeName(typeDir)}';
         _mkdir(base, g.id, selected: groupSelected);
       }
-      curBase = '$base/$folderName';
+      curBase =
+          _onDiskShow(base.isEmpty ? '/' : base, folderName, match) ??
+          '$base/$folderName';
       final claimed = showFolders[curBase];
       final onDisk = existing.contains(curBase);
       if ((claimed != null || onDisk) && d.separate) {
@@ -690,6 +695,36 @@ class _PlanBuilder {
           : 'season${n.toString().padLeft(2, '0')}-poster.jpg';
       _writeOp('$showDir/$name', img(poster, 'w780'), g.id, selected: on);
     }
+  }
+
+  /// The show folder already in [dir] for [match]: our exact [folderName],
+  /// or one another tool / an older template made, found by its TMDB id tag
+  /// or by 「标题 (年份)」 (a raw download like 「标题 (年份) [BDRip]」 doesn't
+  /// count). Lets a later season or the rest of a season join it.
+  String? _onDiskShow(String dir, String folderName, Candidate match) {
+    final exact = joinPath(dir, folderName);
+    if (existing.contains(exact)) return exact;
+    final tag = RegExp(
+      'tmdb(?:id)?[-=]${match.tmdbId}(?![0-9])',
+      caseSensitive: false,
+    );
+    final names = {
+      normTitle(_untagged(folderName)),
+      if (match.year case final y?)
+        for (final t in [match.title, match.englishTitle, match.originalTitle])
+          if (t != null && t.isNotEmpty) normTitle('$t ($y)'),
+    };
+    for (final p in existing) {
+      if (dirOf(p) != dir || p == exact) continue;
+      final name = baseOf(p);
+      if (_fileLike.hasMatch(name)) continue;
+      if (tag.hasMatch(name)) return p;
+      if (_titleYear.hasMatch(_untagged(name)) &&
+          names.contains(normTitle(_untagged(name)))) {
+        return p;
+      }
+    }
+    return null;
   }
 
   void _noteMerge(
@@ -1006,3 +1041,16 @@ class _PlanBuilder {
     ];
   }
 }
+
+/// A trailing id tag: 「{tmdb-1}」, 「[tmdbid=1]」.
+final _idTag = RegExp(
+  r'\s*(?:\{[^}]*\}|\[tmdb[^\]]*\])\s*$',
+  caseSensitive: false,
+);
+String _untagged(String name) => name.replaceAll(_idTag, '');
+
+/// 「标题 (2020)」 and nothing after the year.
+final _titleYear = RegExp(r'\S \((?:19|20)\d{2}\)$');
+
+/// Looks like a file name (has an extension), not a folder.
+final _fileLike = RegExp(r'\.[A-Za-z][A-Za-z0-9]{1,3}$');

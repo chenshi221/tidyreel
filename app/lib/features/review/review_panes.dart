@@ -2521,6 +2521,58 @@ class UnassignedPane extends StatelessWidget {
   }
 }
 
+final _sxxeyy = RegExp(r'S(\d{1,2})E(\d{1,3})', caseSensitive: false);
+
+final _seasonDir = RegExp(
+  r'^(?:Season\s*(\d{1,2})|Specials)$',
+  caseSensitive: false,
+);
+
+/// Season → episodes found in show folder [dir] and its season folders.
+Future<Map<int, Set<int>>> episodesIn(StorageBackend be, String dir) async {
+  final out = <int, Set<int>>{};
+  Future<void> scan(String d, {required bool deeper}) async {
+    for (final e in await be.list(d)) {
+      if (e.isDir) {
+        if (!deeper) continue;
+        if (_seasonDir.firstMatch(e.name) case final m?) {
+          out.putIfAbsent(m[1] == null ? 0 : int.parse(m[1]!), () => {});
+        }
+        await scan(e.path, deeper: false);
+        continue;
+      }
+      for (final x in _sxxeyy.allMatches(e.name)) {
+        (out[int.parse(x[1]!)] ??= {}).add(int.parse(x[2]!));
+      }
+    }
+  }
+
+  await scan(dir, deeper: true);
+  return out;
+}
+
+/// 「Season 01 E01–E05、E07；Season 02」.
+String describeEpisodes(Map<int, Set<int>> bySeason) {
+  if (bySeason.isEmpty) return '（没有识别到剧集）';
+  String two(int n) => n.toString().padLeft(2, '0');
+  final parts = <String>[];
+  for (final s in bySeason.keys.toList()..sort()) {
+    final eps = bySeason[s]!.toList()..sort();
+    final runs = <String>[];
+    for (var i = 0; i < eps.length; i++) {
+      var j = i;
+      while (j + 1 < eps.length && eps[j + 1] == eps[j] + 1) {
+        j++;
+      }
+      runs.add(j == i ? 'E${two(eps[i])}' : 'E${two(eps[i])}–E${two(eps[j])}');
+      i = j;
+    }
+    final name = s == 0 ? 'Specials' : 'Season ${two(s)}';
+    parts.add(runs.isEmpty ? name : '$name ${runs.join('、')}');
+  }
+  return parts.join('；');
+}
+
 /// Asks about each [PlanMerge] before running: where the show goes, what is
 /// there already, what this task adds. Returns the groups to keep separate
 /// (分开保留), or null when cancelled.
@@ -2532,15 +2584,27 @@ Future<Set<GroupId>?> showMergeDialog(
 }) {
   final separate = <GroupId>{};
   final byId = {for (final g in review.scan.groups) g.id: g};
-  String seasons(Iterable<int> s) => s.isEmpty
-      ? ''
-      : s
-            .map(
-              (n) => n == 0
-                  ? 'Specials'
-                  : 'Season ${n.toString().padLeft(2, '0')}',
-            )
-            .join('、');
+  // Episodes this task puts into the merged folder, read off the plan.
+  Map<int, Set<int>> adding(PlanMerge m) {
+    final out = <int, Set<int>>{};
+    for (final o in review.preview.ops) {
+      if (o.group != m.group ||
+          o.kind != OpKind.relocate ||
+          o.phase != ExecPhase.files) {
+        continue;
+      }
+      for (final x in _sxxeyy.allMatches(o.dst.split('/').last)) {
+        (out[int.parse(x[1]!)] ??= {}).add(int.parse(x[2]!));
+      }
+    }
+    if (out.isEmpty) {
+      for (final s in m.seasons) {
+        out[s] = {};
+      }
+    }
+    return out;
+  }
+
   return showDialog<Set<GroupId>>(
     context: context,
     builder: (ctx) => StatefulBuilder(
@@ -2626,37 +2690,29 @@ Future<Set<GroupId>?> showMergeDialog(
                                             ),
                                             const SizedBox(height: 2),
                                             if (m.exists)
-                                              FutureBuilder<List<RemoteEntry>>(
-                                                future: backend.list(m.into),
-                                                builder: (context, snap) {
-                                                  final dirs = [
-                                                    for (final e
-                                                        in snap.data ??
-                                                            const <
-                                                              RemoteEntry
-                                                            >[])
-                                                      if (e.isDir) e.name,
-                                                  ]..sort();
-                                                  return Text(
-                                                    snap.hasError
-                                                        ? '已有文件夹（读取内容失败）'
-                                                        : !snap.hasData
-                                                        ? '已有：读取中…'
-                                                        : '已有：${dirs.isEmpty ? '（没有子文件夹）' : dirs.join('、')}',
-                                                    style: small,
-                                                  );
-                                                },
+                                              FutureBuilder<Map<int, Set<int>>>(
+                                                future: episodesIn(
+                                                  backend,
+                                                  m.into,
+                                                ),
+                                                builder: (context, snap) => Text(
+                                                  snap.hasError
+                                                      ? '已有文件夹（读取内容失败）'
+                                                      : !snap.hasData
+                                                      ? '已有：读取中…'
+                                                      : '已有：${describeEpisodes(snap.data!)}',
+                                                  style: small,
+                                                ),
                                               )
                                             else if (other != null)
                                               Text(
                                                 '和本次的 ${other.rootDir} 放在一起',
                                                 style: small,
                                               ),
-                                            if (m.seasons.isNotEmpty)
-                                              Text(
-                                                '本次新增：${seasons(m.seasons)}',
-                                                style: small,
-                                              ),
+                                            Text(
+                                              '本次加入：${describeEpisodes(adding(m))}',
+                                              style: small,
+                                            ),
                                             if (g != null)
                                               Text(
                                                 '本次来源：${g.rootDir}',
@@ -2690,7 +2746,7 @@ Future<Set<GroupId>?> showMergeDialog(
                       ),
                     ),
                   ),
-                  Text('同名的集不会被覆盖：如果两边有相同的集，会在执行前提示冲突。', style: small),
+                  Text('已有的集不会被覆盖：两边有相同的集时会标为冲突，由你决定保留哪个。', style: small),
                   const SizedBox(height: 12),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.end,
