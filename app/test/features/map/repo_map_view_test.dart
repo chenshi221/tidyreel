@@ -207,7 +207,7 @@ void main() {
         home: Scaffold(
           body: OrganicMap(
             blocks: [
-              for (var i = 0; i < 100; i++)
+              for (var i = 0; i < 250; i++)
                 MapBlock(
                   id: 'b$i',
                   label: 'b$i',
@@ -254,5 +254,13 @@ void main() {
       viewer.transformationController!.value.getMaxScaleOnAxis(),
       lessThan(1),
     );
+  });
+
+  test('block labels drop the year and id tags', () {
+    expect(shortName('死神 (2004) {tmdb-30984}'), '死神');
+    expect(shortName('The.Bear.2022'), 'The.Bear');
+    expect(shortName('2046 (2004)'), '2046');
+    expect(shortName('(2004)'), '(2004)');
+    expect(shortName('超时空要塞Δ'), '超时空要塞Δ');
   });
 }

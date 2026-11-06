@@ -10,7 +10,8 @@ void main() {
   ) async {
     const into = '/库/异兽魔都 (2020)';
     final be = MemoryStorageBackend({
-      '$into/Season 01/a.mkv': 1,
+      '$into/Season 01/异兽魔都 - S01E01.mkv': 1,
+      '$into/Season 01/异兽魔都 - S01E02.mkv': 1,
       '$into/Season 02/b.mkv': 1,
     });
     const g = MediaGroup(
@@ -30,7 +31,19 @@ void main() {
         unassigned: [],
       ),
       decisions: const {},
-      preview: const RenamePlan(ops: []),
+      preview: RenamePlan(
+        ops: [
+          for (final e in ['03', '04'])
+            RenameOp(
+              id: OpId('o$e'),
+              kind: OpKind.relocate,
+              phase: ExecPhase.files,
+              src: '/下载/异兽魔都 S05/$e.mkv',
+              dst: '$into/Season 01/异兽魔都 - S01E$e.mkv',
+              group: const GroupId('g5'),
+            ),
+        ],
+      ),
     );
     Set<GroupId>? result = {};
     await tester.pumpWidget(
@@ -58,8 +71,8 @@ void main() {
     await tester.tap(find.text('go'));
     await tester.pumpAndSettle();
     expect(find.text('合并到 $into'), findsOneWidget);
-    expect(find.text('已有：Season 01、Season 02'), findsOneWidget);
-    expect(find.text('本次新增：Season 05'), findsOneWidget);
+    expect(find.text('已有：Season 01 E01–E02；Season 02'), findsOneWidget);
+    expect(find.text('本次加入：Season 01 E03–E04'), findsOneWidget);
 
     await tester.tap(find.text('分开保留'));
     await tester.pump();

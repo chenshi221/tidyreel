@@ -61,32 +61,54 @@ BlockState blockStateOf(FolderStats s) {
 
 Map<String, bool> _noMarks() => const {};
 
+/// Our show / movie folder: 「名称 (2011)」, maybe with a {tmdb-1} tag.
+final _mediaFolder = RegExp(
+  r'^(.*\S \((?:19|20)\d{2}\))(?: [\[{][^\]}]*[\]}])?$',
+);
+
+/// Our season folder: 「Season 01」 (or 「Specials」 for season 0).
+final _seasonFolder = RegExp(r'^(?:Season (\d{1,2})|Specials)$');
+
 final _episodeTag = RegExp(
-  r'(^|[^a-z0-9])(s\d{1,2}[ ._-]?e\d{1,3}|\d{1,2}x\d{2})($|[^a-z0-9])',
+  r'(?:^|[^a-z0-9])s(\d{2})e\d{2,3}(?:$|[^0-9])',
   caseSensitive: false,
 );
 
-/// A media folder: 「名称 (2011)」 or 「Name.2011」, maybe with a {tmdb-1} tag.
-final _mediaFolder = RegExp(
-  r'^.*\S(?:[ .]+[(（]?|[(（])((?:19|20)\d{2})[)）]?\s*([\[{].*[\]}])?$',
-);
-
-/// Whether a path already reads as organized, whoever did it. Loose on purpose
-/// (not the current naming rules): other tools name things differently, and a
-/// wrong guess only changes a colour. Folders go by their name alone, since
+/// Whether a path already reads as organized: our layout (PLAN §3) or one
+/// close to it, like Filmix's. Episodes sit in 「名称 (年份)/Season 1/」 with
+/// a matching SxxEyy, or straight in 「名称 (年份)/」 (single-season shows
+/// need no season folder); movies are named after their folder's title and
+/// year. A raw release name, a season mismatch or a folder without
+/// 「(年份)」 still needs organizing. Folders go by their name alone, since
 /// their contents may not be listed yet.
 bool looksOrganized(RemoteEntry e) {
   final segs = e.path.split('/').where((s) => s.isNotEmpty).toList();
-  if (e.isDir) return _mediaFolder.hasMatch(segs.last);
+  if (e.isDir) {
+    return _mediaFolder.hasMatch(segs.last) ||
+        (segs.length >= 2 &&
+            _seasonFolder.hasMatch(segs.last) &&
+            _mediaFolder.hasMatch(segs[segs.length - 2]));
+  }
   if (segs.length < 2) return false;
-  final parent = _mediaFolder.firstMatch(segs[segs.length - 2]);
-  final grand = segs.length >= 3
-      ? _mediaFolder.firstMatch(segs[segs.length - 3])
-      : null;
-  if (_episodeTag.hasMatch(e.name)) return parent != null || grand != null;
-  // A movie: its folder's year shows up in the file name too.
-  return parent != null && e.name.contains(parent[1]!);
+  final parent = segs[segs.length - 2];
+  final ep = _episodeTag.firstMatch(e.name);
+  if (ep != null) {
+    if (_mediaFolder.hasMatch(parent)) return true;
+    final season = _seasonFolder.firstMatch(parent);
+    if (season == null || segs.length < 3) return false;
+    if (!_mediaFolder.hasMatch(segs[segs.length - 3])) return false;
+    return int.parse(ep[1]!) == int.parse(season[1] ?? '0');
+  }
+  // A movie: named after its folder, 「盗梦空间.Inception.2010.mkv」 in
+  // 「盗梦空间 (2010)」.
+  final movie = _movieFolder.firstMatch(parent);
+  return movie != null &&
+      e.name.startsWith(movie[1]!) &&
+      e.name.contains(movie[2]!);
 }
+
+/// 「名称 (2010)」 → 名称, 2010.
+final _movieFolder = RegExp(r'^(.*\S) \(((?:19|20)\d{2})\)');
 
 /// The hand mark on [path] or its nearest marked ancestor.
 bool? markFor(Map<String, bool> marks, String path) {

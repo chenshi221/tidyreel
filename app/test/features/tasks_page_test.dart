@@ -11,11 +11,13 @@ void main() {
     final (tm, _) = await pumpPage(tester, const TasksPage());
     final id = await submitAndWait(tester, tm);
 
-    expect(find.text(id.value), findsOneWidget);
+    // Waiting for review: the track stands at 待确认.
+    expect(find.byType(TaskStepper), findsOneWidget);
+    // The id lives in the menu now, not on the card.
+    expect(find.text(id.value), findsNothing);
     expect(find.text('去确认'), findsOneWidget);
     expect(find.text('立即执行'), findsOneWidget);
     expect(find.text('个待确认'), findsOneWidget);
-    expect(find.text('识别完成，请确认结果后继续执行'), findsOneWidget);
 
     await tester.tap(find.text('去确认'));
     await tester.pumpAndSettle();
@@ -92,5 +94,30 @@ void main() {
     await tester.pumpAndSettle();
     expect(await tm.watchAll().first, isEmpty);
     expect(find.byKey(const ValueKey('clear-finished')), findsNothing);
+  });
+
+  testWidgets('a running task shows the five-step track', (tester) async {
+    await pumpPage(
+      tester,
+      TaskCard(
+        task: TaskSummary(
+          id: const TaskId('T1'),
+          connection: const ConnectionId('c'),
+          paths: const ['/剧/三体'],
+          mode: OrganizeMode.inPlace,
+          stage: TaskStage.renamingFiles,
+          message: '正在重命名文件',
+          progress: 0.4,
+          createdAt: DateTime(2026),
+        ),
+      ),
+    );
+    expect(find.byType(TaskStepper), findsOneWidget);
+    for (final s in ['导入', '识别', '待确认', '文件', '文件夹']) {
+      expect(find.text(s), findsOneWidget);
+    }
+    expect(find.text('正在改名文件 40%'), findsOneWidget);
+    // Progress messages stay off the card.
+    expect(find.text('正在重命名文件'), findsNothing);
   });
 }

@@ -300,6 +300,13 @@ class TaskCard extends ConsumerWidget {
       if (t.folderCount > 0) '文件夹 ${t.folderCount}',
       if (unassigned > 0) '未归类 $unassigned',
     ].join(' · ');
+    // Why a task stopped short; progress messages are the stepper's job.
+    final problem =
+        t.message.isNotEmpty &&
+            (t.stage == TaskStage.cancelled ||
+                t.stage == TaskStage.partiallyFailed)
+        ? t.message
+        : null;
 
     return ContextMenuArea(
       items: menu,
@@ -339,68 +346,50 @@ class TaskCard extends ConsumerWidget {
                       child: Text(
                         [
                           connName ?? t.connection.value,
-                          where,
                           t.mode == OrganizeMode.inPlace ? '原地整理' : '移动到媒体库',
+                          if (recognized) counts else where,
                         ].join(' · '),
                         style: theme.textTheme.bodySmall,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    const SizedBox(height: 3),
-                    Text(
-                      t.message.isNotEmpty && t.stage != TaskStage.done
-                          ? t.message
-                          : works.length > 1
-                          ? works.map((w) => w.title).join('、')
-                          : counts,
-                      style: TextStyle(fontSize: 12, color: p.textFaint),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    if (running && t.progress != null) ...[
-                      const SizedBox(height: 6),
-                      GradientProgress(
-                        value: t.progress!,
-                        color: p.text,
-                        height: 3,
+                    if (problem != null) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        problem,
+                        style: TextStyle(fontSize: 12, color: p.warning),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                    if (works.length > 1) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        works.map((w) => w.title).join('、'),
+                        style: TextStyle(fontSize: 12, color: p.textFaint),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                    if (_currentStep(t.stage) >= 0) ...[
+                      const SizedBox(height: 8),
+                      TaskStepper(
+                        stage: t.stage,
+                        progress: t.progress,
+                        running: running,
                       ),
                     ],
                   ],
                 ),
               ),
               const SizedBox(width: 16),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  StatusPill(
-                    label: running
-                        ? _runningLabel(t.stage, t.progress)
-                        : stageLabel(t.stage),
-                    color: statusColor,
-                    busy: running,
-                  ),
-                  Tooltip(
-                    message: '点击复制任务 ID',
-                    child: Hoverable(
-                      onTap: () {
-                        Clipboard.setData(ClipboardData(text: t.id.value));
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('已复制任务 ID')),
-                        );
-                      },
-                      builder: (context, hover) => Text(
-                        t.id.value,
-                        style: TextStyle(
-                          fontFamily: monoFamily,
-                          fontFamilyFallback: monoFallback,
-                          fontSize: 11,
-                          color: hover ? p.text : p.textFaint,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
+              StatusPill(
+                label: running
+                    ? _runningLabel(t.stage, t.progress)
+                    : stageLabel(t.stage),
+                color: statusColor,
+                busy: running,
               ),
               const SizedBox(width: 12),
               if (t.stage == TaskStage.awaitingReview) ...[
@@ -425,6 +414,81 @@ class TaskCard extends ConsumerWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// 导入 → 识别 → 待确认 → 文件 → 文件夹 as a segmented track under a task:
+/// done steps filled, the current one moving while it runs (by its progress
+/// when it reports one); all filled once finished.
+class TaskStepper extends StatelessWidget {
+  final TaskStage stage;
+  final double? progress;
+
+  /// The current step is moving; otherwise it just stands highlighted.
+  final bool running;
+
+  const TaskStepper({
+    super.key,
+    required this.stage,
+    this.progress,
+    this.running = true,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    final cur = _currentStep(stage);
+    return Row(
+      children: [
+        for (var i = 0; i < _steps.length; i++) ...[
+          if (i > 0) const SizedBox(width: 4),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(2),
+                  child: SizedBox(
+                    height: 3,
+                    width: double.infinity,
+                    child: i == cur && !running
+                        ? ColoredBox(color: p.text)
+                        : i == cur && progress != null
+                        ? GradientProgress(
+                            value: progress!,
+                            color: p.text,
+                            height: 3,
+                          )
+                        : i == cur
+                        ? LinearProgressIndicator(
+                            minHeight: 3,
+                            color: p.text,
+                            backgroundColor: p.text.withValues(alpha: 0.12),
+                          )
+                        : ColoredBox(
+                            color: i < cur
+                                ? p.text.withValues(alpha: 0.7)
+                                : p.selected,
+                          ),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  _steps[i],
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: i == cur ? FontWeight.w600 : FontWeight.w400,
+                    color: i == cur
+                        ? p.text
+                        : (i < cur ? p.textMuted : p.textFaint),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ],
     );
   }
 }
