@@ -44,7 +44,7 @@ class SourcesPage extends ConsumerWidget {
         child: EmptyState(
           icon: CupertinoIcons.cloud,
           title: '还没有连接',
-          message: '添加一个 Alist、WebDAV 或本地文件夹，就可以开始整理了',
+          message: '添加一个 Alist、WebDAV、SMB 共享或本地文件夹，就可以开始整理了',
           action: add,
         ),
       );

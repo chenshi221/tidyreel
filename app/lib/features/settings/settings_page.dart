@@ -460,7 +460,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                         title: const Text('开源许可'),
                         content: const SelectableText(
                           '命名与解析思路参考 mnamer（MIT License）。\n'
-                          '原版权声明见项目 LICENSES/mnamer-MIT.txt。',
+                          '原版权声明见项目 LICENSES/mnamer-MIT.txt。\n\n'
+                          'SMB 连接使用 dart_smb2（BSD-3-Clause）和 libsmb2'
+                          '（GNU LGPL 2.1 或更新版本，动态加载，'
+                          'Copyright (C) Ronnie Sahlberg 及贡献者）。\n'
+                          '源码：https://github.com/sahlberg/libsmb2 ，'
+                          '说明见项目 LICENSES/libsmb2-NOTICE.txt。',
                         ),
                         actions: [
                           OutlinedButton(

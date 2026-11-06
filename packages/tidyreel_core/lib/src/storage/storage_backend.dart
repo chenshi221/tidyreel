@@ -62,6 +62,10 @@ enum StorageErrorCode {
   other,
 }
 
+/// SMB needs native libsmb2, so core leaves it to the app, which sets this at
+/// startup (keeps `dart test` of core free of native build hooks).
+StorageBackend Function(ConnectionConfig, Credentials)? smbBackend;
+
 /// Builds the right backend for a saved connection.
 StorageBackend createBackend(
   ConnectionConfig config,
@@ -69,5 +73,11 @@ StorageBackend createBackend(
 ) => switch (config.type) {
   ConnectionType.alist => AlistBackend(config, credentials),
   ConnectionType.webdav => WebDAVBackend(config, credentials),
+  ConnectionType.smb =>
+    (smbBackend ??
+        (_, _) => throw const StorageException(
+          StorageErrorCode.other,
+          '这个版本不支持 SMB',
+        ))(config, credentials),
   ConnectionType.local => LocalBackend(config.endpoint),
 };

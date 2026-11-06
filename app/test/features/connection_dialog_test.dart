@@ -98,7 +98,9 @@ void main() {
     await pumpPage(tester, const SourcesPage());
     await tester.tap(find.text('添加连接'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('WebDAV'));
+    await tester.tap(find.byKey(const ValueKey('dav-template')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('template-alistDav')).last);
     await tester.pumpAndSettle();
     expect(
       tester
@@ -119,6 +121,26 @@ void main() {
     await tester.tap(find.text('测试连接'));
     await tester.pumpAndSettle();
     expect(find.text('连接成功'), findsOneWidget); // demo backend
+  });
+
+  testWidgets('SMB: a pasted \\\\nas\\share fills host and share', (
+    tester,
+  ) async {
+    await pumpPage(tester, const SourcesPage());
+    await tester.tap(find.text('添加连接'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('SMB'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('dav-template')), findsNothing);
+    await tester.enterText(
+      find.byKey(const ValueKey('field-主机')),
+      r'\\192.168.1.9\影视\下载',
+    );
+    await tester.pump();
+    final preview = tester.widget<SelectableText>(
+      find.byKey(const ValueKey('endpoint-preview')),
+    );
+    expect(preview.data, 'smb://192.168.1.9/影视/下载');
   });
 
   testWidgets('Alist drops a typed /dav prefix, empty name is filled in', (
