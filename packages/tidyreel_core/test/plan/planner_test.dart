@@ -357,7 +357,7 @@ void main() {
     });
 
     test(
-      'an in-place folder rename onto an existing folder conflicts',
+      'an in-place folder rename onto an existing folder merges into it',
       () async {
         final f = video('/d/Dorohedoro 2020/e.mkv', season: 1, episode: 1);
         final p = await plan(
@@ -366,7 +366,10 @@ void main() {
           ]),
           existing: {'/d/异兽魔都 (2020)'},
         );
-        expect(p.conflicts.single.path, '/d/异兽魔都 (2020)');
+        expect(p.conflicts, isEmpty);
+        expect(p.merges.single.into, '/d/异兽魔都 (2020)');
+        expect(p.merges.single.exists, isTrue);
+        expect(moves(p)[f.path], startsWith('/d/异兽魔都 (2020)/Season 01/'));
       },
     );
 

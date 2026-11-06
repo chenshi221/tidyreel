@@ -1,5 +1,4 @@
 import 'package:test/test.dart';
-import 'package:tidyreel_core/src/plan/text.dart';
 import 'package:tidyreel_core/testing.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 

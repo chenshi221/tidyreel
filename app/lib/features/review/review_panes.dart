@@ -2510,3 +2510,199 @@ class UnassignedPane extends StatelessWidget {
     );
   }
 }
+
+/// Asks about each [PlanMerge] before running: where the show goes, what is
+/// there already, what this task adds. Returns the groups to keep separate
+/// (分开保留), or null when cancelled.
+Future<Set<GroupId>?> showMergeDialog(
+  BuildContext context, {
+  required TaskReview review,
+  required List<PlanMerge> merges,
+  required StorageBackend backend,
+}) {
+  final separate = <GroupId>{};
+  final byId = {for (final g in review.scan.groups) g.id: g};
+  String seasons(Iterable<int> s) => s.isEmpty
+      ? ''
+      : s
+            .map(
+              (n) => n == 0
+                  ? 'Specials'
+                  : 'Season ${n.toString().padLeft(2, '0')}',
+            )
+            .join('、');
+  return showDialog<Set<GroupId>>(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setState) {
+        final p = Palette.of(ctx);
+        final small = TextStyle(fontSize: 12, color: p.textMuted);
+        return MacSheet(
+          child: SizedBox(
+            width: 560,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    '合并到已有剧集文件夹？',
+                    style: Theme.of(ctx).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 4),
+                  Text('下面的作品会和已有的（或本次另一个文件夹里的）同一部作品放进同一个文件夹。', style: small),
+                  const SizedBox(height: 12),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 420),
+                    child: SingleChildScrollView(
+                      child: Column(
+                        children: [
+                          for (final m in merges)
+                            Builder(
+                              builder: (context) {
+                                final g = byId[m.group];
+                                final match = g == null
+                                    ? null
+                                    : review.decisions[g.id]?.match ?? g.match;
+                                final other = m.withGroup == null
+                                    ? null
+                                    : byId[m.withGroup];
+                                final keep = separate.contains(m.group);
+                                return Container(
+                                  key: ValueKey('merge-${m.group.value}'),
+                                  margin: const EdgeInsets.only(bottom: 10),
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: p.panel,
+                                    borderRadius: BorderRadius.circular(
+                                      Radii.lg,
+                                    ),
+                                    border: Border.all(
+                                      color: p.line,
+                                      width: hairline,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Poster(
+                                        posterPath: match?.posterPath,
+                                        width: 40,
+                                        height: 60,
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              '《${match?.title ?? g?.anchorTitle ?? ''}》'
+                                              '${match?.year == null ? '' : ' (${match!.year})'}',
+                                              style: const TextStyle(
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 4),
+                                            SelectableText(
+                                              '合并到 ${m.into}',
+                                              style: TextStyle(
+                                                fontSize: 12.5,
+                                                color: p.text,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 2),
+                                            if (m.exists)
+                                              FutureBuilder<List<RemoteEntry>>(
+                                                future: backend.list(m.into),
+                                                builder: (context, snap) {
+                                                  final dirs = [
+                                                    for (final e
+                                                        in snap.data ??
+                                                            const <
+                                                              RemoteEntry
+                                                            >[])
+                                                      if (e.isDir) e.name,
+                                                  ]..sort();
+                                                  return Text(
+                                                    snap.hasError
+                                                        ? '已有文件夹（读取内容失败）'
+                                                        : !snap.hasData
+                                                        ? '已有：读取中…'
+                                                        : '已有：${dirs.isEmpty ? '（没有子文件夹）' : dirs.join('、')}',
+                                                    style: small,
+                                                  );
+                                                },
+                                              )
+                                            else if (other != null)
+                                              Text(
+                                                '和本次的 ${other.rootDir} 放在一起',
+                                                style: small,
+                                              ),
+                                            if (m.seasons.isNotEmpty)
+                                              Text(
+                                                '本次新增：${seasons(m.seasons)}',
+                                                style: small,
+                                              ),
+                                            if (g != null)
+                                              Text(
+                                                '本次来源：${g.rootDir}',
+                                                style: small,
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Segmented<bool>(
+                                        key: ValueKey(
+                                          'merge-choice-${m.group.value}',
+                                        ),
+                                        options: const {
+                                          false: '合并',
+                                          true: '分开保留',
+                                        },
+                                        value: keep,
+                                        onChanged: (v) => setState(
+                                          () => v
+                                              ? separate.add(m.group)
+                                              : separate.remove(m.group),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              },
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  Text('同名的集不会被覆盖：如果两边有相同的集，会在执行前提示冲突。', style: small),
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      OutlinedButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        child: const Text('取消'),
+                      ),
+                      const SizedBox(width: 8),
+                      FilledButton(
+                        key: const ValueKey('merge-continue'),
+                        onPressed: () => Navigator.pop(ctx, separate),
+                        child: const Text('继续'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    ),
+  );
+}

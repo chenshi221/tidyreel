@@ -276,8 +276,29 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
 
   Future<void> _execute() async {
     if (_executing) return;
-    final r = _review;
+    var r = _review;
     if (r == null || r.preview.conflicts.isNotEmpty) return;
+    // Shows landing in a folder that's already there (or filled twice by
+    // this task): ask every time, and say where.
+    final merges = [
+      for (final m in r.preview.merges)
+        if (r.decisions[m.group]?.selected ?? true) m,
+    ];
+    if (merges.isNotEmpty) {
+      final separate = await showMergeDialog(
+        context,
+        review: r,
+        merges: merges,
+        backend: ref.read(backendForProvider)(r.scan.connection),
+      );
+      if (separate == null || !mounted) return;
+      for (final id in separate) {
+        await _update(id, _decisionOf(id).copyWith(separate: true));
+      }
+      if (!mounted) return;
+      r = _review;
+      if (r == null || r.preview.conflicts.isNotEmpty) return;
+    }
     final ops = r.preview.ops.where((o) => o.selected).toList();
     if (ops.isEmpty) return;
     int n(ExecPhase p) => ops.where((o) => o.phase == p).length;

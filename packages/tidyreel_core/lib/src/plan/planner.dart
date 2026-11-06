@@ -79,6 +79,11 @@ class _PlanBuilder {
   final renamedSeasons = <String, String>{};
   final deleteOps = <RenameOp>[];
   final renamedRoots = <String, String>{};
+
+  /// Show folder (final path) → the first group filling it and where that
+  /// group's files go during the run (its old root, before the rename).
+  final showFolders = <String, ({GroupId group, String base})>{};
+  final merges = <PlanMerge>[];
   final knownDirs = <String>{};
 
   _PlanBuilder(
@@ -138,7 +143,7 @@ class _PlanBuilder {
       ...folderOps,
       ...deleteOps,
     ];
-    return RenamePlan(ops: ops, conflicts: _conflicts(ops));
+    return RenamePlan(ops: ops, conflicts: _conflicts(ops), merges: merges);
   }
 
   // ---- one group ----------------------------------------------------------
@@ -336,23 +341,39 @@ class _PlanBuilder {
       ),
     );
     String curBase;
+    // Where the show folder ends up, and whether another group / the disk
+    // already has it: then this group merges in unless told 分开保留.
+    String? mergeInto;
     if (opts.mode == OrganizeMode.inPlace) {
       if (_owns(g, match)) {
         curBase = g.rootDir;
         final finalBase = joinPath(dirOf(g.rootDir), folderName);
-        if (finalBase != g.rootDir) {
-          renamedRoots[g.rootDir] = finalBase;
-          folderOps.add(
-            RenameOp(
-              id: OpId('f-${stableHash(g.rootDir)}'),
-              kind: OpKind.relocate,
-              phase: ExecPhase.folders,
-              src: g.rootDir,
-              dst: finalBase,
-              group: g.id,
-              selected: groupSelected,
-            ),
-          );
+        final claimed = showFolders[finalBase];
+        final onDisk = finalBase != g.rootDir && existing.contains(finalBase);
+        if ((claimed != null || onDisk) && !d.separate) {
+          // Files go under the other group's old root (renamed later) or
+          // straight into the existing folder; this root keeps its name.
+          curBase = claimed?.base ?? finalBase;
+          mergeInto = finalBase;
+          _noteMerge(g, finalBase, claimed?.group, onDisk, items);
+        } else if (claimed != null || onDisk) {
+          // 分开保留: keep this folder's own name, rename files inside.
+        } else {
+          showFolders[finalBase] = (group: g.id, base: g.rootDir);
+          if (finalBase != g.rootDir) {
+            renamedRoots[g.rootDir] = finalBase;
+            folderOps.add(
+              RenameOp(
+                id: OpId('f-${stableHash(g.rootDir)}'),
+                kind: OpKind.relocate,
+                phase: ExecPhase.folders,
+                src: g.rootDir,
+                dst: finalBase,
+                group: g.id,
+                selected: groupSelected,
+              ),
+            );
+          }
         }
       } else {
         curBase = joinPath(g.rootDir, folderName);
@@ -370,6 +391,25 @@ class _PlanBuilder {
         _mkdir(base, g.id, selected: groupSelected);
       }
       curBase = '$base/$folderName';
+      final claimed = showFolders[curBase];
+      final onDisk = existing.contains(curBase);
+      if ((claimed != null || onDisk) && d.separate) {
+        // 分开保留 in the library: the next free "名称 (2)".
+        var n = 2;
+        while (showFolders.containsKey('$base/$folderName ($n)') ||
+            existing.contains('$base/$folderName ($n)')) {
+          n++;
+        }
+        curBase = '$base/$folderName ($n)';
+      } else if (claimed != null || onDisk) {
+        mergeInto = curBase;
+        _noteMerge(g, curBase, claimed?.group, onDisk, items);
+      }
+      showFolders.putIfAbsent(curBase, () => (group: g.id, base: curBase));
+      _mkdir(curBase, g.id, selected: groupSelected);
+    }
+    if (mergeInto != null && curBase != mergeInto) {
+      // Merging into a folder that is renamed later in this run.
       _mkdir(curBase, g.id, selected: groupSelected);
     }
 
@@ -493,6 +533,25 @@ class _PlanBuilder {
       _emit(it, name, g.id, source: f);
     }
   }
+
+  void _noteMerge(
+    MediaGroup g,
+    String into,
+    GroupId? withGroup,
+    bool exists,
+    List<_Item> items,
+  ) => merges.add(
+    PlanMerge(
+      group: g.id,
+      into: into,
+      exists: exists,
+      withGroup: withGroup,
+      seasons: {
+        for (final it in items)
+          if (!it.extra && it.ref != null) it.ref!.season,
+      }.toList()..sort(),
+    ),
+  );
 
   String? _parsedLang(ScanFile f) {
     final raw = f.parsed?.lang;

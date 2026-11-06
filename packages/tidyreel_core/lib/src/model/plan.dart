@@ -51,6 +51,11 @@ class GroupDecision {
   final Map<String, FileOverride> overrides;
   final bool selected;
 
+  /// 分开保留: when this show's folder would land where another group's (or
+  /// an existing folder) already is, keep a folder of its own instead of
+  /// merging (see [PlanMerge]).
+  final bool separate;
+
   const GroupDecision({
     this.match,
     this.strategy = SeasonStrategy.asParsed,
@@ -58,6 +63,7 @@ class GroupDecision {
     this.episodeGroupId,
     this.overrides = const {},
     this.selected = true,
+    this.separate = false,
   });
 
   GroupDecision copyWith({
@@ -67,6 +73,7 @@ class GroupDecision {
     String? Function()? episodeGroupId,
     Map<String, FileOverride>? overrides,
     bool? selected,
+    bool? separate,
   }) => GroupDecision(
     match: match ?? this.match,
     strategy: strategy ?? this.strategy,
@@ -76,6 +83,7 @@ class GroupDecision {
         : this.episodeGroupId,
     overrides: overrides ?? this.overrides,
     selected: selected ?? this.selected,
+    separate: separate ?? this.separate,
   );
 }
 
@@ -153,13 +161,47 @@ class PlanConflict {
   });
 }
 
+/// A show whose files go into a folder that is already there or that another
+/// group of this scan also fills (season 5 downloaded after seasons 1–4).
+/// The UI asks every time; [GroupDecision.separate] says no.
+class PlanMerge {
+  final GroupId group;
+
+  /// The show folder, as it will be named after the run.
+  final String into;
+
+  /// [into] already exists on the storage (not made by this plan).
+  final bool exists;
+
+  /// The other group filling [into], when it's made by this plan.
+  final GroupId? withGroup;
+
+  /// Seasons this group adds there (TV), ascending.
+  final List<int> seasons;
+
+  const PlanMerge({
+    required this.group,
+    required this.into,
+    required this.exists,
+    this.withGroup,
+    this.seasons = const [],
+  });
+}
+
 class RenamePlan {
   final List<RenameOp> ops;
 
   /// Non-empty means the plan must not run (PLAN §4.3 rule 1).
   final List<PlanConflict> conflicts;
 
-  const RenamePlan({required this.ops, this.conflicts = const []});
+  /// Groups merged into a shared show folder; empty when nothing merges.
+  final List<PlanMerge> merges;
+
+  const RenamePlan({
+    required this.ops,
+    this.conflicts = const [],
+    this.merges = const [],
+  });
 
   bool get canExecute => conflicts.isEmpty;
 }
