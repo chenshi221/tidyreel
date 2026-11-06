@@ -319,7 +319,7 @@ void main() {
             ops: [
               write(
                 '/d/Show.S01/tvshow.nfo',
-                '${writeTextPrefix}<tvshow>中</tvshow>',
+                '$writeTextPrefix<tvshow>中</tvshow>',
               ),
               write(
                 '/d/Show.S01/poster.jpg',

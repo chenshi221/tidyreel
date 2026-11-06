@@ -3,6 +3,7 @@ import 'package:path/path.dart' as p;
 
 import '../model/connection.dart';
 import '../model/scan.dart';
+import 'direct_lan.dart';
 import 'storage_backend.dart';
 
 /// Alist v3 / OpenList. Every endpoint answers HTTP 200 with `{code, message, data}`.
@@ -19,12 +20,14 @@ class AlistBackend implements StorageBackend {
     : _username = config.username,
       _password = credentials.password,
       _token = credentials.token,
-      _dio = Dio(
-        BaseOptions(
-          baseUrl: config.endpoint.replaceFirst(RegExp(r'/+$'), ''),
-          connectTimeout: const Duration(seconds: 15),
-          receiveTimeout: const Duration(seconds: 60),
-          validateStatus: (_) => true,
+      _dio = directForPrivateHosts(
+        Dio(
+          BaseOptions(
+            baseUrl: config.endpoint.replaceFirst(RegExp(r'/+$'), ''),
+            connectTimeout: const Duration(seconds: 15),
+            receiveTimeout: const Duration(seconds: 60),
+            validateStatus: (_) => true,
+          ),
         ),
       );
 

@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 
 import '../model/connection.dart';
 import '../model/scan.dart';
+import 'direct_lan.dart';
 import 'storage_backend.dart';
 
 /// WebDAV over raw dio (PROPFIND / MKCOL / MOVE / DELETE) with Basic auth.
@@ -19,17 +20,19 @@ class WebDAVBackend implements StorageBackend {
 
   WebDAVBackend(ConnectionConfig config, Credentials credentials)
     : _base = Uri.parse(config.endpoint),
-      _dio = Dio(
-        BaseOptions(
-          connectTimeout: const Duration(seconds: 15),
-          receiveTimeout: const Duration(seconds: 60),
-          validateStatus: (_) => true,
-          responseType: ResponseType.plain,
-          headers: {
-            if (config.username != null)
-              'Authorization':
-                  'Basic ${base64.encode(utf8.encode('${config.username}:${credentials.password ?? ''}'))}',
-          },
+      _dio = directForPrivateHosts(
+        Dio(
+          BaseOptions(
+            connectTimeout: const Duration(seconds: 15),
+            receiveTimeout: const Duration(seconds: 60),
+            validateStatus: (_) => true,
+            responseType: ResponseType.plain,
+            headers: {
+              if (config.username != null)
+                'Authorization':
+                    'Basic ${base64.encode(utf8.encode('${config.username}:${credentials.password ?? ''}'))}',
+            },
+          ),
         ),
       );
 

@@ -18,6 +18,7 @@ export 'src/tmdb/anilist.dart';
 export 'src/storage/storage_backend.dart';
 export 'src/storage/cached_backend.dart';
 export 'src/storage/walk.dart';
+export 'src/storage/direct_lan.dart' show isPrivateHost;
 export 'src/plan/recognizer.dart';
 export 'src/plan/strategy.dart';
 export 'src/plan/template.dart';
