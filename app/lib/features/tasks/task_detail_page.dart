@@ -78,10 +78,18 @@ class TaskDetailPage extends ConsumerWidget {
         if (task != null) stageLabel(task.stage),
         if (task != null && task.message.isNotEmpty) task.message,
       ].join('  ·  '),
-      leading: IconButton(
-        tooltip: '返回任务',
-        icon: const Icon(CupertinoIcons.chevron_left),
-        onPressed: () => context.go('/tasks'),
+      leading: Builder(
+        builder: (context) {
+          // Opened from 最近整理 (?from=sources): back goes back there.
+          final fromSources =
+              GoRouterState.of(context).uri.queryParameters['from'] ==
+              'sources';
+          return IconButton(
+            tooltip: fromSources ? '返回来源' : '返回任务',
+            icon: const Icon(CupertinoIcons.chevron_left),
+            onPressed: () => context.go(fromSources ? '/sources' : '/tasks'),
+          );
+        },
       ),
       actions: [
         if (task?.stage == TaskStage.partiallyFailed)

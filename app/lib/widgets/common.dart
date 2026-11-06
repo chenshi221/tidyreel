@@ -1,9 +1,11 @@
-import 'dart:io' show Platform;
+import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../ui/tokens.dart';
@@ -198,8 +200,8 @@ class Poster extends StatelessWidget {
         borderRadius: BorderRadius.circular(radius),
         child: posterPath == null
             ? placeholder
-            : Image.network(
-                tmdbImage(posterPath!, size),
+            : Image(
+                image: CachedImage(tmdbImage(posterPath!, size)),
                 width: width,
                 height: height,
                 fit: BoxFit.cover,
@@ -249,3 +251,57 @@ Future<bool> confirmDialog(
     false;
 
 const warningColor = Color(0xFFB7791F);
+
+/// A network image also kept on disk (app cache dir), so posters show at once
+/// after a restart instead of downloading again. TMDB image URLs never change.
+class CachedImage extends ImageProvider<CachedImage> {
+  final String url;
+
+  const CachedImage(this.url);
+
+  static Future<Directory>? _dir;
+  static final _http = HttpClient();
+
+  @override
+  Future<CachedImage> obtainKey(ImageConfiguration configuration) =>
+      SynchronousFuture(this);
+
+  @override
+  ImageStreamCompleter loadImage(
+    CachedImage key,
+    ImageDecoderCallback decode,
+  ) => MultiFrameImageStreamCompleter(codec: _load(decode), scale: 1);
+
+  Future<ui.Codec> _load(ImageDecoderCallback decode) async {
+    final dir = await (_dir ??= getApplicationCacheDirectory().then(
+      (d) => Directory('${d.path}/tmdb_images').create(recursive: true),
+    ));
+    final file = File(
+      '${dir.path}/${url.replaceAll(RegExp(r'[^A-Za-z0-9.]+'), '_')}',
+    );
+    Uint8List bytes;
+    if (await file.exists()) {
+      bytes = await file.readAsBytes();
+    } else {
+      final res = await (await _http.getUrl(Uri.parse(url))).close();
+      if (res.statusCode != HttpStatus.ok) {
+        throw NetworkImageLoadException(
+          statusCode: res.statusCode,
+          uri: Uri.parse(url),
+        );
+      }
+      bytes = await consolidateHttpClientResponseBytes(res);
+      // Write then rename: a crash mid-write never leaves a broken image.
+      final tmp = File('${file.path}.part');
+      await tmp.writeAsBytes(bytes, flush: true);
+      await tmp.rename(file.path);
+    }
+    return decode(await ui.ImmutableBuffer.fromUint8List(bytes));
+  }
+
+  @override
+  bool operator ==(Object other) => other is CachedImage && other.url == url;
+
+  @override
+  int get hashCode => url.hashCode;
+}

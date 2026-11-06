@@ -12,16 +12,25 @@ import '../../widgets/common.dart';
 import '../sources/sources_providers.dart';
 
 /// Works recognized in a task (poster + title), once recognition is done.
-final taskWorksProvider = FutureProvider.autoDispose
-    .family<List<Candidate>, TaskId>((ref, id) async {
-      final review = await ref.watch(taskManagerProvider).review(id);
-      final seen = <int>{};
-      return [
-        for (final g in review.scan.groups)
-          if ((review.decisions[g.id]?.match ?? g.match) case final m?)
-            if (seen.add(m.tmdbId)) m,
-      ];
-    });
+/// Kept alive so 最近整理 doesn't blank and refetch on every visit; it
+/// recomputes when the task changes stage.
+final taskWorksProvider = FutureProvider.family<List<Candidate>, TaskId>((
+  ref,
+  id,
+) async {
+  ref.watch(
+    tasksProvider.select(
+      (a) => a.value?.where((t) => t.id == id).firstOrNull?.stage,
+    ),
+  );
+  final review = await ref.watch(taskManagerProvider).review(id);
+  final seen = <int>{};
+  return [
+    for (final g in review.scan.groups)
+      if ((review.decisions[g.id]?.match ?? g.match) case final m?)
+        if (seen.add(m.tmdbId)) m,
+  ];
+});
 
 /// Files of a recognized task that joined no work (shown as 未归类).
 final taskUnassignedProvider = FutureProvider.autoDispose.family<int, TaskId>(

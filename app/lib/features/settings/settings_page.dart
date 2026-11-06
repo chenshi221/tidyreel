@@ -424,19 +424,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   padding: const EdgeInsets.all(14),
                   child: Row(
                     children: [
-                      Container(
-                        width: 40,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          color: p.accent,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: const Icon(
-                          CupertinoIcons.film_fill,
-                          color: Colors.white,
-                          size: 20,
-                        ),
-                      ),
+                      const AppLogo(),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Column(

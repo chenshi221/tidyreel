@@ -914,7 +914,7 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
                 border: Border(
                   left: BorderSide(
                     width: 3,
-                    color: s == season ? p.accent : Colors.transparent,
+                    color: s == season ? p.text : Colors.transparent,
                   ),
                 ),
               ),
@@ -1021,7 +1021,7 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
                             Icon(
                               CupertinoIcons.checkmark,
                               size: 13,
-                              color: p.accent,
+                              color: p.text,
                             ),
                         ],
                       ),
@@ -1095,8 +1095,8 @@ class WorkHeader extends StatelessWidget {
         children: [
           if (onImage) ...[
             Positioned.fill(
-              child: Image.network(
-                tmdbImage(backdrop, 'w1280'),
+              child: Image(
+                image: CachedImage(tmdbImage(backdrop, 'w1280')),
                 fit: BoxFit.cover,
                 alignment: Alignment.topRight,
                 errorBuilder: (_, _, _) => ColoredBox(color: p.accentSoft),
@@ -1682,8 +1682,8 @@ class _SeasonChip extends StatelessWidget {
             if (posterPath != null) ...[
               ClipRRect(
                 borderRadius: BorderRadius.circular(3),
-                child: Image.network(
-                  tmdbImage(posterPath!, 'w92'),
+                child: Image(
+                  image: CachedImage(tmdbImage(posterPath!, 'w92')),
                   width: 16,
                   height: 24,
                   fit: BoxFit.cover,
@@ -2086,7 +2086,7 @@ class _FolderOps extends StatelessWidget {
                       OpKind.relocate => CupertinoIcons.arrow_right_square,
                     },
                     size: 16,
-                    color: o.kind == OpKind.delete ? p.danger : p.accent,
+                    color: o.kind == OpKind.delete ? p.danger : p.textMuted,
                   ),
                   const SizedBox(width: 14),
                   Expanded(

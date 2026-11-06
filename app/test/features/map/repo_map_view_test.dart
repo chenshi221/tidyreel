@@ -224,6 +224,15 @@ void main() {
     final viewer = tester.widget<InteractiveViewer>(
       find.byKey(const ValueKey('map-viewer')),
     );
+    // A crowded map opens showing everything; zoom in to pan.
+    expect(
+      viewer.transformationController!.value.getMaxScaleOnAxis(),
+      lessThan(1),
+    );
+    for (var i = 0; i < 4; i++) {
+      await tester.tap(find.byKey(const ValueKey('map-zoom-in')));
+    }
+    await tester.pumpAndSettle();
     await tester.drag(find.byType(OrganicMap), const Offset(-200, -100));
     await tester.pumpAndSettle();
     final moved = viewer.transformationController!.value.getTranslation();
@@ -232,7 +241,11 @@ void main() {
     expect(tapped, isEmpty);
 
     // A click after panning still lands on a block.
-    await tester.tapAt(const Offset(450, 225));
+    // Zoomed in, a point may fall in a gap: try a few.
+    for (final dx in <double>[400, 430, 460, 490, 520]) {
+      if (tapped.isNotEmpty) break;
+      await tester.tapAt(Offset(dx, 200));
+    }
     expect(tapped, isNotEmpty);
 
     await tester.tap(find.byKey(const ValueKey('map-fit')));

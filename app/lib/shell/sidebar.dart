@@ -6,6 +6,7 @@ import 'package:tidyreel_core/tidyreel_core.dart';
 
 import '../data/providers.dart';
 import '../data/settings.dart';
+import '../features/sources/sources_page.dart' show openBrowser;
 import '../features/sources/sources_providers.dart';
 import '../features/tasks/tasks_page.dart' show stageLabel;
 import '../ui/tokens.dart';
@@ -44,6 +45,10 @@ class Sidebar extends ConsumerWidget {
         .length;
     final active = tasks.where((t) => t.stage.isActive).toList();
     final location = GoRouterState.of(context).uri.path;
+    final favorites = [
+      for (final c in ref.watch(connectionsEditorProvider))
+        for (final f in c.favorites) (conn: c, path: f),
+    ];
     // macOS: the traffic lights float over the sidebar's top-left corner.
     final mac = Theme.of(context).platform == TargetPlatform.macOS;
 
@@ -187,26 +192,55 @@ class Sidebar extends ConsumerWidget {
                   CupertinoIcons.textformat,
                   '命名规则',
                 ),
-                if (!collapsed && active.isNotEmpty) ...[
-                  sectionTitle('后台任务'),
+                if (collapsed)
+                  const Spacer()
+                else
                   Expanded(
                     child: ListView(
                       padding: EdgeInsets.zero,
                       children: [
-                        for (final t in active)
-                          _TaskItem(
-                            task: t,
-                            onTap: () => go(
-                              t.stage == TaskStage.awaitingReview
-                                  ? '/tasks/${t.id.value}/review'
-                                  : '/tasks',
+                        if (favorites.isNotEmpty) ...[
+                          sectionTitle('收藏'),
+                          for (final f in favorites.take(6))
+                            _FavItem(
+                              key: ValueKey(
+                                'side-fav ${f.conn.id.value} ${f.path}',
+                              ),
+                              path: f.path,
+                              connection: f.conn.name,
+                              onTap: () {
+                                openBrowser(ref, f.conn, f.path);
+                                context.go('/sources');
+                              },
                             ),
-                          ),
+                        ],
+                        if (active.isNotEmpty) ...[
+                          sectionTitle('后台任务'),
+                          for (final t in active)
+                            _TaskItem(
+                              task: t,
+                              onTap: () => go(
+                                t.stage == TaskStage.awaitingReview
+                                    ? '/tasks/${t.id.value}/review'
+                                    : '/tasks',
+                              ),
+                            ),
+                        ],
                       ],
                     ),
                   ),
-                ] else
-                  const Spacer(),
+                if (!collapsed)
+                  _Summary(
+                    waiting: pending,
+                    done: tasks
+                        .where(
+                          (t) =>
+                              t.stage == TaskStage.done ||
+                              t.stage == TaskStage.partiallyFailed,
+                        )
+                        .length,
+                    onTap: () => go('/tasks'),
+                  ),
                 item(
                   '/settings',
                   CupertinoIcons.gear,
@@ -231,9 +265,11 @@ class _Brand extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = Palette.of(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 6, 0, 2),
+      padding: const EdgeInsets.fromLTRB(8, 6, 0, 2),
       child: Row(
         children: [
+          const AppLogo(size: 22),
+          const SizedBox(width: 9),
           Text(
             '理片',
             style: TextStyle(
@@ -301,9 +337,10 @@ class _NavItem extends StatelessWidget {
                     ? iconW
                     : Badge(label: Text('$badge'), child: iconW),
               )
-            // Expanded: words only, like a table of contents.
             : Row(
                 children: [
+                  iconW,
+                  const SizedBox(width: 10),
                   Expanded(
                     child: Text(
                       label,
@@ -417,6 +454,110 @@ class _TaskItem extends StatelessWidget {
                 ],
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A favorite folder: a quick way back to the download dirs you tidy most.
+class _FavItem extends StatelessWidget {
+  final String path;
+  final String connection;
+  final VoidCallback onTap;
+
+  const _FavItem({
+    super.key,
+    required this.path,
+    required this.connection,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    final name = path.split('/').where((s) => s.isNotEmpty).lastOrNull ?? '根目录';
+    return Tooltip(
+      message: '$connection · $path',
+      waitDuration: const Duration(milliseconds: 600),
+      child: Hoverable(
+        onTap: onTap,
+        builder: (context, hover) => Container(
+          height: 30,
+          margin: const EdgeInsets.only(bottom: 1),
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            color: hover ? p.hover : Colors.transparent,
+            borderRadius: BorderRadius.circular(Radii.lg),
+          ),
+          child: Row(
+            children: [
+              Icon(CupertinoIcons.star, size: 13, color: p.textFaint),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 13, color: p.textMuted),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Two counts at the foot of the sidebar: what waits for you, what's done.
+class _Summary extends StatelessWidget {
+  final int waiting;
+  final int done;
+  final VoidCallback onTap;
+
+  const _Summary({
+    required this.waiting,
+    required this.done,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    Widget stat(String value, String label, {bool hot = false}) => Expanded(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w500,
+              color: hot ? p.accent : p.text,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+          Text(label, style: TextStyle(fontSize: 11, color: p.textFaint)),
+        ],
+      ),
+    );
+    return Hoverable(
+      key: const ValueKey('side-summary'),
+      onTap: onTap,
+      builder: (context, hover) => Container(
+        margin: const EdgeInsets.fromLTRB(0, 8, 0, 6),
+        padding: const EdgeInsets.fromLTRB(12, 9, 12, 9),
+        decoration: BoxDecoration(
+          color: hover ? p.hover : p.panel,
+          borderRadius: BorderRadius.circular(Radii.lg),
+          border: Border.all(color: p.line, width: hairline),
+        ),
+        child: Row(
+          children: [
+            stat('$waiting', '待确认', hot: waiting > 0),
+            stat('$done', '已整理'),
           ],
         ),
       ),

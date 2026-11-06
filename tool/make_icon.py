@@ -68,6 +68,12 @@ def main():
              "-o", str(mac / f"app_icon_{s}.png")],
             check=True,
         )
+    # In-app logo (sidebar, 关于).
+    subprocess.run(
+        ["rsvg-convert", "-w", "256", "-h", "256", str(source),
+         "-o", str(ROOT / "app/assets/app_icon.png")],
+        check=True,
+    )
     ico = ROOT / "app/windows/runner/resources/app_icon.ico"
     with tempfile.TemporaryDirectory() as tmp:
         big = pathlib.Path(tmp) / "icon.png"
