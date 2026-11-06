@@ -4,10 +4,12 @@ import '../model/ids.dart';
 import '../model/media.dart';
 import '../model/metadata.dart';
 import '../model/scan.dart';
+import '../model/title_rules.dart';
 import '../parser/parser.dart';
 import '../tmdb/anilist.dart';
 import '../tmdb/metadata_provider.dart';
 import 'follow.dart';
+import 'template.dart' show applyRewrites;
 import 'text.dart';
 
 /// Owner: Agent D. Classify + parse + anchor grouping + TMDB match (PLAN §1 step 4).
@@ -50,12 +52,17 @@ class AnchorRecognizer implements Recognizer {
   /// Read once per scan, so a settings change applies to the next one.
   final MediaHint Function() hint;
 
+  /// 片名规则, read once per scan like [hint].
+  final TitleRules Function() titleRules;
+
   AnchorRecognizer(
     this.parser,
     this.metadata, {
     this.altTitles,
     MediaHint Function()? hint,
-  }) : hint = hint ?? (() => MediaHint.mixed);
+    TitleRules Function()? titleRules,
+  }) : hint = hint ?? (() => MediaHint.mixed),
+       titleRules = titleRules ?? (() => const TitleRules());
 
   @override
   Future<ScanResult> recognize(
@@ -111,12 +118,13 @@ class AnchorRecognizer implements Recognizer {
 
     final cache = <String, Future<List<Candidate>>>{};
     final h = hint();
+    final rules = titleRules();
     // A few folders at a time: each costs several TMDB round trips.
     final looked = <_Lookup>[];
     for (var i = 0; i < drafts.length; i += 4) {
       looked.addAll(
         await Future.wait(
-          drafts.skip(i).take(4).map((d) => _lookup(d, cache, h)),
+          drafts.skip(i).take(4).map((d) => _lookup(d, cache, h, rules)),
         ),
       );
     }
@@ -249,12 +257,13 @@ class AnchorRecognizer implements Recognizer {
     _Draft d,
     Map<String, Future<List<Candidate>>> cache,
     MediaHint hint,
+    TitleRules rules,
   ) async {
     final vids = [for (final v in d.videos) v.file];
     final main = vids.where((v) => v.parsed?.kind != MediaKind.extra).toList();
     final tvVotes = main.where((v) => _looksTv(v.parsed)).length;
     final looksTv = main.isNotEmpty && tvVotes * 2 > main.length;
-    final kind = switch (hint) {
+    var kind = switch (hint) {
       MediaHint.movie => MediaKind.movie,
       MediaHint.tv => main.isEmpty ? MediaKind.movie : MediaKind.episode,
       // A folder of several files is a series; one file may be a 剧场版.
@@ -275,15 +284,20 @@ class AnchorRecognizer implements Recognizer {
         ]) ??
         (d.folderTitle == null ? null : parser.parse(baseOf(d.dir)).year);
 
-    final queries = <String>[
-      if (d.isRoot) ...[
-        ?fileTitle,
-        ?d.folderTitle,
-      ] else ...[
-        ?d.folderTitle,
-        ?fileTitle,
-      ],
-    ].where((q) => normTitle(q).isNotEmpty).toSet().toList();
+    final queries =
+        <String>[
+              if (d.isRoot) ...[
+                ?fileTitle,
+                ?d.folderTitle,
+              ] else ...[
+                ?d.folderTitle,
+                ?fileTitle,
+              ],
+            ]
+            .map((q) => applyRewrites(q, rules.cleanups).trim())
+            .where((q) => normTitle(q).isNotEmpty)
+            .toSet()
+            .toList();
 
     Candidate? match;
     var score = 0.0;
@@ -317,10 +331,31 @@ class AnchorRecognizer implements Recognizer {
       return false;
     }
 
-    for (final q in queries) {
-      if (await tryQuery(q)) {
-        anchor = q;
-        break;
+    // 指定匹配 wins over any search.
+    final names = [
+      baseOf(d.dir),
+      ?d.folderTitle,
+      ?fileTitle,
+    ].map((n) => n.toLowerCase());
+    final pin = rules.pins
+        .where(
+          (p) =>
+              p.keyword.trim().isNotEmpty &&
+              names.any((n) => n.contains(p.keyword.trim().toLowerCase())),
+        )
+        .firstOrNull;
+    if (pin != null) {
+      match = pin.match;
+      score = 1;
+      kind = pin.match.kind == MediaKind.movie
+          ? MediaKind.movie
+          : MediaKind.episode;
+    } else {
+      for (final q in queries) {
+        if (await tryQuery(q)) {
+          anchor = q;
+          break;
+        }
       }
     }
     final askAlt =
@@ -335,6 +370,20 @@ class AnchorRecognizer implements Recognizer {
           if (await tryQuery(a, scoreAs: [q, ...alts])) {
             anchor = q;
             break alt;
+          }
+        }
+      }
+    }
+    // Still nothing: loosen the names (sort letter, brackets, one language).
+    if (match == null) {
+      final tried = {for (final q in queries) normTitle(q)};
+      relaxed:
+      for (final q in queries) {
+        for (final r in relaxedQueries(q, baseOf(d.dir))) {
+          if (!tried.add(normTitle(r))) continue;
+          if (await tryQuery(r)) {
+            anchor = r;
+            break relaxed;
           }
         }
       }

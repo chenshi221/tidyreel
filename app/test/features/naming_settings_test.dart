@@ -9,6 +9,35 @@ import 'package:tidyreel_core/tidyreel_core.dart';
 import 'helpers.dart';
 
 void main() {
+  testWidgets('片名规则: the sample shows what would be searched', (tester) async {
+    final (_, c) = await pumpPage(tester, const NamingPage());
+    final searches = find.byKey(const ValueKey('title-searches'));
+    await tester.scrollUntilVisible(
+      searches,
+      300,
+      scrollable: find
+          .descendant(
+            of: find.byType(ListView).first,
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
+    expect(
+      tester.widget<Text>(searches).data,
+      '依次搜索：R人生复本  →  人生复本  →  Dark Matter',
+    );
+
+    await tester.tap(find.byKey(const ValueKey('add-title-cleanup')));
+    await tester.pumpAndSettle();
+    expect(c.read(titleRulesProvider).cleanups, hasLength(1));
+    await tester.enterText(
+      find.byKey(const ValueKey('title-sample')),
+      '【日剧】幸福伽菜子的快乐杀手生活',
+    );
+    await tester.pumpAndSettle();
+    expect(tester.widget<Text>(searches).data, '依次搜索：幸福伽菜子的快乐杀手生活');
+  });
+
   testWidgets('naming page: toggles update the profile, preview degrades', (
     tester,
   ) async {

@@ -285,45 +285,84 @@ class _TmdbSearchBoxState extends ConsumerState<TmdbSearchBox> {
   }
 }
 
-Future<Candidate?> showTmdbSearchDialog(
+/// Search TMDB and pick a work. With [pinKeyword], also offers
+/// 「以后都这样匹配」: the returned `pin` is the keyword to remember (片名规则).
+Future<({Candidate match, String? pin})?> showTmdbSearchDialog(
   BuildContext context, {
   required String initial,
-}) => showDialog<Candidate>(
-  context: context,
-  builder: (ctx) => MacSheet(
-    child: SizedBox(
-      width: 520,
-      height: 480,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text('重新搜索 TMDB', style: Theme.of(ctx).textTheme.titleMedium),
-            const SizedBox(height: 12),
-            Expanded(
-              child: SingleChildScrollView(
-                child: TmdbSearchBox(
-                  initial: initial,
-                  autoSearch: true,
-                  onPick: (c) => Navigator.pop(ctx, c),
+  String? pinKeyword,
+}) {
+  var pin = false;
+  final keyword = TextEditingController(text: pinKeyword);
+  return showDialog<({Candidate match, String? pin})>(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setState) => MacSheet(
+        child: SizedBox(
+          width: 520,
+          height: 520,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('重新搜索 TMDB', style: Theme.of(ctx).textTheme.titleMedium),
+                const SizedBox(height: 12),
+                Expanded(
+                  child: SingleChildScrollView(
+                    child: TmdbSearchBox(
+                      initial: initial,
+                      autoSearch: true,
+                      onPick: (c) => Navigator.pop(ctx, (
+                        match: c,
+                        pin: pin && keyword.text.trim().isNotEmpty
+                            ? keyword.text.trim()
+                            : null,
+                      )),
+                    ),
+                  ),
                 ),
-              ),
+                if (pinKeyword != null) ...[
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Checkbox(
+                        key: const ValueKey('pin-match'),
+                        value: pin,
+                        onChanged: (v) => setState(() => pin = v ?? false),
+                      ),
+                      const Text('以后文件夹名包含', style: TextStyle(fontSize: 13)),
+                      const SizedBox(width: 6),
+                      SizedBox(
+                        width: 150,
+                        child: TextField(
+                          key: const ValueKey('pin-keyword'),
+                          controller: keyword,
+                          enabled: pin,
+                          style: const TextStyle(fontSize: 13),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      const Text('时都匹配到选中的作品', style: TextStyle(fontSize: 13)),
+                    ],
+                  ),
+                ],
+                const SizedBox(height: 10),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text('取消'),
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 10),
-            Align(
-              alignment: Alignment.centerRight,
-              child: OutlinedButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('取消'),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     ),
-  ),
-);
+  ).whenComplete(keyword.dispose);
+}
 
 class _Rating extends StatelessWidget {
   final double value;

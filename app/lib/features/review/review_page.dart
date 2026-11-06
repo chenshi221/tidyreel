@@ -258,14 +258,20 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
   }
 
   Future<void> _correct(MediaGroup g) async {
-    final c = await showTmdbSearchDialog(
+    final r = await showTmdbSearchDialog(
       context,
       initial: effectiveMatch(g, _decisionOf(g.id))?.title ?? g.anchorTitle,
+      pinKeyword: g.anchorTitle,
     );
-    // Picking a match means "organize this": an unmatched group starts unchecked.
-    if (c != null) {
-      await _update(g.id, _decisionOf(g.id).copyWith(match: c, selected: true));
+    if (r == null) return;
+    if (r.pin != null) {
+      ref.read(titleRulesProvider.notifier).pin(r.pin!, r.match);
     }
+    // Picking a match means "organize this": an unmatched group starts unchecked.
+    await _update(
+      g.id,
+      _decisionOf(g.id).copyWith(match: r.match, selected: true),
+    );
   }
 
   Future<void> _execute() async {

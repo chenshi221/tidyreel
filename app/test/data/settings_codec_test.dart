@@ -40,6 +40,23 @@ void main() {
     expect(connectionFromJson(old).startDir, '/');
   });
 
+  test('title rules survive a JSON round trip', () {
+    const rules = TitleRules(
+      cleanups: [NameRewrite(r'^【.*?】', '')],
+      pins: [
+        TitlePin(
+          '复本',
+          Candidate(tmdbId: 7, kind: MediaKind.episode, title: '人生复本'),
+        ),
+      ],
+    );
+    final back = titleRulesFromJson(titleRulesToJson(rules));
+    expect(back.cleanups.single.pattern, r'^【.*?】');
+    expect(back.pins.single.keyword, '复本');
+    expect(back.pins.single.match.tmdbId, 7);
+    expect(titleRulesFromJson(const {}).pins, isEmpty);
+  });
+
   test('unknown enum names fall back to defaults', () {
     final o = namingOptionsFromJson({
       'episodeStyle': 'gone',

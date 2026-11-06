@@ -634,6 +634,7 @@ final _stripBracketsRe = RegExp(r'[\[\]()]');
 final _anyWhitespaceRe = RegExp(r'\s+');
 final _edgePunctRe = RegExp(r'^[\s\-_.~,;:|/&+@]+|[\s\-_.~,;:|/&+@]+$');
 final _latinThreeWordRe = RegExp(r'[A-Za-z]{3,}');
+final _spacedCjkRe = RegExp(r'(?<![^\s])[㐀-鿿](?: [㐀-鿿](?![^\s]))+');
 
 String _pickTitle(String region) {
   var t = region
@@ -641,6 +642,8 @@ String _pickTitle(String region) {
       .replaceAll(_stripBracketsRe, ' ')
       .replaceAll(_anyWhitespaceRe, ' ');
   t = t.replaceAll(_edgePunctRe, '');
+  // "谜.探.路.德.维.希" (dots between every character): join the run back up.
+  t = t.replaceAllMapped(_spacedCjkRe, (m) => m[0]!.replaceAll(' ', ''));
   // Bilingual: keep CJK block when a Latin block with a 3+ letter word is at one edge.
   final toks = t.split(' ').where((x) => x.isNotEmpty).toList();
   if (toks.length > 1 && toks.any(_cjk.hasMatch)) {

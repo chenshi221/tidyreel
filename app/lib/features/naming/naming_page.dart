@@ -660,6 +660,177 @@ class _OptionsPanel extends ConsumerWidget {
                   ],
                 ),
         ),
+        const _TitleRulesSection(),
+      ],
+    );
+  }
+}
+
+/// 片名规则: how folder names become TMDB searches. Shared by 电影 and 剧集.
+class _TitleRulesSection extends ConsumerStatefulWidget {
+  const _TitleRulesSection();
+
+  @override
+  ConsumerState<_TitleRulesSection> createState() => _TitleRulesSectionState();
+}
+
+class _TitleRulesSectionState extends ConsumerState<_TitleRulesSection> {
+  final _sample = TextEditingController(text: 'R人生复本 Dark Matter');
+
+  @override
+  void dispose() {
+    _sample.dispose();
+    super.dispose();
+  }
+
+  void _set(TitleRules r) => ref.read(titleRulesProvider.notifier).set(r);
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    final rules = ref.watch(titleRulesProvider);
+    final small = Theme.of(context).textTheme.bodySmall;
+    // What a folder with this name would search for, in order.
+    final name = _sample.text.trim();
+    final parsed = name.isEmpty
+        ? ''
+        : const RuleBasedParser()
+                  .parse('S01E01.mkv', parentDirs: [name])
+                  .title ??
+              '';
+    final first = applyRewrites(parsed, rules.cleanups).trim();
+    final pinned = rules.pins
+        .where(
+          (x) =>
+              x.keyword.trim().isNotEmpty &&
+              name.toLowerCase().contains(x.keyword.trim().toLowerCase()),
+        )
+        .firstOrNull;
+    final searches = [
+      if (first.isNotEmpty) first,
+      ...relaxedQueries(first, name),
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SectionLabel(
+          '片名规则',
+          trailing: TextButton.icon(
+            key: const ValueKey('add-title-cleanup'),
+            onPressed: () => _set(
+              TitleRules(
+                cleanups: [...rules.cleanups, const NameRewrite('', '')],
+                pins: rules.pins,
+              ),
+            ),
+            icon: const Icon(CupertinoIcons.plus, size: 12),
+            label: const Text('添加'),
+          ),
+        ),
+        Panel(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (rules.cleanups.isEmpty)
+                Text(
+                  '识别前先按正则清洗文件夹名，再去 TMDB 搜索。'
+                  '比如把 ^【.*?】 换成空，去掉「【日剧】」这类前缀。'
+                  '内置规则已经会去掉排序字母、分隔点和括号，搜不到时再只用中文名或英文名搜。',
+                  style: small,
+                )
+              else
+                for (final (i, r) in rules.cleanups.indexed)
+                  _RewriteRow(
+                    key: ValueKey('title-cleanup-$i'),
+                    value: r,
+                    onChanged: (v) => _set(
+                      TitleRules(
+                        cleanups: [...rules.cleanups]..[i] = v,
+                        pins: rules.pins,
+                      ),
+                    ),
+                    onRemove: () => _set(
+                      TitleRules(
+                        cleanups: [...rules.cleanups]..removeAt(i),
+                        pins: rules.pins,
+                      ),
+                    ),
+                  ),
+              const SizedBox(height: 10),
+              TextField(
+                key: const ValueKey('title-sample'),
+                controller: _sample,
+                decoration: const InputDecoration(
+                  hintText: '输入一个文件夹名试试',
+                  prefixIcon: Icon(CupertinoIcons.search, size: 14),
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                key: const ValueKey('title-searches'),
+                pinned != null
+                    ? '指定匹配 →《${pinned.match.title}》，不搜索'
+                    : searches.isEmpty
+                    ? '没有可搜索的片名'
+                    : '依次搜索：${searches.join('  →  ')}',
+                style: small?.copyWith(color: p.textMuted),
+              ),
+            ],
+          ),
+        ),
+        const SectionLabel('指定匹配'),
+        Panel(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          child: rules.pins.isEmpty
+              ? Text(
+                  '总是搜不准的片名，在识别结果里「修正匹配」时勾选'
+                  '「以后都这样匹配」，就会记在这里：文件夹名包含关键词时直接用这部作品。',
+                  style: small,
+                )
+              : Column(
+                  children: [
+                    for (final pin in rules.pins)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        child: Row(
+                          children: [
+                            Poster(
+                              posterPath: pin.match.posterPath,
+                              width: 24,
+                              height: 36,
+                              radius: 3,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                '包含「${pin.keyword}」→《${pin.match.title}》'
+                                '${pin.match.year == null ? '' : ' ${pin.match.year}'}',
+                                style: const TextStyle(fontSize: 13),
+                              ),
+                            ),
+                            IconButton(
+                              key: ValueKey('remove-pin-${pin.keyword}'),
+                              tooltip: '删除',
+                              iconSize: 14,
+                              icon: const Icon(CupertinoIcons.xmark),
+                              onPressed: () => _set(
+                                TitleRules(
+                                  cleanups: rules.cleanups,
+                                  pins: [
+                                    for (final x in rules.pins)
+                                      if (x != pin) x,
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
+        ),
       ],
     );
   }
