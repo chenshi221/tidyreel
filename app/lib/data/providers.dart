@@ -232,6 +232,7 @@ final taskManagerProvider = Provider<TaskManager>((ref) {
           ?.libraryRoot,
       naming: ref.read(namingProfileProvider),
       deleteJunk: ref.read(settingsProvider).autoDeleteJunk,
+      scrape: ref.read(settingsProvider).scrape,
       confidenceThreshold: ref.read(settingsProvider).confidenceThreshold,
     ),
   );

@@ -2123,6 +2123,10 @@ class _FolderOps extends StatelessWidget {
                       OpKind.mkdir => CupertinoIcons.folder_badge_plus,
                       OpKind.delete => CupertinoIcons.trash,
                       OpKind.relocate => CupertinoIcons.arrow_right_square,
+                      OpKind.write =>
+                        o.dst.endsWith('.nfo')
+                            ? CupertinoIcons.doc_text
+                            : CupertinoIcons.photo,
                     },
                     size: 16,
                     color: o.kind == OpKind.delete ? p.danger : p.textMuted,
@@ -2137,6 +2141,7 @@ class _FolderOps extends StatelessWidget {
                             OpKind.mkdir => '新建 ${o.dst}',
                             OpKind.delete => '删除 ${o.src}',
                             OpKind.relocate => o.src,
+                            OpKind.write => '写入 ${o.dst}',
                           },
                           style: o.kind == OpKind.relocate
                               ? TextStyle(fontSize: 11.5, color: p.textFaint)
@@ -2145,6 +2150,11 @@ class _FolderOps extends StatelessWidget {
                                   fontWeight: FontWeight.w500,
                                 ),
                         ),
+                        if (o.warning != null && o.kind == OpKind.write)
+                          Text(
+                            o.warning!,
+                            style: TextStyle(fontSize: 11.5, color: p.warning),
+                          ),
                         if (o.kind == OpKind.relocate)
                           Text(
                             '→ ${o.dst}',

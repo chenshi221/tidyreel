@@ -510,9 +510,7 @@ class DefaultTaskManager implements TaskManager {
     };
     final dsts = [
       for (final o in plan.ops)
-        if (o.selected &&
-            (o.kind == OpKind.relocate || o.kind == OpKind.mkdir) &&
-            !srcs.contains(o.dst))
+        if (o.selected && o.kind != OpKind.delete && !srcs.contains(o.dst))
           o.dst,
     ];
     final be = backendFor(s.connection);

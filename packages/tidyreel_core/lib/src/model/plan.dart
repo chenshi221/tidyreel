@@ -100,12 +100,16 @@ class PlanOptions {
   /// Rows below this parse/match confidence start unselected.
   final double confidenceThreshold;
 
+  /// 刮削模式: also write .nfo files and TMDB artwork next to the media.
+  final bool scrape;
+
   const PlanOptions({
     this.mode = OrganizeMode.inPlace,
     this.libraryRoot,
     this.naming = NamingProfile.vidhub,
     this.deleteJunk = false,
     this.confidenceThreshold = 0.7,
+    this.scrape = false,
   });
 }
 
@@ -118,14 +122,22 @@ enum OpKind {
   /// Move and/or rename src -> dst. The executor picks rename vs move calls.
   relocate,
   delete,
+
+  /// Create file [RenameOp.dst] (刮削: .nfo, artwork); never overwrites.
+  /// [RenameOp.src] is where the bytes come from: an http(s) URL to download,
+  /// or [writeTextPrefix] followed by the text itself.
+  write,
 }
+
+/// [RenameOp.src] prefix for a [OpKind.write] whose content is inline text.
+const writeTextPrefix = 'text:';
 
 class RenameOp {
   final OpId id;
   final OpKind kind;
   final ExecPhase phase;
 
-  /// Empty for mkdir.
+  /// Empty for mkdir; the content source for write (see [OpKind.write]).
   final String src;
 
   /// Empty for delete.

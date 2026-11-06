@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
+
+import 'package:dio/dio.dart';
 
 import 'package:path/path.dart' as p;
 
@@ -68,6 +71,9 @@ class DefaultExecutor implements Executor {
   /// Injectable so retry/backoff tests run instantly.
   final Delay delay;
 
+  /// Downloads a [OpKind.write] source URL (TMDB artwork). Tests inject one.
+  final Future<List<int>> Function(Uri url) fetch;
+
   DefaultExecutor(
     this.history, {
     this.concurrency = 4,
@@ -78,7 +84,25 @@ class DefaultExecutor implements Executor {
       Duration(seconds: 4),
     ],
     this.delay = _defaultDelay,
+    this.fetch = _download,
   });
+
+  static final _dio = Dio(
+    BaseOptions(
+      connectTimeout: const Duration(seconds: 15),
+      receiveTimeout: const Duration(seconds: 60),
+      responseType: ResponseType.bytes,
+    ),
+  );
+
+  static Future<List<int>> _download(Uri url) async {
+    try {
+      final r = await _dio.getUri<List<int>>(url);
+      return r.data ?? const [];
+    } on DioException catch (e) {
+      throw StorageException(StorageErrorCode.network, '下载 $url：${e.message}');
+    }
+  }
 
   static Future<void> _defaultDelay(Duration d) => Future<void>.delayed(d);
 
@@ -393,6 +417,11 @@ class DefaultExecutor implements Executor {
         if ((await be.list(op.dst, refresh: true)).isNotEmpty) {
           return '文件夹非空，已保留';
         }
+        await be.remove(p.posix.dirname(op.dst), [p.posix.basename(op.dst)]);
+        return null;
+      case OpKind.write:
+        // Only ever a file this op created (write never overwrites).
+        if (!await be.exists(op.dst)) return null;
         await be.remove(p.posix.dirname(op.dst), [p.posix.basename(op.dst)]);
         return null;
       case OpKind.relocate:
@@ -755,6 +784,13 @@ class DefaultExecutor implements Executor {
       case OpKind.delete:
         if (resuming && !await be.exists(op.src)) return;
         await be.remove(p.posix.dirname(op.src), [p.posix.basename(op.src)]);
+      case OpKind.write:
+        // After a crash the file may already be written.
+        if (resuming && await be.exists(op.dst)) return;
+        final bytes = op.src.startsWith(writeTextPrefix)
+            ? utf8.encode(op.src.substring(writeTextPrefix.length))
+            : await fetch(Uri.parse(op.src));
+        await be.write(op.dst, bytes);
       case OpKind.relocate:
         // The tmp name carries this op's id, so a file there is ours whatever
         // sits at src or dst (another op's file may have landed on either).

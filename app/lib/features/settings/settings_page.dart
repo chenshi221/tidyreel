@@ -175,6 +175,17 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   ),
                 ),
                 SettingRow(
+                  title: '刮削模式',
+                  caption:
+                      '整理时一并写入 NFO 和 TMDB 海报、背景图、剧集截图。'
+                      '已有的文件不会被覆盖，撤销时会删掉写入的文件',
+                  control: MacSwitch(
+                    key: const ValueKey('scrape'),
+                    value: s.scrape,
+                    onChanged: (v) => _set((o) => o.copyWith(scrape: v)),
+                  ),
+                ),
+                SettingRow(
                   title: '提交前预览',
                   caption: '先快速扫一遍，显示文件数量和风险提示，再决定是否提交',
                   control: toggle(

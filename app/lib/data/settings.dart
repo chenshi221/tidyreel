@@ -37,6 +37,9 @@ class AppSettings {
   final bool notifyRecognized;
   final bool notifyFinished;
 
+  /// 刮削模式: write .nfo files and TMDB artwork while organizing.
+  final bool scrape;
+
   const AppSettings({
     this.tmdbApiKey = '',
     this.tmdbBaseUrl = 'https://api.themoviedb.org/3',
@@ -55,6 +58,7 @@ class AppSettings {
     this.reduceMotion = false,
     this.notifyRecognized = true,
     this.notifyFinished = true,
+    this.scrape = false,
   });
 
   AppSettings copyWith({
@@ -75,6 +79,7 @@ class AppSettings {
     bool? reduceMotion,
     bool? notifyRecognized,
     bool? notifyFinished,
+    bool? scrape,
   }) => AppSettings(
     tmdbApiKey: tmdbApiKey ?? this.tmdbApiKey,
     tmdbBaseUrl: tmdbBaseUrl ?? this.tmdbBaseUrl,
@@ -93,6 +98,7 @@ class AppSettings {
     reduceMotion: reduceMotion ?? this.reduceMotion,
     notifyRecognized: notifyRecognized ?? this.notifyRecognized,
     notifyFinished: notifyFinished ?? this.notifyFinished,
+    scrape: scrape ?? this.scrape,
   );
 }
 
@@ -155,6 +161,7 @@ class SettingsNotifier extends Notifier<AppSettings> {
       reduceMotion: j?['reduceMotion'] as bool? ?? d.reduceMotion,
       notifyRecognized: j?['notifyRecognized'] as bool? ?? d.notifyRecognized,
       notifyFinished: j?['notifyFinished'] as bool? ?? d.notifyFinished,
+      scrape: j?['scrape'] as bool? ?? d.scrape,
     );
   }
 
@@ -178,6 +185,7 @@ class SettingsNotifier extends Notifier<AppSettings> {
       'reduceMotion': state.reduceMotion,
       'notifyRecognized': state.notifyRecognized,
       'notifyFinished': state.notifyFinished,
+      'scrape': state.scrape,
     });
     if (old.tmdbApiKey != state.tmdbApiKey) {
       _boot.secrets.write(_tmdbSecret, state.tmdbApiKey.trim());

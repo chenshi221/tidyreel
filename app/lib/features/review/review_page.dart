@@ -301,7 +301,9 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
     }
     final ops = r.preview.ops.where((o) => o.selected).toList();
     if (ops.isEmpty) return;
-    int n(ExecPhase p) => ops.where((o) => o.phase == p).length;
+    int n(ExecPhase p) =>
+        ops.where((o) => o.phase == p && o.kind != OpKind.write).length;
+    final writes = ops.where((o) => o.kind == OpKind.write).length;
     final groups = r.decisions.values.where((d) => d.selected).length;
     final ok =
         !ref.read(settingsProvider).confirmBeforeExecute ||
@@ -313,6 +315,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
             '· 重命名/移动文件 ${n(ExecPhase.files)} 项\n'
             '· 整理文件夹 ${n(ExecPhase.folders)} 项\n'
             '· 清理 ${n(ExecPhase.cleanup)} 项\n'
+            '${writes == 0 ? '' : '· 写入刮削文件 $writes 个（NFO、海报）\n'}'
             '执行后可在任务页撤销。',
           ),
           confirmLabel: '执行',
