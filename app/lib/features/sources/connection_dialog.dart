@@ -5,26 +5,48 @@ import 'package:tidyreel_core/tidyreel_core.dart';
 
 import '../../ui/tokens.dart';
 import '../../ui/widgets.dart';
+import '../../data/smb_backend.dart' show SmbTarget, parseSmbEndpoint;
 import 'folder_picker.dart';
 import 'sources_providers.dart' show ConnCheck, ConnStatus, FolderLister;
 
 String connectionTypeLabel(ConnectionType t) => switch (t) {
   ConnectionType.alist => 'Alist',
   ConnectionType.webdav => 'WebDAV',
+  ConnectionType.smb => 'SMB',
   ConnectionType.local => '本地',
 };
 
 Color connectionTypeColor(ConnectionType t) => switch (t) {
   ConnectionType.alist => const Color(0xFF3E7CB1),
   ConnectionType.webdav => const Color(0xFF8B5FBF),
+  ConnectionType.smb => const Color(0xFFD08A2E),
   ConnectionType.local => const Color(0xFF5A9A5E),
 };
 
 IconData connectionTypeIcon(ConnectionType t) => switch (t) {
   ConnectionType.alist => CupertinoIcons.cloud,
   ConnectionType.webdav => CupertinoIcons.globe,
+  ConnectionType.smb => CupertinoIcons.archivebox,
   ConnectionType.local => CupertinoIcons.desktopcomputer,
 };
+
+/// The three choices at the top of the dialog; Alist and WebDAV share one.
+enum _Kind { dav, smb, local }
+
+/// 模板 under WebDAV / Alist: fills type, port and path for common servers.
+enum DavTemplate {
+  alistApi('Alist / OpenList（API，推荐）', ConnectionType.alist, '5244', ''),
+  alistDav('Alist / OpenList（WebDAV）', ConnectionType.webdav, '5244', '/dav'),
+  synology('群晖 WebDAV', ConnectionType.webdav, '5005', ''),
+  generic('通用 WebDAV', ConnectionType.webdav, '', '');
+
+  final String label;
+  final ConnectionType type;
+  final String port;
+  final String path;
+
+  const DavTemplate(this.label, this.type, this.port, this.path);
+}
 
 class ConnectionDraft {
   final ConnectionConfig config;
@@ -120,13 +142,24 @@ class _ConnectionDialog extends StatefulWidget {
 
 const _defaultPort = '5244';
 const _davPath = '/dav';
+const _smbPort = '445';
 
 class _ConnectionDialogState extends State<_ConnectionDialog> {
   late var _type = widget.existing?.type ?? ConnectionType.alist;
-  late final EndpointParts _initial =
-      widget.existing == null || widget.existing!.type == ConnectionType.local
-      ? const EndpointParts(port: _defaultPort)
-      : EndpointParts.parse(widget.existing!.endpoint);
+  late final SmbTarget? _smb = widget.existing?.type == ConnectionType.smb
+      ? parseSmbEndpoint(widget.existing!.endpoint)
+      : null;
+  late final EndpointParts _initial = switch (widget.existing?.type) {
+    null || ConnectionType.local => const EndpointParts(port: _defaultPort),
+    ConnectionType.smb => EndpointParts.parse(_smb?.host ?? ''),
+    _ => EndpointParts.parse(widget.existing!.endpoint),
+  };
+  late final _share = TextEditingController(
+    text: [
+      ?_smb?.share,
+      if (_smb?.base.isNotEmpty ?? false) _smb!.base,
+    ].join('/'),
+  );
 
   late var _scheme = _initial.scheme;
   late final _name = TextEditingController(
@@ -158,11 +191,26 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
   ConnCheck? _testResult;
 
   bool get _local => _type == ConnectionType.local;
+  bool get _isSmb => _type == ConnectionType.smb;
+  _Kind get _kind => switch (_type) {
+    ConnectionType.smb => _Kind.smb,
+    ConnectionType.local => _Kind.local,
+    _ => _Kind.dav,
+  };
+
+  /// The template the current fields look like (for the 模板 menu label).
+  DavTemplate get _template => _type == ConnectionType.alist
+      ? DavTemplate.alistApi
+      : _path.text.trim() == _davPath
+      ? DavTemplate.alistDav
+      : _port.text.trim() == '5005' || _port.text.trim() == '5006'
+      ? DavTemplate.synology
+      : DavTemplate.generic;
 
   @override
   void initState() {
     super.initState();
-    for (final c in [_host, _port, _path, _folder, _user, _password]) {
+    for (final c in [_host, _port, _path, _folder, _user, _password, _share]) {
       c.addListener(_onEdit);
     }
   }
@@ -179,6 +227,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
       _password,
       _root,
       _start,
+      _share,
     ]) {
       c.dispose();
     }
@@ -195,10 +244,35 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
     path: _type == ConnectionType.webdav ? _path.text : '',
   );
 
-  String get _endpoint => _local ? _folder.text.trim() : _parts.compose();
+  String get _endpoint {
+    if (_local) return _folder.text.trim();
+    if (_isSmb) {
+      final port = _port.text.trim();
+      final host = _host.text.trim();
+      final share = _share.text
+          .split(RegExp(r'[/\\]'))
+          .where((s) => s.trim().isNotEmpty)
+          .join('/');
+      return 'smb://$host${port.isEmpty || port == _smbPort ? '' : ':$port'}/$share';
+    }
+    return _parts.compose();
+  }
 
   /// A full URL pasted into 主机 is split across the fields.
   void _onHostChanged(String v) {
+    // \\nas\影视 or smb://nas/影视 pasted into 主机.
+    if (_isSmb || v.startsWith(r'\\') || v.toLowerCase().startsWith('smb://')) {
+      final t = parseSmbEndpoint(v);
+      if (t == null) return;
+      setState(() {
+        _type = ConnectionType.smb;
+        final hp = EndpointParts.parse(t.host);
+        _host.text = hp.host;
+        _port.text = hp.port;
+        _share.text = [t.share, if (t.base.isNotEmpty) t.base].join('/');
+      });
+      return;
+    }
     if (!v.contains('://')) return;
     final p = EndpointParts.parse(v);
     if (p.host.isEmpty) return;
@@ -225,11 +299,23 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
     });
   }
 
-  void _setType(ConnectionType t) => setState(() {
-    if (t == ConnectionType.webdav && _path.text.trim().isEmpty) {
-      _path.text = _davPath;
-    }
-    _type = t;
+  void _setKind(_Kind k) => setState(() {
+    if (k == _kind) return;
+    _type = switch (k) {
+      _Kind.dav => ConnectionType.alist,
+      _Kind.smb => ConnectionType.smb,
+      _Kind.local => ConnectionType.local,
+    };
+    if (k == _Kind.smb) _port.text = '';
+    if (k == _Kind.dav && _port.text.trim().isEmpty) _port.text = _defaultPort;
+    _testResult = null;
+  });
+
+  void _setTemplate(DavTemplate t) => setState(() {
+    _type = t.type;
+    _port.text = t.port;
+    _path.text = t.path;
+    if (t == DavTemplate.synology) _scheme = 'http';
     _testResult = null;
   });
 
@@ -242,7 +328,9 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
 
   bool _valid() => _local
       ? _folder.text.trim().isNotEmpty
-      : _host.text.trim().isNotEmpty && _portError() == null;
+      : _host.text.trim().isNotEmpty &&
+            _portError() == null &&
+            (!_isSmb || _share.text.trim().isNotEmpty);
 
   /// Alist's API paths never start with the WebDAV mount: "/dav/外接硬盘"
   /// typed into an Alist connection means "/外接硬盘".
@@ -381,22 +469,36 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
     );
 
     final server = <Widget>[
+      if (_kind == _Kind.dav)
+        FormRow(
+          label: '模板',
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: _TemplateMenu(value: _template, onChanged: _setTemplate),
+          ),
+        ),
       FormRow(
         label: '服务器',
-        help: _type == ConnectionType.webdav
-            ? null
-            : 'Alist / OpenList 默认端口 5244',
+        help: switch (_template) {
+          _ when _isSmb => 'SMB 默认端口 445，可以留空',
+          DavTemplate.alistApi ||
+          DavTemplate.alistDav => 'Alist / OpenList 默认端口 5244',
+          DavTemplate.synology => '群晖 WebDAV 默认 http 5005、https 5006',
+          DavTemplate.generic => null,
+        },
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _SchemeMenu(
-              value: _scheme,
-              onChanged: (v) => setState(() {
-                _scheme = v;
-                _testResult = null;
-              }),
-            ),
-            const SizedBox(width: 6),
+            if (!_isSmb) ...[
+              _SchemeMenu(
+                value: _scheme,
+                onChanged: (v) => setState(() {
+                  _scheme = v;
+                  _testResult = null;
+                }),
+              ),
+              const SizedBox(width: 6),
+            ],
             Expanded(
               child: field(
                 '主机',
@@ -417,7 +519,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
               child: field(
                 '端口',
                 _port,
-                hint: _defaultPort,
+                hint: _isSmb ? _smbPort : _defaultPort,
                 keyboard: TextInputType.number,
                 error: _showErrors ? _portError() : null,
               ),
@@ -425,6 +527,12 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
           ],
         ),
       ),
+      if (_isSmb)
+        FormRow(
+          label: '共享名',
+          help: '比如 影视、video；也可以写到子文件夹，如 影视/下载',
+          child: field('共享名', _share, hint: '影视', error: required(_share)),
+        ),
       if (_type == ConnectionType.webdav)
         FormRow(
           label: '路径',
@@ -530,13 +638,15 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                   ),
                   const SizedBox(height: 14),
                   Center(
-                    child: Segmented<ConnectionType>(
-                      options: {
-                        for (final t in ConnectionType.values)
-                          t: connectionTypeLabel(t),
+                    child: Segmented<_Kind>(
+                      key: const ValueKey('conn-kind'),
+                      options: const {
+                        _Kind.dav: 'WebDAV / Alist',
+                        _Kind.smb: 'SMB',
+                        _Kind.local: '本地',
                       },
-                      value: _type,
-                      onChanged: _setType,
+                      value: _kind,
+                      onChanged: _setKind,
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -546,6 +656,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                         '通过 Alist / OpenList 的 API 连接，批量改名更快',
                       ConnectionType.webdav =>
                         '通用 WebDAV：Alist、OpenList、群晖、Nextcloud 等',
+                      ConnectionType.smb => '局域网共享文件夹：NAS、路由器、Windows 共享',
                       ConnectionType.local => '直接整理这台电脑上的文件夹',
                     }, style: theme.textTheme.bodySmall),
                   ),
@@ -654,6 +765,57 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                   FilledButton(onPressed: _save, child: const Text('保存')),
                 ],
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 模板 popup: Alist API / Alist WebDAV / 群晖 / 通用.
+class _TemplateMenu extends StatelessWidget {
+  final DavTemplate value;
+  final ValueChanged<DavTemplate> onChanged;
+
+  const _TemplateMenu({required this.value, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    return PopupMenuButton<DavTemplate>(
+      key: const ValueKey('dav-template'),
+      tooltip: '选择服务器类型，自动填好端口和路径',
+      initialValue: value,
+      onSelected: onChanged,
+      position: PopupMenuPosition.under,
+      itemBuilder: (_) => [
+        for (final t in DavTemplate.values)
+          PopupMenuItem(
+            key: ValueKey('template-${t.name}'),
+            value: t,
+            height: 32,
+            child: Text(t.label),
+          ),
+      ],
+      child: Container(
+        height: 31,
+        padding: const EdgeInsets.only(left: 10, right: 6),
+        decoration: BoxDecoration(
+          color: p.panel,
+          borderRadius: BorderRadius.circular(Radii.md),
+          border: Border.all(color: p.lineStrong, width: hairline),
+          boxShadow: panelShadow(),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(value.label, style: const TextStyle(fontSize: 13)),
+            const SizedBox(width: 4),
+            Icon(
+              CupertinoIcons.chevron_up_chevron_down,
+              size: 11,
+              color: p.textMuted,
             ),
           ],
         ),

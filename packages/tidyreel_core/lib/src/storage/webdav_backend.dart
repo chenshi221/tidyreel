@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 
 import '../model/connection.dart';
 import '../model/scan.dart';
+import 'direct_lan.dart';
 import 'storage_backend.dart';
 
 /// WebDAV over raw dio (PROPFIND / MKCOL / MOVE / DELETE) with Basic auth.
@@ -19,17 +20,19 @@ class WebDAVBackend implements StorageBackend {
 
   WebDAVBackend(ConnectionConfig config, Credentials credentials)
     : _base = Uri.parse(config.endpoint),
-      _dio = Dio(
-        BaseOptions(
-          connectTimeout: const Duration(seconds: 15),
-          receiveTimeout: const Duration(seconds: 60),
-          validateStatus: (_) => true,
-          responseType: ResponseType.plain,
-          headers: {
-            if (config.username != null)
-              'Authorization':
-                  'Basic ${base64.encode(utf8.encode('${config.username}:${credentials.password ?? ''}'))}',
-          },
+      _dio = directForPrivateHosts(
+        Dio(
+          BaseOptions(
+            connectTimeout: const Duration(seconds: 15),
+            receiveTimeout: const Duration(seconds: 60),
+            validateStatus: (_) => true,
+            responseType: ResponseType.plain,
+            headers: {
+              if (config.username != null)
+                'Authorization':
+                    'Basic ${base64.encode(utf8.encode('${config.username}:${credentials.password ?? ''}'))}',
+            },
+          ),
         ),
       );
 
@@ -206,6 +209,58 @@ class WebDAVBackend implements StorageBackend {
     if (r.statusCode == 207) return true;
     if (r.statusCode == 404) return false;
     throw _fail(r, path);
+  }
+
+  @override
+  Future<List<int>> read(String path) async {
+    final Response<List<int>> r;
+    try {
+      r = await _dio.getUri<List<int>>(
+        _uri(path),
+        options: Options(responseType: ResponseType.bytes),
+      );
+    } on DioException catch (e) {
+      throw StorageException(
+        StorageErrorCode.network,
+        'GET $path: ${e.message}',
+      );
+    }
+    if (r.statusCode != 200) throw _fail(r, path);
+    return r.data ?? const [];
+  }
+
+  @override
+  Future<void> write(String path, List<int> bytes) async {
+    // Not every server honours If-None-Match, so check first as well.
+    if (await exists(path)) {
+      throw StorageException(StorageErrorCode.alreadyExists, path);
+    }
+    await mkdirs(p.posix.dirname(path));
+    final Response<dynamic> r;
+    try {
+      r = await _dio.putUri<dynamic>(
+        _uri(path),
+        data: Stream.value(bytes),
+        options: Options(
+          headers: {
+            'If-None-Match': '*',
+            Headers.contentLengthHeader: bytes.length,
+            Headers.contentTypeHeader: 'application/octet-stream',
+          },
+        ),
+      );
+    } on DioException catch (e) {
+      throw StorageException(
+        StorageErrorCode.network,
+        'PUT $path: ${e.message}',
+      );
+    }
+    if (r.statusCode == 412) {
+      throw StorageException(StorageErrorCode.alreadyExists, path);
+    }
+    if (r.statusCode != 201 && r.statusCode != 204 && r.statusCode != 200) {
+      throw _fail(r, path);
+    }
   }
 
   @override

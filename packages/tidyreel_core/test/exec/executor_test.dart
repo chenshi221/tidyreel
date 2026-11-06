@@ -25,6 +25,12 @@ class HookBackend implements StorageBackend {
   Future<void> mkdirs(String dir) =>
       _c('mkdirs', [dir], () => inner.mkdirs(dir));
   @override
+  Future<List<int>> read(String path) =>
+      _c('read', [path], () => inner.read(path));
+  @override
+  Future<void> write(String path, List<int> bytes) =>
+      _c('write', [path], () => inner.write(path, bytes));
+  @override
   Future<void> rename(String path, String newName) =>
       _c('rename', [path, newName], () => inner.rename(path, newName));
   @override
@@ -282,6 +288,61 @@ void main() {
       await run(executor(history).resume(b, f));
       expect(f.files, ['/d/x/b.mkv', '/d/y/b.mkv']);
       expect(statusCounts(await history.records(b)), {OpStatus.done: 1});
+    },
+  );
+
+  test(
+    'write ops create text and downloaded files; undo removes them',
+    () async {
+      final fetched = <Uri>[];
+      final ex = DefaultExecutor(
+        history,
+        minInterval: Duration.zero,
+        delay: (_) async {},
+        fetch: (u) async {
+          fetched.add(u);
+          return [1, 2, 3];
+        },
+      );
+      RenameOp write(String dst, String src) => RenameOp(
+        id: OpId('op${++_n}'),
+        kind: OpKind.write,
+        phase: ExecPhase.cleanup,
+        src: src,
+        dst: dst,
+      );
+      await run(
+        ex.execute(
+          task,
+          conn,
+          RenamePlan(
+            ops: [
+              write(
+                '/d/Show.S01/tvshow.nfo',
+                '$writeTextPrefix<tvshow>中</tvshow>',
+              ),
+              write(
+                '/d/Show.S01/poster.jpg',
+                'https://image.tmdb.org/t/p/w780/p.jpg',
+              ),
+              // Already there: refused, never overwritten.
+              write('/d/junk.txt', '${writeTextPrefix}x'),
+            ],
+          ),
+          fs,
+        ),
+      );
+      expect(fs.textOf('/d/Show.S01/tvshow.nfo'), '<tvshow>中</tvshow>');
+      expect(await fs.read('/d/Show.S01/poster.jpg'), [1, 2, 3]);
+      expect(fetched.single.path, '/t/p/w780/p.jpg');
+      final b = await theBatch(history);
+      final recs = await history.records(b);
+      expect(statusCounts(recs), {OpStatus.done: 2, OpStatus.failed: 1});
+      expect(fs.textOf('/d/junk.txt'), isNull); // seeded content untouched
+
+      await run(ex.undo(b, fs));
+      expect(await fs.exists('/d/Show.S01/tvshow.nfo'), isFalse);
+      expect(await fs.exists('/d/Show.S01/poster.jpg'), isFalse);
     },
   );
 

@@ -8,6 +8,7 @@ import '../tmdb/metadata_provider.dart';
 import 'follow.dart';
 import 'strategy.dart';
 import 'template.dart';
+import 'scrape.dart';
 import 'text.dart';
 
 final _punct = RegExp(r'[^\p{L}\p{N}]', unicode: true);
@@ -58,6 +59,9 @@ class _Item {
   late String dstDir;
   late String newBase;
 
+  /// File name the video gets (newBase plus extension).
+  late String outName;
+
   _Item(this.file);
 }
 
@@ -79,6 +83,11 @@ class _PlanBuilder {
   final renamedSeasons = <String, String>{};
   final deleteOps = <RenameOp>[];
   final renamedRoots = <String, String>{};
+
+  /// Show folder (final path) → the first group filling it and where that
+  /// group's files go during the run (its old root, before the rename).
+  final showFolders = <String, ({GroupId group, String base})>{};
+  final merges = <PlanMerge>[];
   final knownDirs = <String>{};
 
   _PlanBuilder(
@@ -138,7 +147,7 @@ class _PlanBuilder {
       ...folderOps,
       ...deleteOps,
     ];
-    return RenamePlan(ops: ops, conflicts: _conflicts(ops));
+    return RenamePlan(ops: ops, conflicts: _conflicts(ops), merges: merges);
   }
 
   // ---- one group ----------------------------------------------------------
@@ -336,23 +345,39 @@ class _PlanBuilder {
       ),
     );
     String curBase;
+    // Where the show folder ends up, and whether another group / the disk
+    // already has it: then this group merges in unless told 分开保留.
+    String? mergeInto;
     if (opts.mode == OrganizeMode.inPlace) {
       if (_owns(g, match)) {
         curBase = g.rootDir;
         final finalBase = joinPath(dirOf(g.rootDir), folderName);
-        if (finalBase != g.rootDir) {
-          renamedRoots[g.rootDir] = finalBase;
-          folderOps.add(
-            RenameOp(
-              id: OpId('f-${stableHash(g.rootDir)}'),
-              kind: OpKind.relocate,
-              phase: ExecPhase.folders,
-              src: g.rootDir,
-              dst: finalBase,
-              group: g.id,
-              selected: groupSelected,
-            ),
-          );
+        final claimed = showFolders[finalBase];
+        final onDisk = finalBase != g.rootDir && existing.contains(finalBase);
+        if ((claimed != null || onDisk) && !d.separate) {
+          // Files go under the other group's old root (renamed later) or
+          // straight into the existing folder; this root keeps its name.
+          curBase = claimed?.base ?? finalBase;
+          mergeInto = finalBase;
+          _noteMerge(g, finalBase, claimed?.group, onDisk, items);
+        } else if (claimed != null || onDisk) {
+          // 分开保留: keep this folder's own name, rename files inside.
+        } else {
+          showFolders[finalBase] = (group: g.id, base: g.rootDir);
+          if (finalBase != g.rootDir) {
+            renamedRoots[g.rootDir] = finalBase;
+            folderOps.add(
+              RenameOp(
+                id: OpId('f-${stableHash(g.rootDir)}'),
+                kind: OpKind.relocate,
+                phase: ExecPhase.folders,
+                src: g.rootDir,
+                dst: finalBase,
+                group: g.id,
+                selected: groupSelected,
+              ),
+            );
+          }
         }
       } else {
         curBase = joinPath(g.rootDir, folderName);
@@ -370,6 +395,25 @@ class _PlanBuilder {
         _mkdir(base, g.id, selected: groupSelected);
       }
       curBase = '$base/$folderName';
+      final claimed = showFolders[curBase];
+      final onDisk = existing.contains(curBase);
+      if ((claimed != null || onDisk) && d.separate) {
+        // 分开保留 in the library: the next free "名称 (2)".
+        var n = 2;
+        while (showFolders.containsKey('$base/$folderName ($n)') ||
+            existing.contains('$base/$folderName ($n)')) {
+          n++;
+        }
+        curBase = '$base/$folderName ($n)';
+      } else if (claimed != null || onDisk) {
+        mergeInto = curBase;
+        _noteMerge(g, curBase, claimed?.group, onDisk, items);
+      }
+      showFolders.putIfAbsent(curBase, () => (group: g.id, base: curBase));
+      _mkdir(curBase, g.id, selected: groupSelected);
+    }
+    if (mergeInto != null && curBase != mergeInto) {
+      // Merging into a folder that is renamed later in this run.
       _mkdir(curBase, g.id, selected: groupSelected);
     }
 
@@ -454,15 +498,12 @@ class _PlanBuilder {
       final hasExt =
           ext.isNotEmpty &&
           it.newBase.toLowerCase().endsWith('.${ext.toLowerCase()}');
-      _emit(
-        it,
-        it.extra
-            ? it.file.name
-            : (ext.isEmpty || hasExt)
-            ? it.newBase
-            : '${it.newBase}.$ext',
-        g.id,
-      );
+      it.outName = it.extra
+          ? it.file.name
+          : (ext.isEmpty || hasExt)
+          ? it.newBase
+          : '${it.newBase}.$ext';
+      _emit(it, it.outName, g.id);
     }
 
     // --- subtitles and sidecars follow their video
@@ -492,7 +533,183 @@ class _PlanBuilder {
       }
       _emit(it, name, g.id, source: f);
     }
+
+    if (opts.scrape) {
+      // Paths as they are after the run: season folders and the show folder
+      // renamed, or merged into another one.
+      final showDir = mergeInto ?? renamedRoots[g.rootDir] ?? curBase;
+      String finalDir(String dir) {
+        final d = renamedSeasons[dir] ?? dir;
+        if (d == curBase) return showDir;
+        return d.startsWith('$curBase/')
+            ? '$showDir${d.substring(curBase.length)}'
+            : d;
+      }
+
+      await _scrape(g, match, show, epGroup, items, showDir, finalDir);
+    }
   }
+
+  /// Paths [_scrape] already wrote this plan (two groups merging into one
+  /// show folder share its tvshow.nfo).
+  final scraped = <String>{};
+
+  void _writeOp(
+    String dst,
+    String source,
+    GroupId gid, {
+    required bool selected,
+  }) {
+    if (!scraped.add(dst)) return;
+    final there = existing.contains(dst);
+    deleteOps.add(
+      RenameOp(
+        id: OpId('w-${stableHash(dst)}'),
+        kind: OpKind.write,
+        phase: ExecPhase.cleanup,
+        src: source,
+        dst: dst,
+        group: gid,
+        // Never overwrite: an existing nfo / poster is the user's.
+        selected: selected && !there,
+        warning: there ? '已存在，保留原文件' : null,
+      ),
+    );
+  }
+
+  /// 刮削模式: .nfo files and TMDB artwork for one group.
+  Future<void> _scrape(
+    MediaGroup g,
+    Candidate match,
+    ShowDetail? show,
+    EpisodeGroup? epGroup,
+    List<_Item> items,
+    String showDir,
+    String Function(String dir) finalDir,
+  ) async {
+    final on = items.any((it) => it.selected);
+    String img(String path, String size) =>
+        'https://image.tmdb.org/t/p/$size$path';
+    void art(String dir, Candidate c) {
+      if (c.posterPath != null) {
+        _writeOp(
+          '$dir/poster.jpg',
+          img(c.posterPath!, 'w780'),
+          g.id,
+          selected: on,
+        );
+      }
+      if (c.backdropPath != null) {
+        _writeOp(
+          '$dir/fanart.jpg',
+          img(c.backdropPath!, 'w1280'),
+          g.id,
+          selected: on,
+        );
+      }
+    }
+
+    if (match.kind == MediaKind.movie) {
+      Candidate info = match;
+      try {
+        info = (await metadata.movie(match.tmdbId)).info;
+      } on Object {
+        // Search data is enough for an nfo.
+      }
+      final main = items.where((it) => !it.extra).toList();
+      if (main.isEmpty) return;
+      final dir = finalDir(main.first.dstDir);
+      for (final it in main) {
+        _writeOp(
+          '${finalDir(it.dstDir)}/${stem(it.outName)}.nfo',
+          '$writeTextPrefix${movieNfo(info)}',
+          g.id,
+          selected: it.selected,
+        );
+      }
+      art(dir, info);
+      return;
+    }
+
+    final s = show ?? await metadata.show(match.tmdbId);
+    _writeOp(
+      '$showDir/tvshow.nfo',
+      '$writeTextPrefix${tvShowNfo(s)}',
+      g.id,
+      selected: on,
+    );
+    art(showDir, s.info);
+    final episodes = <int, Map<int, Episode>>{};
+    Future<Episode?> episode(int season, int n) async {
+      // Episode-group numbering isn't TMDB's: no per-episode details then.
+      if (epGroup != null) return null;
+      if (!episodes.containsKey(season)) {
+        try {
+          episodes[season] = {
+            for (final e in await metadata.season(match.tmdbId, season))
+              e.number: e,
+          };
+        } on Object {
+          episodes[season] = const {};
+        }
+      }
+      return episodes[season]![n];
+    }
+
+    final seasons = <int>{};
+    for (final it in items) {
+      final r = it.ref;
+      if (it.extra || r == null) continue;
+      seasons.add(r.season);
+      final dir = finalDir(it.dstDir);
+      final e = await episode(r.season, r.episode);
+      final base = stem(it.outName);
+      _writeOp(
+        '$dir/$base.nfo',
+        '$writeTextPrefix${episodeNfo(show: s.info, season: r.season, episode: r.episode, info: e)}',
+        g.id,
+        selected: it.selected,
+      );
+      if (e?.stillPath != null) {
+        _writeOp(
+          '$dir/$base-thumb.jpg',
+          img(e!.stillPath!, 'w780'),
+          g.id,
+          selected: it.selected,
+        );
+      }
+    }
+    for (final n in seasons) {
+      final poster = s.seasons
+          .where((x) => x.number == n)
+          .firstOrNull
+          ?.posterPath;
+      if (poster == null) continue;
+      final name = n == 0
+          ? 'season-specials-poster.jpg'
+          : 'season${n.toString().padLeft(2, '0')}-poster.jpg';
+      _writeOp('$showDir/$name', img(poster, 'w780'), g.id, selected: on);
+    }
+  }
+
+  void _noteMerge(
+    MediaGroup g,
+    String into,
+    GroupId? withGroup,
+    bool exists,
+    List<_Item> items,
+  ) => merges.add(
+    PlanMerge(
+      group: g.id,
+      into: into,
+      exists: exists,
+      withGroup: withGroup,
+      seasons: {
+        for (final it in items)
+          if (!it.extra && it.ref != null) it.ref!.season,
+      }.toList()..sort(),
+    ),
+  );
 
   String? _parsedLang(ScanFile f) {
     final raw = f.parsed?.lang;

@@ -1,23 +1,29 @@
+import 'dart:convert';
 import 'dart:math';
 
 import '../model/ids.dart';
 import '../model/media.dart';
 import '../model/metadata.dart';
 import '../model/scan.dart';
+import '../model/title_rules.dart';
 import '../parser/parser.dart';
 import '../tmdb/anilist.dart';
 import '../tmdb/metadata_provider.dart';
 import 'follow.dart';
+import 'template.dart' show applyRewrites;
 import 'text.dart';
 
 /// Owner: Agent D. Classify + parse + anchor grouping + TMDB match (PLAN §1 step 4).
 abstract interface class Recognizer {
-  /// [files] is the recursive listing of [roots] (files only).
+  /// [files] is the recursive listing of [roots] (files only). [read]
+  /// fetches a file's content (already-scraped .nfo); without it nothing is
+  /// read.
   Future<ScanResult> recognize(
     ConnectionId connection,
     List<String> roots,
-    List<RemoteEntry> files,
-  );
+    List<RemoteEntry> files, {
+    Future<List<int>> Function(String path)? read,
+  });
 }
 
 /// Below this, a TMDB hit is not accepted and the group is left for manual matching.
@@ -50,20 +56,30 @@ class AnchorRecognizer implements Recognizer {
   /// Read once per scan, so a settings change applies to the next one.
   final MediaHint Function() hint;
 
+  /// 片名规则, read once per scan like [hint].
+  final TitleRules Function() titleRules;
+
   AnchorRecognizer(
     this.parser,
     this.metadata, {
     this.altTitles,
     MediaHint Function()? hint,
-  }) : hint = hint ?? (() => MediaHint.mixed);
+    TitleRules Function()? titleRules,
+  }) : hint = hint ?? (() => MediaHint.mixed),
+       titleRules = titleRules ?? (() => const TitleRules());
 
   @override
   Future<ScanResult> recognize(
     ConnectionId connection,
     List<String> roots,
-    List<RemoteEntry> files,
-  ) async {
+    List<RemoteEntry> files, {
+    Future<List<int>> Function(String path)? read,
+  }) async {
     final rootDirs = [for (final r in roots) _trimSlash(r)];
+    final nfos = {
+      for (final e in files)
+        if (!e.isDir && e.name.toLowerCase().endsWith('.nfo')) e.path,
+    };
     final entries = files.where((e) => !e.isDir).toList()
       ..sort((a, b) => a.path.compareTo(b.path));
 
@@ -111,12 +127,16 @@ class AnchorRecognizer implements Recognizer {
 
     final cache = <String, Future<List<Candidate>>>{};
     final h = hint();
+    final rules = titleRules();
     // A few folders at a time: each costs several TMDB round trips.
     final looked = <_Lookup>[];
     for (var i = 0; i < drafts.length; i += 4) {
       looked.addAll(
         await Future.wait(
-          drafts.skip(i).take(4).map((d) => _lookup(d, cache, h)),
+          drafts
+              .skip(i)
+              .take(4)
+              .map((d) => _lookup(d, cache, h, rules, nfos, read)),
         ),
       );
     }
@@ -249,12 +269,15 @@ class AnchorRecognizer implements Recognizer {
     _Draft d,
     Map<String, Future<List<Candidate>>> cache,
     MediaHint hint,
+    TitleRules rules,
+    Set<String> nfos,
+    Future<List<int>> Function(String path)? read,
   ) async {
     final vids = [for (final v in d.videos) v.file];
     final main = vids.where((v) => v.parsed?.kind != MediaKind.extra).toList();
     final tvVotes = main.where((v) => _looksTv(v.parsed)).length;
     final looksTv = main.isNotEmpty && tvVotes * 2 > main.length;
-    final kind = switch (hint) {
+    var kind = switch (hint) {
       MediaHint.movie => MediaKind.movie,
       MediaHint.tv => main.isEmpty ? MediaKind.movie : MediaKind.episode,
       // A folder of several files is a series; one file may be a 剧场版.
@@ -275,15 +298,20 @@ class AnchorRecognizer implements Recognizer {
         ]) ??
         (d.folderTitle == null ? null : parser.parse(baseOf(d.dir)).year);
 
-    final queries = <String>[
-      if (d.isRoot) ...[
-        ?fileTitle,
-        ?d.folderTitle,
-      ] else ...[
-        ?d.folderTitle,
-        ?fileTitle,
-      ],
-    ].where((q) => normTitle(q).isNotEmpty).toSet().toList();
+    final queries =
+        <String>[
+              if (d.isRoot) ...[
+                ?fileTitle,
+                ?d.folderTitle,
+              ] else ...[
+                ?d.folderTitle,
+                ?fileTitle,
+              ],
+            ]
+            .map((q) => applyRewrites(q, rules.cleanups).trim())
+            .where((q) => normTitle(q).isNotEmpty)
+            .toSet()
+            .toList();
 
     Candidate? match;
     var score = 0.0;
@@ -317,10 +345,35 @@ class AnchorRecognizer implements Recognizer {
       return false;
     }
 
-    for (final q in queries) {
-      if (await tryQuery(q)) {
-        anchor = q;
-        break;
+    // 指定匹配 wins over any search.
+    final names = [
+      baseOf(d.dir),
+      ?d.folderTitle,
+      ?fileTitle,
+    ].map((n) => n.toLowerCase());
+    final pin = rules.pins
+        .where(
+          (p) =>
+              p.keyword.trim().isNotEmpty &&
+              names.any((n) => n.contains(p.keyword.trim().toLowerCase())),
+        )
+        .firstOrNull;
+    final scraped = pin == null && read != null
+        ? await _fromNfo(d, vids, nfos, read)
+        : null;
+    if (pin != null || scraped != null) {
+      // 指定匹配, or the TMDB id an earlier scrape left in tvshow/movie.nfo.
+      match = pin?.match ?? scraped;
+      score = 1;
+      kind = match!.kind == MediaKind.movie
+          ? MediaKind.movie
+          : MediaKind.episode;
+    } else {
+      for (final q in queries) {
+        if (await tryQuery(q)) {
+          anchor = q;
+          break;
+        }
       }
     }
     final askAlt =
@@ -339,12 +392,65 @@ class AnchorRecognizer implements Recognizer {
         }
       }
     }
+    // Still nothing: loosen the names (sort letter, brackets, one language).
+    if (match == null) {
+      final tried = {for (final q in queries) normTitle(q)};
+      relaxed:
+      for (final q in queries) {
+        for (final r in relaxedQueries(q, baseOf(d.dir))) {
+          if (!tried.add(normTitle(r))) continue;
+          if (await tryQuery(r)) {
+            anchor = r;
+            break relaxed;
+          }
+        }
+      }
+    }
     anchor ??= vids.isNotEmpty ? stem(vids.first.name) : baseOf(d.dir);
 
     final show = match != null && kind == MediaKind.episode
         ? await metadata.show(match!.tmdbId)
         : null;
     return _Lookup(d, vids, kind, anchor, year, match, score, show);
+  }
+
+  static final _nfoRootRe = RegExp(r'<(tvshow|movie)\b', caseSensitive: false);
+  static final _nfoTmdbRe = RegExp(
+    r'<uniqueid\b[^>]*type="tmdb"[^>]*>\s*(\d+)\s*<|<tmdbid>\s*(\d+)\s*<',
+    caseSensitive: false,
+  );
+
+  /// The work named by an already-scraped folder: `tvshow.nfo` / `movie.nfo`
+  /// in it, or `<video>.nfo` next to a lone video. Episode nfos are skipped
+  /// (their id is the episode's). Unreadable or id-less nfos give null.
+  Future<Candidate?> _fromNfo(
+    _Draft d,
+    List<ScanFile> vids,
+    Set<String> nfos,
+    Future<List<int>> Function(String path) read,
+  ) async {
+    final paths = [
+      joinPath(d.dir, 'tvshow.nfo'),
+      joinPath(d.dir, 'movie.nfo'),
+      if (vids.length == 1)
+        joinPath(dirOf(vids.single.path), '${stem(vids.single.name)}.nfo'),
+    ];
+    for (final path in paths.where(nfos.contains)) {
+      try {
+        final text = utf8.decode(await read(path), allowMalformed: true);
+        final root = _nfoRootRe.firstMatch(text)?[1]?.toLowerCase();
+        final m = _nfoTmdbRe.firstMatch(text);
+        final id = int.tryParse(m?[1] ?? m?[2] ?? '');
+        if (root == null || id == null) continue;
+        return root == 'movie'
+            ? (await metadata.movie(id)).info
+            : (await metadata.show(id)).info;
+      } on Object {
+        // A broken nfo or a TMDB hiccup: fall back to searching.
+        continue;
+      }
+    }
+    return null;
   }
 
   MediaGroup _toGroup(_Lookup l, Set<String> usedIds) {

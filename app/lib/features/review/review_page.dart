@@ -258,23 +258,52 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
   }
 
   Future<void> _correct(MediaGroup g) async {
-    final c = await showTmdbSearchDialog(
+    final r = await showTmdbSearchDialog(
       context,
       initial: effectiveMatch(g, _decisionOf(g.id))?.title ?? g.anchorTitle,
+      pinKeyword: g.anchorTitle,
     );
-    // Picking a match means "organize this": an unmatched group starts unchecked.
-    if (c != null) {
-      await _update(g.id, _decisionOf(g.id).copyWith(match: c, selected: true));
+    if (r == null) return;
+    if (r.pin != null) {
+      ref.read(titleRulesProvider.notifier).pin(r.pin!, r.match);
     }
+    // Picking a match means "organize this": an unmatched group starts unchecked.
+    await _update(
+      g.id,
+      _decisionOf(g.id).copyWith(match: r.match, selected: true),
+    );
   }
 
   Future<void> _execute() async {
     if (_executing) return;
-    final r = _review;
+    var r = _review;
     if (r == null || r.preview.conflicts.isNotEmpty) return;
+    // Shows landing in a folder that's already there (or filled twice by
+    // this task): ask every time, and say where.
+    final merges = [
+      for (final m in r.preview.merges)
+        if (r.decisions[m.group]?.selected ?? true) m,
+    ];
+    if (merges.isNotEmpty) {
+      final separate = await showMergeDialog(
+        context,
+        review: r,
+        merges: merges,
+        backend: ref.read(backendForProvider)(r.scan.connection),
+      );
+      if (separate == null || !mounted) return;
+      for (final id in separate) {
+        await _update(id, _decisionOf(id).copyWith(separate: true));
+      }
+      if (!mounted) return;
+      r = _review;
+      if (r == null || r.preview.conflicts.isNotEmpty) return;
+    }
     final ops = r.preview.ops.where((o) => o.selected).toList();
     if (ops.isEmpty) return;
-    int n(ExecPhase p) => ops.where((o) => o.phase == p).length;
+    int n(ExecPhase p) =>
+        ops.where((o) => o.phase == p && o.kind != OpKind.write).length;
+    final writes = ops.where((o) => o.kind == OpKind.write).length;
     final groups = r.decisions.values.where((d) => d.selected).length;
     final ok =
         !ref.read(settingsProvider).confirmBeforeExecute ||
@@ -286,6 +315,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
             '· 重命名/移动文件 ${n(ExecPhase.files)} 项\n'
             '· 整理文件夹 ${n(ExecPhase.folders)} 项\n'
             '· 清理 ${n(ExecPhase.cleanup)} 项\n'
+            '${writes == 0 ? '' : '· 写入刮削文件 $writes 个（NFO、海报）\n'}'
             '执行后可在任务页撤销。',
           ),
           confirmLabel: '执行',

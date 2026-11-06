@@ -27,6 +27,13 @@ abstract interface class StorageBackend {
 
   Future<bool> exists(String path);
 
+  /// The whole content of a (small) file: .nfo, artwork.
+  Future<List<int>> read(String path);
+
+  /// Creates file [path] (parents too) with [bytes]. Never overwrites: an
+  /// existing [path] throws [StorageErrorCode.alreadyExists].
+  Future<void> write(String path, List<int> bytes);
+
   /// Cheap connectivity / auth check for the 已连接 badge.
   Future<void> ping();
 }
@@ -55,6 +62,10 @@ enum StorageErrorCode {
   other,
 }
 
+/// SMB needs native libsmb2, so core leaves it to the app, which sets this at
+/// startup (keeps `dart test` of core free of native build hooks).
+StorageBackend Function(ConnectionConfig, Credentials)? smbBackend;
+
 /// Builds the right backend for a saved connection.
 StorageBackend createBackend(
   ConnectionConfig config,
@@ -62,5 +73,11 @@ StorageBackend createBackend(
 ) => switch (config.type) {
   ConnectionType.alist => AlistBackend(config, credentials),
   ConnectionType.webdav => WebDAVBackend(config, credentials),
+  ConnectionType.smb =>
+    (smbBackend ??
+        (_, _) => throw const StorageException(
+          StorageErrorCode.other,
+          '这个版本不支持 SMB',
+        ))(config, credentials),
   ConnectionType.local => LocalBackend(config.endpoint),
 };

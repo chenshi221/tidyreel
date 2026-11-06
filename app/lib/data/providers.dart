@@ -211,6 +211,7 @@ final taskManagerProvider = Provider<TaskManager>((ref) {
       metadata,
       altTitles: ref.read(bootstrapProvider).demo ? null : AniListTitles(),
       hint: () => ref.read(settingsProvider).mediaHint,
+      titleRules: () => ref.read(titleRulesProvider),
     ),
     planner: DefaultPlanner(metadata),
     executor: DefaultExecutor(
@@ -231,6 +232,7 @@ final taskManagerProvider = Provider<TaskManager>((ref) {
           ?.libraryRoot,
       naming: ref.read(namingProfileProvider),
       deleteJunk: ref.read(settingsProvider).autoDeleteJunk,
+      scrape: ref.read(settingsProvider).scrape,
       confidenceThreshold: ref.read(settingsProvider).confidenceThreshold,
     ),
   );
@@ -269,6 +271,43 @@ final namingProfileProvider =
     NotifierProvider<NamingProfileNotifier, NamingProfile>(
       NamingProfileNotifier.new,
     );
+
+const _titleRulesKey = 'titleRules';
+
+/// 片名规则: cleanups and pins the recognizer applies before searching TMDB.
+class TitleRulesNotifier extends Notifier<TitleRules> {
+  @override
+  TitleRules build() {
+    final j = ref.read(bootstrapProvider).prefs.read(_titleRulesKey);
+    return j is Map
+        ? titleRulesFromJson(j.cast<String, Object?>())
+        : const TitleRules();
+  }
+
+  void set(TitleRules rules) {
+    state = rules;
+    ref
+        .read(bootstrapProvider)
+        .prefs
+        .write(_titleRulesKey, titleRulesToJson(rules));
+  }
+
+  /// Adds (or replaces) the pin for [keyword].
+  void pin(String keyword, Candidate match) => set(
+    TitleRules(
+      cleanups: state.cleanups,
+      pins: [
+        for (final p in state.pins)
+          if (p.keyword != keyword) p,
+        TitlePin(keyword, match),
+      ],
+    ),
+  );
+}
+
+final titleRulesProvider = NotifierProvider<TitleRulesNotifier, TitleRules>(
+  TitleRulesNotifier.new,
+);
 
 // ---- helpers -------------------------------------------------------------
 

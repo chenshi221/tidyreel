@@ -13,8 +13,9 @@ class FakeRecognizer implements Recognizer {
   Future<ScanResult> recognize(
     ConnectionId connection,
     List<String> roots,
-    List<RemoteEntry> files,
-  ) async {
+    List<RemoteEntry> files, {
+    Future<List<int>> Function(String path)? read,
+  }) async {
     calls++;
     await gate?.future;
     final byDir = <String, List<ScanFile>>{};

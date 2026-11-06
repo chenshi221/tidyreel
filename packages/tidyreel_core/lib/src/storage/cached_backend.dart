@@ -106,6 +106,13 @@ class CachedBackend implements StorageBackend {
   Future<bool> exists(String path) => inner.exists(path);
 
   @override
+  Future<List<int>> read(String path) => inner.read(path);
+
+  @override
+  Future<void> write(String path, List<int> bytes) =>
+      _write(() => inner.write(path, bytes), [p.posix.dirname(path), path]);
+
+  @override
   Future<void> ping() => inner.ping();
 }
 

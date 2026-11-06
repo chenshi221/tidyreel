@@ -1,5 +1,7 @@
 import 'package:tidyreel_core/tidyreel_core.dart';
 
+import 'codec.dart' show candidateFromJson, candidateToJson;
+
 // JSON for the persisted parts of core models (prefs.json). Unknown enum names
 // fall back to defaults so an older prefs file never crashes the app.
 
@@ -106,3 +108,27 @@ NamingProfile namingProfileFromJson(Map<String, Object?> j) {
     tvDir: j['tvDir'] as String? ?? d.tvDir,
   );
 }
+
+Map<String, Object?> titleRulesToJson(TitleRules r) => {
+  'cleanups': [
+    for (final c in r.cleanups) {'p': c.pattern, 'r': c.replacement},
+  ],
+  'pins': [
+    for (final p in r.pins) {'k': p.keyword, 'm': candidateToJson(p.match)},
+  ],
+};
+
+TitleRules titleRulesFromJson(Map<String, Object?> j) => TitleRules(
+  cleanups: [
+    for (final r in (j['cleanups'] as List?) ?? const [])
+      NameRewrite((r as Map)['p'] as String, r['r'] as String? ?? ''),
+  ],
+  pins: [
+    for (final p in (j['pins'] as List?) ?? const [])
+      if (p is Map && p['m'] is Map)
+        TitlePin(
+          p['k'] as String? ?? '',
+          candidateFromJson((p['m'] as Map).cast()),
+        ),
+  ],
+);

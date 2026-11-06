@@ -8,6 +8,7 @@ import 'package:shelf/shelf_io.dart' as io;
 /// In-memory tree shared by the mock servers. Directories have size -1.
 class MockTree {
   final Map<String, int> nodes = {'/': -1};
+  final Map<String, List<int>> content = {};
 
   MockTree(Map<String, int> files) {
     files.forEach((path, size) {
@@ -94,8 +95,30 @@ class MockAlist {
     headers: {'content-type': 'application/json; charset=utf-8'},
   );
 
+  /// Set by the test: where `raw_url` points (this server's `/d/...`).
+  String origin = '';
+
   Future<Response> handle(Request req) async {
     final api = req.url.path;
+    if (req.method == 'GET' && api.startsWith('d/')) {
+      final path = '/${req.url.pathSegments.skip(1).join('/')}';
+      final c = tree.content[path];
+      return tree.nodes.containsKey(path)
+          ? Response.ok(c ?? const <int>[])
+          : Response.notFound('');
+    }
+    if (api == 'api/fs/put') {
+      if (req.headers['authorization'] != token) {
+        return _json(401, 'token is invalidated');
+      }
+      final path = Uri.decodeComponent(req.headers['file-path']!);
+      final bytes = await req.read().expand((b) => b).toList();
+      tree.mkdirs(p.posix.dirname(path));
+      tree.nodes[path] = bytes.length; // overwrites, like the real one
+      tree.content[path] = bytes;
+      calls.add(api);
+      return _json(200, 'success');
+    }
     final body = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
     if (api == 'api/auth/login') {
       if (body['username'] != 'admin' || body['password'] != password) {
@@ -130,6 +153,9 @@ class MockAlist {
             ? _json(200, 'success', {
                 'name': p.posix.basename(path),
                 'is_dir': tree.isDir(path),
+                'raw_url': tree.isDir(path)
+                    ? ''
+                    : '$origin/d${path.split('/').map(Uri.encodeComponent).join('/')}',
               })
             : _json(500, 'failed get: $notFound');
       case 'api/fs/list':
@@ -292,6 +318,21 @@ class MockWebDav {
         if (!tree.nodes.containsKey(path)) return Response.notFound('');
         tree.delete(path);
         return Response(204);
+      case 'GET':
+        if (!tree.nodes.containsKey(path) || tree.isDir(path)) {
+          return Response.notFound('');
+        }
+        return Response.ok(tree.content[path] ?? const <int>[]);
+      case 'PUT':
+        if (!tree.isDir(p.posix.dirname(path))) return Response(409);
+        if (tree.nodes.containsKey(path) &&
+            req.headers['if-none-match'] == '*') {
+          return Response(412);
+        }
+        final bytes = await req.read().expand((b) => b).toList();
+        tree.nodes[path] = bytes.length;
+        tree.content[path] = bytes;
+        return Response(201);
     }
     return Response(405);
   }

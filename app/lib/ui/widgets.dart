@@ -906,3 +906,104 @@ class LinkText extends StatelessWidget {
     );
   }
 }
+
+/// The app icon (assets/app_icon.png, drawn by tool/make_icon.py), cropped to
+/// its tile: the macOS artwork keeps ~10% margin around it.
+class AppLogo extends StatelessWidget {
+  final double size;
+
+  const AppLogo({super.key, this.size = 40});
+
+  @override
+  Widget build(BuildContext context) => SizedBox.square(
+    dimension: size,
+    child: ClipRRect(
+      borderRadius: BorderRadius.circular(size * 0.22),
+      child: OverflowBox(
+        maxWidth: size * 1.24,
+        maxHeight: size * 1.24,
+        child: Image.asset(
+          'assets/app_icon.png',
+          width: size * 1.24,
+          height: size * 1.24,
+          filterQuality: FilterQuality.medium,
+        ),
+      ),
+    ),
+  );
+}
+
+/// One line of text that, while [active] and too long to fit, scrolls left to
+/// show the rest, pauses, and comes back. Otherwise it's an ellipsized line.
+class HoverMarquee extends StatefulWidget {
+  final String text;
+  final bool active;
+  final TextStyle? style;
+
+  const HoverMarquee({
+    super.key,
+    required this.text,
+    required this.active,
+    this.style,
+  });
+
+  @override
+  State<HoverMarquee> createState() => _HoverMarqueeState();
+}
+
+class _HoverMarqueeState extends State<HoverMarquee> {
+  final _scroll = ScrollController();
+  var _run = 0;
+
+  @override
+  void didUpdateWidget(HoverMarquee old) {
+    super.didUpdateWidget(old);
+    if (widget.active != old.active) {
+      _run++;
+      if (widget.active) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => _loop(_run));
+      } else if (_scroll.hasClients) {
+        _scroll.jumpTo(0);
+      }
+    }
+  }
+
+  Future<void> _loop(int run) async {
+    while (mounted && run == _run && _scroll.hasClients) {
+      final max = _scroll.position.maxScrollExtent;
+      if (max <= 0) return;
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      if (!mounted || run != _run) return;
+      await _scroll.animateTo(
+        max,
+        duration: Duration(milliseconds: (max * 28).round()),
+        curve: Curves.linear,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 900));
+      if (!mounted || run != _run) return;
+      _scroll.jumpTo(0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _run++;
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.active
+      ? SingleChildScrollView(
+          controller: _scroll,
+          scrollDirection: Axis.horizontal,
+          physics: const NeverScrollableScrollPhysics(),
+          child: Text(widget.text, maxLines: 1, style: widget.style),
+        )
+      : Text(
+          widget.text,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: widget.style,
+        );
+}

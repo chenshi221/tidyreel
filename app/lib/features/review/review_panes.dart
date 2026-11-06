@@ -285,45 +285,84 @@ class _TmdbSearchBoxState extends ConsumerState<TmdbSearchBox> {
   }
 }
 
-Future<Candidate?> showTmdbSearchDialog(
+/// Search TMDB and pick a work. With [pinKeyword], also offers
+/// 「以后都这样匹配」: the returned `pin` is the keyword to remember (片名规则).
+Future<({Candidate match, String? pin})?> showTmdbSearchDialog(
   BuildContext context, {
   required String initial,
-}) => showDialog<Candidate>(
-  context: context,
-  builder: (ctx) => MacSheet(
-    child: SizedBox(
-      width: 520,
-      height: 480,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text('重新搜索 TMDB', style: Theme.of(ctx).textTheme.titleMedium),
-            const SizedBox(height: 12),
-            Expanded(
-              child: SingleChildScrollView(
-                child: TmdbSearchBox(
-                  initial: initial,
-                  autoSearch: true,
-                  onPick: (c) => Navigator.pop(ctx, c),
+  String? pinKeyword,
+}) {
+  var pin = false;
+  final keyword = TextEditingController(text: pinKeyword);
+  return showDialog<({Candidate match, String? pin})>(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setState) => MacSheet(
+        child: SizedBox(
+          width: 520,
+          height: 520,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('重新搜索 TMDB', style: Theme.of(ctx).textTheme.titleMedium),
+                const SizedBox(height: 12),
+                Expanded(
+                  child: SingleChildScrollView(
+                    child: TmdbSearchBox(
+                      initial: initial,
+                      autoSearch: true,
+                      onPick: (c) => Navigator.pop(ctx, (
+                        match: c,
+                        pin: pin && keyword.text.trim().isNotEmpty
+                            ? keyword.text.trim()
+                            : null,
+                      )),
+                    ),
+                  ),
                 ),
-              ),
+                if (pinKeyword != null) ...[
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Checkbox(
+                        key: const ValueKey('pin-match'),
+                        value: pin,
+                        onChanged: (v) => setState(() => pin = v ?? false),
+                      ),
+                      const Text('以后文件夹名包含', style: TextStyle(fontSize: 13)),
+                      const SizedBox(width: 6),
+                      SizedBox(
+                        width: 150,
+                        child: TextField(
+                          key: const ValueKey('pin-keyword'),
+                          controller: keyword,
+                          enabled: pin,
+                          style: const TextStyle(fontSize: 13),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      const Text('时都匹配到选中的作品', style: TextStyle(fontSize: 13)),
+                    ],
+                  ),
+                ],
+                const SizedBox(height: 10),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text('取消'),
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 10),
-            Align(
-              alignment: Alignment.centerRight,
-              child: OutlinedButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('取消'),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     ),
-  ),
-);
+  ).whenComplete(keyword.dispose);
+}
 
 class _Rating extends StatelessWidget {
   final double value;
@@ -914,7 +953,7 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
                 border: Border(
                   left: BorderSide(
                     width: 3,
-                    color: s == season ? p.accent : Colors.transparent,
+                    color: s == season ? p.text : Colors.transparent,
                   ),
                 ),
               ),
@@ -1021,7 +1060,7 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
                             Icon(
                               CupertinoIcons.checkmark,
                               size: 13,
-                              color: p.accent,
+                              color: p.text,
                             ),
                         ],
                       ),
@@ -1095,8 +1134,8 @@ class WorkHeader extends StatelessWidget {
         children: [
           if (onImage) ...[
             Positioned.fill(
-              child: Image.network(
-                tmdbImage(backdrop, 'w1280'),
+              child: Image(
+                image: CachedImage(tmdbImage(backdrop, 'w1280')),
                 fit: BoxFit.cover,
                 alignment: Alignment.topRight,
                 errorBuilder: (_, _, _) => ColoredBox(color: p.accentSoft),
@@ -1682,8 +1721,8 @@ class _SeasonChip extends StatelessWidget {
             if (posterPath != null) ...[
               ClipRRect(
                 borderRadius: BorderRadius.circular(3),
-                child: Image.network(
-                  tmdbImage(posterPath!, 'w92'),
+                child: Image(
+                  image: CachedImage(tmdbImage(posterPath!, 'w92')),
                   width: 16,
                   height: 24,
                   fit: BoxFit.cover,
@@ -2084,9 +2123,13 @@ class _FolderOps extends StatelessWidget {
                       OpKind.mkdir => CupertinoIcons.folder_badge_plus,
                       OpKind.delete => CupertinoIcons.trash,
                       OpKind.relocate => CupertinoIcons.arrow_right_square,
+                      OpKind.write =>
+                        o.dst.endsWith('.nfo')
+                            ? CupertinoIcons.doc_text
+                            : CupertinoIcons.photo,
                     },
                     size: 16,
-                    color: o.kind == OpKind.delete ? p.danger : p.accent,
+                    color: o.kind == OpKind.delete ? p.danger : p.textMuted,
                   ),
                   const SizedBox(width: 14),
                   Expanded(
@@ -2098,6 +2141,7 @@ class _FolderOps extends StatelessWidget {
                             OpKind.mkdir => '新建 ${o.dst}',
                             OpKind.delete => '删除 ${o.src}',
                             OpKind.relocate => o.src,
+                            OpKind.write => '写入 ${o.dst}',
                           },
                           style: o.kind == OpKind.relocate
                               ? TextStyle(fontSize: 11.5, color: p.textFaint)
@@ -2106,6 +2150,11 @@ class _FolderOps extends StatelessWidget {
                                   fontWeight: FontWeight.w500,
                                 ),
                         ),
+                        if (o.warning != null && o.kind == OpKind.write)
+                          Text(
+                            o.warning!,
+                            style: TextStyle(fontSize: 11.5, color: p.warning),
+                          ),
                         if (o.kind == OpKind.relocate)
                           Text(
                             '→ ${o.dst}',
@@ -2470,4 +2519,200 @@ class UnassignedPane extends StatelessWidget {
       ],
     );
   }
+}
+
+/// Asks about each [PlanMerge] before running: where the show goes, what is
+/// there already, what this task adds. Returns the groups to keep separate
+/// (分开保留), or null when cancelled.
+Future<Set<GroupId>?> showMergeDialog(
+  BuildContext context, {
+  required TaskReview review,
+  required List<PlanMerge> merges,
+  required StorageBackend backend,
+}) {
+  final separate = <GroupId>{};
+  final byId = {for (final g in review.scan.groups) g.id: g};
+  String seasons(Iterable<int> s) => s.isEmpty
+      ? ''
+      : s
+            .map(
+              (n) => n == 0
+                  ? 'Specials'
+                  : 'Season ${n.toString().padLeft(2, '0')}',
+            )
+            .join('、');
+  return showDialog<Set<GroupId>>(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setState) {
+        final p = Palette.of(ctx);
+        final small = TextStyle(fontSize: 12, color: p.textMuted);
+        return MacSheet(
+          child: SizedBox(
+            width: 560,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    '合并到已有剧集文件夹？',
+                    style: Theme.of(ctx).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 4),
+                  Text('下面的作品会和已有的（或本次另一个文件夹里的）同一部作品放进同一个文件夹。', style: small),
+                  const SizedBox(height: 12),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 420),
+                    child: SingleChildScrollView(
+                      child: Column(
+                        children: [
+                          for (final m in merges)
+                            Builder(
+                              builder: (context) {
+                                final g = byId[m.group];
+                                final match = g == null
+                                    ? null
+                                    : review.decisions[g.id]?.match ?? g.match;
+                                final other = m.withGroup == null
+                                    ? null
+                                    : byId[m.withGroup];
+                                final keep = separate.contains(m.group);
+                                return Container(
+                                  key: ValueKey('merge-${m.group.value}'),
+                                  margin: const EdgeInsets.only(bottom: 10),
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: p.panel,
+                                    borderRadius: BorderRadius.circular(
+                                      Radii.lg,
+                                    ),
+                                    border: Border.all(
+                                      color: p.line,
+                                      width: hairline,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Poster(
+                                        posterPath: match?.posterPath,
+                                        width: 40,
+                                        height: 60,
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              '《${match?.title ?? g?.anchorTitle ?? ''}》'
+                                              '${match?.year == null ? '' : ' (${match!.year})'}',
+                                              style: const TextStyle(
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 4),
+                                            SelectableText(
+                                              '合并到 ${m.into}',
+                                              style: TextStyle(
+                                                fontSize: 12.5,
+                                                color: p.text,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 2),
+                                            if (m.exists)
+                                              FutureBuilder<List<RemoteEntry>>(
+                                                future: backend.list(m.into),
+                                                builder: (context, snap) {
+                                                  final dirs = [
+                                                    for (final e
+                                                        in snap.data ??
+                                                            const <
+                                                              RemoteEntry
+                                                            >[])
+                                                      if (e.isDir) e.name,
+                                                  ]..sort();
+                                                  return Text(
+                                                    snap.hasError
+                                                        ? '已有文件夹（读取内容失败）'
+                                                        : !snap.hasData
+                                                        ? '已有：读取中…'
+                                                        : '已有：${dirs.isEmpty ? '（没有子文件夹）' : dirs.join('、')}',
+                                                    style: small,
+                                                  );
+                                                },
+                                              )
+                                            else if (other != null)
+                                              Text(
+                                                '和本次的 ${other.rootDir} 放在一起',
+                                                style: small,
+                                              ),
+                                            if (m.seasons.isNotEmpty)
+                                              Text(
+                                                '本次新增：${seasons(m.seasons)}',
+                                                style: small,
+                                              ),
+                                            if (g != null)
+                                              Text(
+                                                '本次来源：${g.rootDir}',
+                                                style: small,
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Segmented<bool>(
+                                        key: ValueKey(
+                                          'merge-choice-${m.group.value}',
+                                        ),
+                                        options: const {
+                                          false: '合并',
+                                          true: '分开保留',
+                                        },
+                                        value: keep,
+                                        onChanged: (v) => setState(
+                                          () => v
+                                              ? separate.add(m.group)
+                                              : separate.remove(m.group),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              },
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  Text('同名的集不会被覆盖：如果两边有相同的集，会在执行前提示冲突。', style: small),
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      OutlinedButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        child: const Text('取消'),
+                      ),
+                      const SizedBox(width: 8),
+                      FilledButton(
+                        key: const ValueKey('merge-continue'),
+                        onPressed: () => Navigator.pop(ctx, separate),
+                        child: const Text('继续'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    ),
+  );
 }

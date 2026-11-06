@@ -44,14 +44,20 @@ class SourcesPage extends ConsumerWidget {
         child: EmptyState(
           icon: CupertinoIcons.cloud,
           title: '还没有连接',
-          message: '添加一个 Alist、WebDAV 或本地文件夹，就可以开始整理了',
+          message: '添加一个 Alist、WebDAV、SMB 共享或本地文件夹，就可以开始整理了',
           action: add,
         ),
       );
     }
-    Widget label(String text) => Padding(
+    Widget label(String text, IconData icon) => Padding(
       padding: const EdgeInsets.only(top: 26, bottom: 8),
-      child: Text(text, style: theme.textTheme.labelSmall),
+      child: Row(
+        children: [
+          Icon(icon, size: 13, color: theme.textTheme.labelSmall?.color),
+          const SizedBox(width: 6),
+          Text(text, style: theme.textTheme.labelSmall),
+        ],
+      ),
     );
 
     return ListView(
@@ -70,7 +76,7 @@ class SourcesPage extends ConsumerWidget {
           ],
         ),
         const SizedBox(height: 8),
-        label('连接'),
+        label('连接', CupertinoIcons.link),
         Panel(
           padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
           child: Rows(
@@ -83,7 +89,7 @@ class SourcesPage extends ConsumerWidget {
             ],
           ),
         ),
-        label('收藏'),
+        label('收藏', CupertinoIcons.star),
         if (favorites.isEmpty)
           Text(
             '打开一个连接，在文件夹右上角点 ☆ 收藏，常用的下载目录就会出现在这里',
@@ -100,10 +106,10 @@ class SourcesPage extends ConsumerWidget {
             ),
           ),
         if (done.isNotEmpty) ...[
-          label('最近整理'),
+          label('最近整理', CupertinoIcons.clock),
           SizedBox(
-            // Poster 96 + gap 6 + two lines, with room for CJK line heights.
-            height: 142,
+            // Poster 132 + gap 6 + two lines, with room for CJK line heights.
+            height: 182,
             child: ListView(
               scrollDirection: Axis.horizontal,
               children: [
@@ -239,8 +245,15 @@ class _ConnectionRow extends ConsumerWidget {
           margin: const EdgeInsets.only(bottom: 2),
           padding: const EdgeInsets.fromLTRB(0, 9, 0, 9),
           child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
+              IconTile(
+                connectionTypeIcon(c.type),
+                size: 36,
+                color: Colors.white,
+                background: connectionTypeColor(c.type),
+              ),
+              const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -360,6 +373,8 @@ class _FavoriteRow extends ConsumerWidget {
           padding: const EdgeInsets.symmetric(vertical: 9),
           child: Row(
             children: [
+              IconTile(CupertinoIcons.star_fill, size: 36, color: p.textMuted),
+              const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -414,26 +429,25 @@ class _RecentTask extends ConsumerWidget {
       children: [
         for (final w in works.take(4))
           Padding(
-            padding: const EdgeInsets.only(right: 12),
+            padding: const EdgeInsets.only(right: 14),
             child: Hoverable(
               key: ValueKey('recent ${task.id.value} ${w.tmdbId}'),
-              onTap: () => context.go('/tasks/${task.id.value}'),
+              onTap: () => context.go('/tasks/${task.id.value}?from=sources'),
               builder: (context, hover) => AnimatedSlide(
                 duration: const Duration(milliseconds: 160),
                 offset: Offset(0, hover ? -0.02 : 0),
                 child: SizedBox(
-                  width: 64,
+                  width: 88,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Poster(posterPath: w.posterPath, width: 64, height: 96),
+                      Poster(posterPath: w.posterPath, width: 88, height: 132),
                       const SizedBox(height: 6),
-                      Text(
-                        w.title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                      HoverMarquee(
+                        text: w.title,
+                        active: hover,
                         style: TextStyle(
-                          fontSize: 12,
+                          fontSize: 12.5,
                           fontWeight: FontWeight.w500,
                           color: hover ? p.text : p.textMuted,
                         ),

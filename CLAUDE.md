@@ -30,7 +30,8 @@ Chinese from the template. Versions come from `app/pubspec.yaml`; cut releases w
   are frozen: if you need a change there, stop and report it instead of editing.
 - Implement the stub class in your module (it throws `UnimplementedError('Agent X')`);
   don't rename it or change its signature.
-- No new dependencies beyond what the pubspecs already list.
+- New dependencies need an evaluation first: check maintenance, license, platform support
+  (macOS + Windows) and test it against the real use case; report the result before adding it.
 - Core models are plain immutable classes (no code generation in core). drift codegen is
   allowed in `app/lib/data/` only.
 - UI text is Chinese. Paths in core are '/'-separated absolute strings.

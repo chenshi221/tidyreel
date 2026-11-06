@@ -167,6 +167,7 @@ String decisionsToJson(Map<GroupId, GroupDecision> decisions) => jsonEncode({
       'episodeOffset': d.episodeOffset,
       'episodeGroupId': d.episodeGroupId,
       'selected': d.selected,
+      if (d.separate) 'separate': true,
       'overrides': {
         for (final MapEntry(key: path, value: o) in d.overrides.entries)
           path: {
@@ -193,6 +194,7 @@ GroupDecision _decisionFromJson(Json j) => GroupDecision(
   episodeOffset: j['episodeOffset'] as int,
   episodeGroupId: j['episodeGroupId'] as String?,
   selected: j['selected'] as bool,
+  separate: j['separate'] as bool? ?? false,
   overrides: {
     for (final MapEntry(key: path, value: o)
         in (j['overrides'] as Json).entries)

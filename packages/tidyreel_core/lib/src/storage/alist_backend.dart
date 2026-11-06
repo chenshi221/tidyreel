@@ -3,6 +3,7 @@ import 'package:path/path.dart' as p;
 
 import '../model/connection.dart';
 import '../model/scan.dart';
+import 'direct_lan.dart';
 import 'storage_backend.dart';
 
 /// Alist v3 / OpenList. Every endpoint answers HTTP 200 with `{code, message, data}`.
@@ -19,12 +20,14 @@ class AlistBackend implements StorageBackend {
     : _username = config.username,
       _password = credentials.password,
       _token = credentials.token,
-      _dio = Dio(
-        BaseOptions(
-          baseUrl: config.endpoint.replaceFirst(RegExp(r'/+$'), ''),
-          connectTimeout: const Duration(seconds: 15),
-          receiveTimeout: const Duration(seconds: 60),
-          validateStatus: (_) => true,
+      _dio = directForPrivateHosts(
+        Dio(
+          BaseOptions(
+            baseUrl: config.endpoint.replaceFirst(RegExp(r'/+$'), ''),
+            connectTimeout: const Duration(seconds: 15),
+            receiveTimeout: const Duration(seconds: 60),
+            validateStatus: (_) => true,
+          ),
         ),
       );
 
@@ -167,6 +170,82 @@ class AlistBackend implements StorageBackend {
 
   @override
   Future<bool> exists(String path) async => await _get(path) != null;
+
+  @override
+  Future<List<int>> read(String path) async {
+    final info = await _get(path);
+    final raw = info?['raw_url'];
+    if (info == null || raw is! String || raw.isEmpty) {
+      throw StorageException(StorageErrorCode.notFound, path);
+    }
+    try {
+      // raw_url may point at the drive's CDN: no Alist token there.
+      final r = await _dio.getUri<List<int>>(
+        Uri.parse(raw),
+        options: Options(responseType: ResponseType.bytes),
+      );
+      if (r.statusCode != 200) {
+        throw StorageException(
+          r.statusCode == 404
+              ? StorageErrorCode.notFound
+              : StorageErrorCode.other,
+          'GET $path: HTTP ${r.statusCode}',
+        );
+      }
+      return r.data ?? const [];
+    } on DioException catch (e) {
+      throw StorageException(
+        StorageErrorCode.network,
+        'GET $path: ${e.message}',
+      );
+    }
+  }
+
+  @override
+  Future<void> write(String path, List<int> bytes) async {
+    // Alist's put overwrites, so refuse here first.
+    if (await exists(path)) {
+      throw StorageException(StorageErrorCode.alreadyExists, path);
+    }
+    for (var attempt = 0; ; attempt++) {
+      if (_token == null && _canLogin) await _login();
+      final used = _token;
+      final Response<dynamic> r;
+      try {
+        r = await _dio.put<dynamic>(
+          '/api/fs/put',
+          data: Stream.value(bytes),
+          options: Options(
+            headers: {
+              'Authorization': ?used,
+              'File-Path': Uri.encodeComponent(path),
+              'As-Task': 'false',
+              Headers.contentLengthHeader: bytes.length,
+              Headers.contentTypeHeader: 'application/octet-stream',
+            },
+          ),
+        );
+      } on DioException catch (e) {
+        throw StorageException(
+          StorageErrorCode.network,
+          'put $path: ${e.message}',
+        );
+      }
+      final data = r.data;
+      final res = data is Map<String, dynamic> && data['code'] is int
+          ? data
+          : {
+              'code': r.statusCode == 200 ? 200 : r.statusCode ?? 0,
+              'message': 'HTTP ${r.statusCode}',
+            };
+      if (res['code'] == 401 && attempt == 0 && _canLogin) {
+        if (_token == used) _token = null;
+        continue;
+      }
+      _data(res, 'put');
+      return;
+    }
+  }
 
   @override
   Future<void> mkdirs(String dir) async {

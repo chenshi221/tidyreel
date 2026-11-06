@@ -1,6 +1,6 @@
 import 'ids.dart';
 
-enum ConnectionType { alist, webdav, local }
+enum ConnectionType { alist, webdav, smb, local }
 
 /// A saved source. Secrets (password / token) are NOT stored here; see [Credentials].
 class ConnectionConfig {
@@ -8,7 +8,8 @@ class ConnectionConfig {
   final String name;
   final ConnectionType type;
 
-  /// Server URL for alist/webdav (e.g. "http://nas:5244"), absolute folder path for local.
+  /// Server URL for alist/webdav (e.g. "http://nas:5244"), `smb://host[:port]/share`
+  /// for SMB, absolute folder path for local.
   final String endpoint;
   final String? username;
 

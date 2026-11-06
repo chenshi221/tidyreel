@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../../ui/tokens.dart';
@@ -94,7 +95,28 @@ class _OrganicMapState extends State<OrganicMap> {
   List<_PlacedBlock> _placed = const [];
   Size? _size;
   String? _laidOut;
-  var _fitted = false;
+
+  /// Canvas the view was last fitted to: a new canvas starts fitted again.
+  Size? _fittedFor;
+  double _minScale = 1;
+
+  /// View scale, in quarter-octave steps: labels are laid out for it, so a
+  /// zoomed-in map shows more names at the same text size, not bigger text.
+  var _zoom = 1.0;
+
+  static const _maxScale = 6.0;
+
+  @override
+  void initState() {
+    super.initState();
+    _view.addListener(_onView);
+  }
+
+  void _onView() {
+    final s = _view.value.getMaxScaleOnAxis();
+    final q = math.pow(2, (math.log(s) / math.ln2 * 4).round() / 4).toDouble();
+    if (q != _zoom) setState(() => _zoom = q);
+  }
 
   @override
   void dispose() {
@@ -148,12 +170,20 @@ class _OrganicMapState extends State<OrganicMap> {
     return null;
   }
 
-  void _toggleFit(double fit) {
-    _fitted = !_fitted;
-    _view.value = _fitted
-        ? (Matrix4.identity()..scaleByDouble(fit, fit, fit, 1))
-        : Matrix4.identity();
-    setState(() {});
+  void _fit() =>
+      _view.value = Matrix4.identity()
+        ..scaleByDouble(_minScale, _minScale, _minScale, 1);
+
+  /// Zooms by [factor] around the middle of [viewport].
+  void _zoomBy(double factor, Size viewport) {
+    final now = _view.value.getMaxScaleOnAxis();
+    final f = (now * factor).clamp(_minScale, _maxScale) / now;
+    final c = viewport.center(Offset.zero);
+    _view.value = Matrix4.identity()
+      ..translateByDouble(c.dx, c.dy, 0, 1)
+      ..scaleByDouble(f, f, f, 1)
+      ..translateByDouble(-c.dx, -c.dy, 0, 1)
+      ..multiply(_view.value);
   }
 
   @override
@@ -166,7 +196,18 @@ class _OrganicMapState extends State<OrganicMap> {
         final items = mapItems(widget.blocks, viewport);
         final canvas = mapCanvas(items, viewport);
         final placed = _layout(items, canvas);
-        final fit = viewport.width / canvas.width;
+        final fit = math.min(
+          viewport.width / canvas.width,
+          viewport.height / canvas.height,
+        );
+        _minScale = math.min(fit, 1);
+        // Show everything first; zoom in from there.
+        if (_fittedFor != canvas) {
+          _fittedFor = canvas;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) _fit();
+          });
+        }
         final hovered = placed
             .where((b) => b.block.id == _hover)
             .firstOrNull
@@ -178,6 +219,7 @@ class _OrganicMapState extends State<OrganicMap> {
           hover: only,
           selected: widget.selected,
           textScaler: MediaQuery.textScalerOf(context),
+          zoom: _zoom,
           baseStyle: DefaultTextStyle.of(context).style,
         );
         return Stack(
@@ -186,8 +228,8 @@ class _OrganicMapState extends State<OrganicMap> {
               key: const ValueKey('map-viewer'),
               transformationController: _view,
               constrained: false,
-              minScale: fit,
-              maxScale: 4,
+              minScale: _minScale,
+              maxScale: _maxScale,
               child: MouseRegion(
                 cursor: _hover == null
                     ? MouseCursor.defer
@@ -244,18 +286,36 @@ class _OrganicMapState extends State<OrganicMap> {
                   ),
                 ),
               ),
-            if (fit < 1)
-              Positioned(
-                right: 0,
-                bottom: 0,
-                child: _MapPill(
-                  child: LinkText(
-                    _fitted ? '放大查看' : '看全部',
-                    key: const ValueKey('map-fit'),
-                    onTap: () => _toggleFit(fit),
-                  ),
+            Positioned(
+              right: 0,
+              bottom: 0,
+              child: _MapPill(
+                padding: EdgeInsets.zero,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _ZoomButton(
+                      key: const ValueKey('map-zoom-out'),
+                      icon: CupertinoIcons.minus,
+                      tooltip: '缩小',
+                      onTap: () => _zoomBy(1 / 1.5, viewport),
+                    ),
+                    _ZoomButton(
+                      key: const ValueKey('map-zoom-in'),
+                      icon: CupertinoIcons.plus,
+                      tooltip: '放大，显示更多名字',
+                      onTap: () => _zoomBy(1.5, viewport),
+                    ),
+                    _ZoomButton(
+                      key: const ValueKey('map-fit'),
+                      icon: CupertinoIcons.fullscreen_exit,
+                      tooltip: '显示全部',
+                      onTap: _fit,
+                    ),
+                  ],
                 ),
               ),
+            ),
           ],
         );
       },
@@ -266,20 +326,54 @@ class _OrganicMapState extends State<OrganicMap> {
 /// A small floating label over the map.
 class _MapPill extends StatelessWidget {
   final Widget child;
+  final EdgeInsetsGeometry padding;
 
-  const _MapPill({required this.child});
+  const _MapPill({
+    required this.child,
+    this.padding = const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+  });
 
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      padding: padding,
       decoration: BoxDecoration(
         color: p.panel,
         borderRadius: BorderRadius.circular(Radii.md),
         border: Border.all(color: p.line, width: hairline),
       ),
       child: child,
+    );
+  }
+}
+
+class _ZoomButton extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  const _ZoomButton({
+    super.key,
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    return Tooltip(
+      message: tooltip,
+      child: Hoverable(
+        onTap: onTap,
+        builder: (context, hover) => Container(
+          width: 30,
+          height: 28,
+          color: hover ? p.hover : Colors.transparent,
+          child: Icon(icon, size: 14, color: p.textMuted),
+        ),
+      ),
     );
   }
 }
@@ -313,6 +407,10 @@ class _MapPainter extends CustomPainter {
   final TextScaler textScaler;
   final TextStyle baseStyle;
 
+  /// View scale: text and the room it needs are divided by it, so labels
+  /// keep their on-screen size and more of them fit as you zoom in.
+  final double zoom;
+
   _MapPainter({
     required this.placed,
     required this.palette,
@@ -321,6 +419,7 @@ class _MapPainter extends CustomPainter {
     required this.selected,
     required this.textScaler,
     required this.baseStyle,
+    required this.zoom,
   });
 
   static const _contourStep = 7.0;
@@ -381,8 +480,9 @@ class _MapPainter extends CustomPainter {
     // Smoothing eats the corners; the middle of each chord is what's left.
     final width = chordWidth(b.polygon, c.dy) * 0.78;
     final height = chordHeight(b.polygon, c.dx) * 0.72;
-    if (width < 36 || height < 22) return null;
-    final big = math.min(width, height) > 140;
+    final z = zoom;
+    if (width * z < 36 || height * z < 22) return null;
+    final big = math.min(width, height) * z > 140;
     TextPainter line(
       String text,
       double size,
@@ -393,7 +493,7 @@ class _MapPainter extends CustomPainter {
       text: TextSpan(
         text: text,
         style: baseStyle.copyWith(
-          fontSize: size,
+          fontSize: size / z,
           fontWeight: w,
           color: ink.withValues(alpha: alpha),
           height: 1.3,
@@ -424,7 +524,7 @@ class _MapPainter extends CustomPainter {
       ?size,
     ];
     if (lines.isEmpty) return null;
-    final total = lines.fold(0.0, (s, l) => s + l.height) + 2;
+    final total = lines.fold(0.0, (s, l) => s + l.height) + 2 / z;
     if (total > height) return null;
     final w = lines.map((l) => l.width).reduce(math.max);
     return _Label(lines, Rect.fromCenter(center: c, width: w, height: total));
@@ -436,6 +536,7 @@ class _MapPainter extends CustomPainter {
       old.hover != hover ||
       !identical(old.selected, selected) ||
       old.palette != palette ||
+      old.zoom != zoom ||
       old.dark != dark;
 }
 

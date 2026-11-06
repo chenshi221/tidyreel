@@ -55,6 +55,19 @@ class LocalBackend implements StorageBackend {
   }
 
   @override
+  Future<List<int>> read(String path) =>
+      _io(path, () => File(_real(path)).readAsBytes());
+
+  @override
+  Future<void> write(String path, List<int> bytes) => _io(path, () async {
+    final f = File(_real(path));
+    await f.parent.create(recursive: true);
+    // exclusive: EEXIST (→ alreadyExists) instead of replacing what's there.
+    await f.create(exclusive: true);
+    await f.writeAsBytes(bytes, flush: true);
+  });
+
+  @override
   Future<List<RemoteEntry>> list(String dir, {bool refresh = false}) async {
     final d = Directory(_real(dir));
     if (!d.existsSync()) throw StorageException(StorageErrorCode.notFound, dir);

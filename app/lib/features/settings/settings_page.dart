@@ -175,6 +175,17 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   ),
                 ),
                 SettingRow(
+                  title: '刮削模式',
+                  caption:
+                      '整理时一并写入 NFO 和 TMDB 海报、背景图、剧集截图。'
+                      '已有的文件不会被覆盖，撤销时会删掉写入的文件',
+                  control: MacSwitch(
+                    key: const ValueKey('scrape'),
+                    value: s.scrape,
+                    onChanged: (v) => _set((o) => o.copyWith(scrape: v)),
+                  ),
+                ),
+                SettingRow(
                   title: '提交前预览',
                   caption: '先快速扫一遍，显示文件数量和风险提示，再决定是否提交',
                   control: toggle(
@@ -424,19 +435,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   padding: const EdgeInsets.all(14),
                   child: Row(
                     children: [
-                      Container(
-                        width: 40,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          color: p.accent,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: const Icon(
-                          CupertinoIcons.film_fill,
-                          color: Colors.white,
-                          size: 20,
-                        ),
-                      ),
+                      const AppLogo(),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Column(
@@ -472,7 +471,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                         title: const Text('开源许可'),
                         content: const SelectableText(
                           '命名与解析思路参考 mnamer（MIT License）。\n'
-                          '原版权声明见项目 LICENSES/mnamer-MIT.txt。',
+                          '原版权声明见项目 LICENSES/mnamer-MIT.txt。\n\n'
+                          'SMB 连接使用 dart_smb2（BSD-3-Clause）和 libsmb2'
+                          '（GNU LGPL 2.1 或更新版本，动态加载，'
+                          'Copyright (C) Ronnie Sahlberg 及贡献者）。\n'
+                          '源码：https://github.com/sahlberg/libsmb2 ，'
+                          '说明见项目 LICENSES/libsmb2-NOTICE.txt。',
                         ),
                         actions: [
                           OutlinedButton(

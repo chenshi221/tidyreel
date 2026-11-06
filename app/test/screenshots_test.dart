@@ -151,7 +151,9 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('编辑'));
     await _shot(tester, '04-connection-edit');
-    await tester.tap(find.text('WebDAV'));
+    await tester.tap(find.byKey(const ValueKey('dav-template')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('template-alistDav')).last);
     await tester.pumpAndSettle();
     await tester.tap(find.text('测试连接'));
     await _shot(tester, '05-connection-webdav');

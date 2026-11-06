@@ -292,3 +292,72 @@ String extOf(String name) {
 
 String joinPath(String dir, String name) =>
     dir.endsWith('/') ? '$dir$name' : '$dir/$name';
+
+final _letterPrefixRe = RegExp(r'^[A-Z](?=[㐀-鿿])');
+final _bracketedRe = RegExp(r'[（(【\[《][^）)】\]》]*[）)】\]》]');
+final _cjkCharRe = RegExp(r'[぀-ヿ㐀-鿿가-힯]');
+// Words glued to digits ("S01", "x265") end the run.
+final _latinRunRe = RegExp(
+  r"[A-Za-z][A-Za-z']*(?![A-Za-z'0-9])(?: +[A-Za-z][A-Za-z']*(?![A-Za-z'0-9]))*",
+);
+const _releaseWords = {
+  'web',
+  'dl',
+  'webrip',
+  'bluray',
+  'bdrip',
+  'hdtv',
+  'hevc',
+  'avc',
+  'aac',
+  'ddp',
+  'flac',
+  'complete',
+  'season',
+  'chs',
+  'cht',
+  'chi',
+  'eng',
+  'mkv',
+  'mp4',
+  'remux',
+  'hdr',
+  'dv',
+  'atmos',
+  'proper',
+  'repack',
+  'uhd',
+};
+
+/// Looser searches to try, in order, when [title] (parsed from [rawName])
+/// finds nothing on TMDB: without a sort-letter prefix ("W我的有罪之人"),
+/// without brackets, the CJK part alone, the English name from the raw name
+/// ("R人生复本 Dark Matter" → "Dark Matter"). Excludes [title] itself.
+List<String> relaxedQueries(String title, String rawName) {
+  final noPrefix = title.replaceFirst(_letterPrefixRe, '');
+  final noBrackets = noPrefix.replaceAll(_bracketedRe, ' ').trim();
+  final cjk = noBrackets
+      .split(' ')
+      .where(_cjkCharRe.hasMatch)
+      .join(' ')
+      .replaceFirst(_letterPrefixRe, '');
+  String? latin;
+  final raw = rawName
+      .replaceAll(_bracketedRe, ' ')
+      .replaceAll(RegExp(r'[._]'), ' ');
+  for (final m in _latinRunRe.allMatches(raw)) {
+    final words = [
+      for (final w in m[0]!.split(' '))
+        if (w.isNotEmpty && !_releaseWords.contains(w.toLowerCase())) w,
+    ];
+    if (words.any((w) => w.length >= 3)) {
+      latin = words.join(' ');
+      break;
+    }
+  }
+  final seen = {normTitle(title)};
+  return [
+    for (final q in [noPrefix, noBrackets, cjk, ?latin])
+      if (normTitle(q).isNotEmpty && seen.add(normTitle(q))) q,
+  ];
+}

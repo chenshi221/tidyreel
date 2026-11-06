@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:path/path.dart' as p;
 import 'package:tidyreel_core/testing.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
@@ -44,6 +46,13 @@ Future<void> applyPlan(RenamePlan plan, MemoryStorageBackend be) async {
         }
       case OpKind.delete:
         await be.remove(p.posix.dirname(op.src), [p.posix.basename(op.src)]);
+      case OpKind.write:
+        await be.write(
+          op.dst,
+          op.src.startsWith(writeTextPrefix)
+              ? utf8.encode(op.src.substring(writeTextPrefix.length))
+              : [0],
+        );
     }
   }
 }

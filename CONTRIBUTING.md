@@ -7,6 +7,16 @@ tool/install_hooks.sh   # 启用 commit-msg 检查（每个 clone 执行一次�
 tool/check.sh           # 格式、静态检查、两个包的全部测试；提交前必须通过
 ```
 
+SMB 后端的实测默认跳过。要跑的话，准备一个空的测试共享（比如 `brew install samba`
+后在高端口起一个用户态 smbd），然后：
+
+```sh
+cd app && SMB_TEST="smb://127.0.0.1:4445/media,用户名,密码" flutter test test/data/smb_live_test.dart
+```
+
+SMB 需要原生库 libsmb2（dart_smb2 的 build hook 下载），所以它在 `app/lib/data/`，
+不在 core：core 的 `dart test` 在 macOS 上处理不了长路径下的原生库。
+
 ## 提交规范
 
 采用 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/v1.0.0/)：
