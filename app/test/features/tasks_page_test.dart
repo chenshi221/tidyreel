@@ -70,6 +70,10 @@ void main() {
     await tester.tap(find.text('取消'));
     await waitForStage(tester, tm, id, TaskStage.cancelled);
     expect(find.text('进行中 (0)'), findsOneWidget);
+
+    // 重新识别 runs it again from the start.
+    await tester.tap(find.byKey(ValueKey('retry ${id.value}')));
+    await waitForStage(tester, tm, id, TaskStage.awaitingReview);
   });
 
   testWidgets('right-click 删除记录 and 清空 remove finished tasks', (tester) async {

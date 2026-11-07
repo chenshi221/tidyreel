@@ -173,18 +173,40 @@ class TmdbProvider implements MetadataProvider {
     return [for (final p in pages) ..._list(p['results'])];
   }
 
-  /// The first mainland-China alternative title, when TMDB has no Chinese name.
-  Future<String?> _chineseAlias(int id, String title) async {
+  /// A Chinese name when TMDB's zh-CN title is still the English one: the
+  /// zh-CN / zh-SG translation, a mainland alias, then zh-TW / zh-HK, then any
+  /// Chinese alias ("The Terminal List" -> "终极名单").
+  Future<String?> _chineseAlias(int id, bool movie, String title) async {
     if (_han.hasMatch(title)) return null;
-    try {
-      final res = await _http.get('/tv/$id/alternative_titles', const {});
-      return _list(res['results'])
-          .where((t) => t['iso_3166_1'] == 'CN')
-          .map((t) => _str(t['title']))
-          .firstWhere((t) => t != null && _han.hasMatch(t), orElse: () => null);
-    } on TmdbException {
-      return null;
-    }
+    final kind = movie ? 'movie' : 'tv';
+    final key = movie ? 'title' : 'name';
+    final res = await Future.wait([
+      for (final path in ['translations', 'alternative_titles'])
+        _http
+            .get('/$kind/$id/$path', const {})
+            .then<Map<String, dynamic>?>((r) => r)
+            .catchError((Object _) => null, test: (e) => e is TmdbException),
+    ]);
+    final names = <String, String>{
+      for (final t in _list(res[0]?['translations']))
+        if (t['iso_639_1'] == 'zh' && _str((t['data'] as Map?)?[key]) != null)
+          t['iso_3166_1'] as String: (t['data'] as Map)[key] as String,
+    };
+    final aliases = [
+      for (final t in _list(res[1]?[movie ? 'titles' : 'results']))
+        if (_str(t['title']) case final a? when _han.hasMatch(a))
+          (t['iso_3166_1'] as String?, a),
+    ];
+    String? alias(String? region) =>
+        aliases.where((a) => region == null || a.$1 == region).firstOrNull?.$2;
+    return [
+      names['CN'],
+      names['SG'],
+      alias('CN'),
+      names['TW'],
+      names['HK'],
+      alias(null),
+    ].firstWhere((n) => n != null && _han.hasMatch(n), orElse: () => null);
   }
 
   /// Best effort: search results are still useful without aliases.
@@ -211,7 +233,7 @@ class TmdbProvider implements MetadataProvider {
       _http.get(path, {'language': _en}),
     ]);
     final alias = config.language.startsWith('zh')
-        ? await _chineseAlias(tmdbId, _title(res[0], false))
+        ? await _chineseAlias(tmdbId, false, _title(res[0], false))
         : null;
     return ShowDetail(
       info: _candidate(
@@ -290,9 +312,12 @@ class TmdbProvider implements MetadataProvider {
       _http.get(path, {'language': config.language}),
       _http.get(path, {'language': _en}),
     ]);
+    final alias = config.language.startsWith('zh')
+        ? await _chineseAlias(tmdbId, true, _title(res[0], true))
+        : null;
     return MovieDetail(
       info: _candidate(
-        res[0],
+        alias == null ? res[0] : {...res[0], 'title': alias},
         MediaKind.movie,
         englishTitle: _title(res[1], true),
       ),

@@ -271,6 +271,12 @@ class TaskCard extends ConsumerWidget {
         }, icon: CupertinoIcons.arrow_clockwise),
       if (t.stage == TaskStage.done || t.stage == TaskStage.partiallyFailed)
         MenuAction('撤销', undo, icon: CupertinoIcons.arrow_uturn_left),
+      if (canRetry(t))
+        MenuAction(
+          '重新识别',
+          () => retryTask(context, ref, t.id),
+          icon: CupertinoIcons.arrow_clockwise,
+        ),
       if (t.stage.isActive)
         MenuAction('取消', () => tm.cancel(t.id), icon: CupertinoIcons.stop),
       null,
@@ -321,11 +327,11 @@ class TaskCard extends ConsumerWidget {
               Poster(
                 posterPath: works.firstOrNull?.posterPath,
                 icon: CupertinoIcons.folder,
-                width: 42,
-                height: 63,
-                radius: 5,
+                width: 64,
+                height: 96,
+                radius: Radii.md,
               ),
-              const SizedBox(width: 14),
+              const SizedBox(width: 18),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -347,6 +353,7 @@ class TaskCard extends ConsumerWidget {
                         [
                           connName ?? t.connection.value,
                           t.mode == OrganizeMode.inPlace ? '原地整理' : '移动到媒体库',
+                          if (t.scrape) '刮削',
                           if (recognized) counts else where,
                         ].join(' · '),
                         style: theme.textTheme.bodySmall,
@@ -372,7 +379,8 @@ class TaskCard extends ConsumerWidget {
                         overflow: TextOverflow.ellipsis,
                       ),
                     ],
-                    if (_currentStep(t.stage) >= 0) ...[
+                    // Finished tasks need no track: the status says it.
+                    if (t.stage.isActive && _currentStep(t.stage) >= 0) ...[
                       const SizedBox(height: 8),
                       TaskStepper(
                         stage: t.stage,
@@ -408,6 +416,14 @@ class TaskCard extends ConsumerWidget {
               if (t.stage == TaskStage.done ||
                   t.stage == TaskStage.partiallyFailed)
                 TextButton(onPressed: undo, child: const Text('撤销')),
+              // A failed recognition is the common case; undone ones keep it
+              // in the menu.
+              if (t.stage == TaskStage.cancelled && canRetry(t))
+                TextButton(
+                  key: ValueKey('retry ${t.id.value}'),
+                  onPressed: () => retryTask(context, ref, t.id),
+                  child: const Text('重新识别'),
+                ),
               const SizedBox(width: 2),
               MoreButton(items: menu),
             ],
@@ -494,6 +510,19 @@ class TaskStepper extends StatelessWidget {
 }
 
 /// Not importing, recognizing or executing (those must be cancelled first).
+/// [TaskManager.retry] with its error as a toast.
+Future<void> retryTask(BuildContext context, WidgetRef ref, TaskId id) async {
+  try {
+    await ref.read(taskManagerProvider).retry(id);
+  } on StateError catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(e.message)));
+    }
+  }
+}
+
 bool canDeleteTask(TaskSummary t) =>
     !t.stage.isActive || t.stage == TaskStage.awaitingReview;
 

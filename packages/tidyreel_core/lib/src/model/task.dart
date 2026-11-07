@@ -17,12 +17,20 @@ enum TaskStage {
   bool get isActive => index <= renamingFolders.index;
 }
 
+/// Whether [TaskManager.retry] accepts [t]: nothing of it is on disk.
+bool canRetry(TaskSummary t) =>
+    t.stage == TaskStage.undone ||
+    (t.stage == TaskStage.cancelled && t.batch == null);
+
 /// A card in the 任务中心.
 class TaskSummary {
   final TaskId id;
   final ConnectionId connection;
   final List<String> paths;
   final OrganizeMode mode;
+
+  /// 刮削: also write .nfo files and TMDB artwork (PlanOptions.scrape).
+  final bool scrape;
   final TaskStage stage;
 
   /// Human-readable status line, e.g. "锚点识别完成，正在进行后续处理".
@@ -46,6 +54,7 @@ class TaskSummary {
     required this.connection,
     required this.paths,
     required this.mode,
+    this.scrape = false,
     required this.stage,
     this.message = '',
     this.importedCount = 0,

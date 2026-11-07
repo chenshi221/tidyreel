@@ -48,7 +48,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // No mode switch: ticking a checkbox selects and brings up the bar.
-    expect(find.text('提交为任务'), findsNothing);
+    expect(find.byKey(const ValueKey('organize')), findsNothing);
     await tester.tap(find.byKey(const ValueKey('check 异兽魔都 2020 1080p')));
     await tester.pumpAndSettle();
     expect(find.text('已选 1 项'), findsOneWidget);
@@ -82,14 +82,14 @@ void main() {
     await tester.tap(find.text('移动到媒体库'));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('提交为任务'));
+    await tester.tap(find.byKey(const ValueKey('organize')));
     await tester.pumpAndSettle();
     // The preview comes first; 取消 leaves nothing behind.
     expect(find.text('提交前预览'), findsOneWidget);
     await tester.tap(find.text('取消').last);
     await tester.pumpAndSettle();
     expect(await tm.watchAll().first, isEmpty);
-    await tester.tap(find.text('提交为任务'));
+    await tester.tap(find.byKey(const ValueKey('scrape')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('preview-submit')));
     await tester.pumpAndSettle();
@@ -98,6 +98,7 @@ void main() {
     expect(tasks, hasLength(1));
     expect(tasks.single.paths, hasLength(3));
     expect(tasks.single.mode, OrganizeMode.moveToLibrary);
+    expect(tasks.single.scrape, isTrue);
     // Lands on the new task's detail page.
     expect(find.text('ROUTE detail ${tasks.single.id.value}'), findsOneWidget);
   });

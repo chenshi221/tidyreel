@@ -63,6 +63,8 @@ ThemeData buildTheme(Brightness brightness, {Color? accent}) {
     height: height,
     letterSpacing: spacing ?? 0,
     fontFamilyFallback: sansFallback,
+    // Counts line up in lists and progress text.
+    fontFeatures: const [FontFeature.tabularFigures()],
   );
   final bt = base.textTheme;
   final text = bt.copyWith(
@@ -73,28 +75,29 @@ ThemeData buildTheme(Brightness brightness, {Color? accent}) {
       height: 1,
       spacing: -2,
     ),
+    // Page titles: one size, medium-bold, no thin display weights.
     displaySmall: t(
       bt.displaySmall,
-      30,
-      weight: FontWeight.w300,
-      spacing: -0.6,
+      TypeScale.title,
+      weight: FontWeight.w600,
+      spacing: -0.3,
     ),
     headlineSmall: t(
       bt.headlineSmall,
       TypeScale.title,
-      weight: FontWeight.w500,
-      spacing: -0.4,
+      weight: FontWeight.w600,
+      spacing: -0.3,
     ),
     titleLarge: t(bt.titleLarge, 17, weight: FontWeight.w500, spacing: -0.2),
     titleMedium: t(bt.titleMedium, TypeScale.headline, weight: FontWeight.w500),
     titleSmall: t(bt.titleSmall, TypeScale.body, weight: FontWeight.w500),
-    bodyLarge: t(bt.bodyLarge, 14, height: 1.4),
-    bodyMedium: t(bt.bodyMedium, TypeScale.body, height: 1.38),
+    bodyLarge: t(bt.bodyLarge, 14, height: 1.5),
+    bodyMedium: t(bt.bodyMedium, TypeScale.body, height: 1.5),
     bodySmall: t(
       bt.bodySmall,
       TypeScale.small,
       color: p.textMuted,
-      height: 1.35,
+      height: 1.45,
     ),
     labelLarge: t(bt.labelLarge, TypeScale.body, weight: FontWeight.w500),
     labelMedium: t(bt.labelMedium, 12, weight: FontWeight.w500),
@@ -395,6 +398,8 @@ ThemeData buildTheme(Brightness brightness, {Color? accent}) {
       shape: rounded(Radii.lg),
       elevation: 6,
       width: 420,
+      // Clears the floating bars at the bottom of 识别结果 and the file browser.
+      insetPadding: const EdgeInsets.only(top: 5, bottom: 104),
     ),
     pageTransitionsTheme: PageTransitionsTheme(
       builders: {

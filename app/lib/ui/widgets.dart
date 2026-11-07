@@ -177,12 +177,16 @@ class IconTile extends StatelessWidget {
   final Color? color;
   final Color? background;
 
+  /// Hairline frame: an ink-line glyph on paper, like the app icon.
+  final bool outlined;
+
   const IconTile(
     this.icon, {
     super.key,
     this.size = 30,
     this.color,
     this.background,
+    this.outlined = false,
   });
 
   @override
@@ -192,8 +196,11 @@ class IconTile extends StatelessWidget {
       width: size,
       height: size,
       decoration: BoxDecoration(
-        color: background ?? p.selected,
-        borderRadius: BorderRadius.circular(size * 0.3),
+        color: background ?? (outlined ? p.panel : p.selected),
+        borderRadius: BorderRadius.circular(size * 0.28),
+        border: outlined
+            ? Border.all(color: p.lineStrong, width: hairline)
+            : null,
       ),
       child: Icon(icon, size: size * 0.52, color: color ?? p.textMuted),
     );
@@ -643,14 +650,14 @@ class GradientProgress extends StatelessWidget {
 /// A stable hue per season number so 第 1 季 / 第 2 季 read apart at a glance.
 Color seasonColor(int season) {
   const hues = [
-    Color(0xFF8A8780), // 0: specials, neutral
-    Color(0xFFC96442),
-    Color(0xFF3E7CB1),
-    Color(0xFF5A9A5E),
-    Color(0xFF8B5FBF),
-    Color(0xFFC08A2B),
-    Color(0xFF2F9A9A),
-    Color(0xFFB8527A),
+    Color(0xFF8E9496), // 0: specials, neutral
+    Color(0xFF9D2933),
+    Color(0xFF425066),
+    Color(0xFF4F7D5B),
+    Color(0xFF7E5A86), // 紫棠
+    Color(0xFFA9761F), // 姜黄
+    Color(0xFF2E6F78), // 石青
+    Color(0xFFA8452F), // 赭
   ];
   if (season <= 0) return hues[0];
   return hues[1 + (season - 1) % (hues.length - 1)];

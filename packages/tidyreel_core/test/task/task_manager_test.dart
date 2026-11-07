@@ -9,6 +9,9 @@ class FakeRecognizer implements Recognizer {
   var calls = 0;
   Completer<void>? gate;
 
+  /// Thrown once by the next recognize call.
+  Object? failOnce;
+
   @override
   Future<ScanResult> recognize(
     ConnectionId connection,
@@ -18,6 +21,10 @@ class FakeRecognizer implements Recognizer {
   }) async {
     calls++;
     await gate?.future;
+    if (failOnce case final e?) {
+      failOnce = null;
+      throw e;
+    }
     final byDir = <String, List<ScanFile>>{};
     final junk = <ScanFile>[];
     for (final f in files) {
@@ -61,6 +68,7 @@ class FakeRecognizer implements Recognizer {
 /// `dir` -> `dir_done` (folders phase).
 class FakePlanner implements Planner {
   final seenExisting = <Set<String>>[];
+  final seenScrape = <bool>[];
 
   @override
   Future<RenamePlan> build(
@@ -70,6 +78,7 @@ class FakePlanner implements Planner {
     Set<String> existing = const {},
   }) async {
     seenExisting.add(existing);
+    seenScrape.add(options.scrape);
     final ops = <RenameOp>[];
     final conflicts = <PlanConflict>[];
     for (final g in scan.groups) {
@@ -193,6 +202,23 @@ class LockedFolder extends MemoryStorageBackend {
 }
 
 void main() {
+  test('a 刮削 task plans with scrape on and keeps the flag', () async {
+    final rig = Rig(MemoryStorageBackend(library()));
+    final id = await rig.tm.submit(
+      conn,
+      ['/in'],
+      OrganizeMode.inPlace,
+      scrape: true,
+    );
+    final ready = await rig.waitFor(
+      id,
+      (t) => t.stage == TaskStage.awaitingReview,
+    );
+    expect(ready.scrape, isTrue);
+    await rig.tm.review(id);
+    expect(rig.planner.seenScrape, everyElement(isTrue));
+  });
+
   test('full lifecycle: import, recognize, review, run, undo', () async {
     final before = library();
     final rig = Rig(MemoryStorageBackend(before));
@@ -278,6 +304,35 @@ void main() {
     expect(await rig.store.loadAll(), isEmpty);
     expect(await rig.history.batches(), isEmpty);
     expect(rig.fs.files, files);
+  });
+
+  test('retry recognizes a failed task again', () async {
+    final rig = Rig(MemoryStorageBackend(library()));
+    rig.recognizer.failOnce = StateError('请先在「设置」里填写 TMDB API key');
+    final id = await rig.tm.submit(conn, ['/in/Good'], OrganizeMode.inPlace);
+    final failed = await rig.waitFor(id, (t) => t.stage == TaskStage.cancelled);
+    expect(canRetry(failed), isTrue);
+    await rig.tm.retry(id);
+    await rig.waitFor(id, (t) => t.stage == TaskStage.awaitingReview);
+    expect(rig.recognizer.calls, 2);
+    expect((await rig.tm.review(id)).scan.groups, hasLength(1));
+  });
+
+  test('retry re-recognizes an undone task and refuses a done one', () async {
+    final rig = Rig(MemoryStorageBackend(library()));
+    final id = await rig.tm.submit(conn, ['/in/Good'], OrganizeMode.inPlace);
+    await rig.waitFor(id, (t) => t.stage == TaskStage.awaitingReview);
+    await rig.tm.run(id);
+    await rig.waitFor(id, (t) => t.stage == TaskStage.done);
+    await expectLater(rig.tm.retry(id), throwsStateError);
+    await rig.tm.undo(id);
+    await rig.waitFor(id, (t) => t.stage == TaskStage.undone);
+    await rig.tm.retry(id);
+    await rig.waitFor(id, (t) => t.stage == TaskStage.awaitingReview);
+    await rig.tm.run(id);
+    final again = await rig.waitFor(id, (t) => t.stage == TaskStage.done);
+    expect(rig.fs.files, contains('/in/Good_done/ok_a.mkv'));
+    expect(again.batch, isNotNull);
   });
 
   test('delete refuses a task that is still scanning', () async {

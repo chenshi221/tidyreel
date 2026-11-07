@@ -166,7 +166,7 @@ void main() {
     await tap(find.text('繁体'));
     await tap(find.text('严格'));
     await tap(find.text('深色'));
-    await tap(find.byKey(const ValueKey('accent-blue')));
+    await tap(find.byKey(const ValueKey('accent-indigo')));
     await tap(find.byKey(const ValueKey('notify-finished')));
     final s = c.read(settingsProvider);
     expect(s.tmdbApiKey, 'abc123');
@@ -176,7 +176,7 @@ void main() {
     expect(s.scanPreview, isFalse);
     expect(s.tmdbLanguage, 'zh-TW');
     expect(s.confidenceThreshold, 0.85);
-    expect(s.accent, AccentChoice.blue);
+    expect(s.accent, AccentChoice.indigo);
     expect(s.notifyFinished, isFalse);
     expect(c.read(themeModeProvider), ThemeMode.dark);
 

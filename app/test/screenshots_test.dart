@@ -58,7 +58,10 @@ Future<void> _loadFonts() async {
   await _load('Songti SC', [
     for (final w in ['Regular', 'SemiBold']) '$_fonts/NotoSerifSC-$w.otf',
   ]);
-  await _load('Menlo', ['/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf']);
+  await _load('Menlo', [
+    '/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf',
+    '/System/Library/Fonts/SFNSMono.ttf',
+  ]);
   final pubCache =
       Platform.environment['PUB_CACHE'] ??
       '${Platform.environment['HOME']}/.pub-cache';

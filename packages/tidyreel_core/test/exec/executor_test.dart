@@ -161,6 +161,20 @@ void main() {
     );
   });
 
+  test('a same-name op is done, organized, and undoes to nothing', () async {
+    final f = tree().keys.first;
+    final before = fs.files;
+    await run(
+      executor(history).execute(task, conn, RenamePlan(ops: [reloc(f, f)]), fs),
+    );
+    final b = await theBatch(history);
+    expect(statusCounts(await history.records(b)), {OpStatus.done: 1});
+    expect(await history.isOrganized(conn, f), isTrue);
+    expect(fs.files, before);
+    await run(executor(history).undo(b, fs));
+    expect(fs.files, before);
+  });
+
   test('refuses plans with conflicts and unselected ops are not run', () async {
     final bad = RenamePlan(
       ops: plan(),

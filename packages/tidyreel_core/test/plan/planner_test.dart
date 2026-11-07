@@ -373,7 +373,7 @@ void main() {
       },
     );
 
-    test('already organized files produce no ops', () async {
+    test('already organized files get only same-name ops', () async {
       final p = await plan(
         scanOf([
           tvGroup([
@@ -385,7 +385,9 @@ void main() {
           ], rootDir: '/d/异兽魔都 (2020)'),
         ]),
       );
-      expect(p.ops, isEmpty);
+      // Still executable, so running it records the files as organized.
+      expect(p.ops.single.src, p.ops.single.dst);
+      expect(p.ops.single.selected, isTrue);
       expect(p.canExecute, isTrue);
     });
 
@@ -415,7 +417,7 @@ void main() {
             ),
           ]),
         );
-        expect(p.ops, isEmpty);
+        expect(p.ops.every((o) => o.src == o.dst), isTrue);
       },
     );
   });

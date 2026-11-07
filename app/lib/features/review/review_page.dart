@@ -51,6 +51,10 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
   void initState() {
     super.initState();
     _load();
+    // A "识别完成，等你确认" toast for this task is stale once you're here.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) ScaffoldMessenger.maybeOf(context)?.hideCurrentSnackBar();
+    });
   }
 
   @override

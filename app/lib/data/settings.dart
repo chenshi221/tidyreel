@@ -37,9 +37,6 @@ class AppSettings {
   final bool notifyRecognized;
   final bool notifyFinished;
 
-  /// 刮削模式: write .nfo files and TMDB artwork while organizing.
-  final bool scrape;
-
   const AppSettings({
     this.tmdbApiKey = '',
     this.tmdbBaseUrl = 'https://api.themoviedb.org/3',
@@ -53,12 +50,11 @@ class AppSettings {
     this.tmdbLanguage = 'zh-CN',
     this.confidenceThreshold = 0.7,
     this.mediaHint = MediaHint.mixed,
-    this.accent = AccentChoice.terracotta,
+    this.accent = AccentChoice.rouge,
     this.sidebarCollapsed = false,
     this.reduceMotion = false,
     this.notifyRecognized = true,
     this.notifyFinished = true,
-    this.scrape = false,
   });
 
   AppSettings copyWith({
@@ -79,7 +75,6 @@ class AppSettings {
     bool? reduceMotion,
     bool? notifyRecognized,
     bool? notifyFinished,
-    bool? scrape,
   }) => AppSettings(
     tmdbApiKey: tmdbApiKey ?? this.tmdbApiKey,
     tmdbBaseUrl: tmdbBaseUrl ?? this.tmdbBaseUrl,
@@ -98,7 +93,6 @@ class AppSettings {
     reduceMotion: reduceMotion ?? this.reduceMotion,
     notifyRecognized: notifyRecognized ?? this.notifyRecognized,
     notifyFinished: notifyFinished ?? this.notifyFinished,
-    scrape: scrape ?? this.scrape,
   );
 }
 
@@ -111,12 +105,13 @@ const mediaHintLabels = {
 };
 
 /// Accent colour: (light, dark).
+/// 中国传统色; older saved names fall back to the default.
 enum AccentChoice {
-  terracotta('陶土橙', Color(0xFFC96442), Color(0xFFDB7A59)),
-  blue('蓝', Color(0xFF3E7CB1), Color(0xFF5B9BD5)),
-  green('绿', Color(0xFF3F8A55), Color(0xFF6BB07F)),
-  purple('紫', Color(0xFF8B5FBF), Color(0xFFA889D6)),
-  ink('墨', Color(0xFF2D2C29), Color(0xFFE6E3D8));
+  rouge('胭脂', Color(0xFF9D2933), Color(0xFFD0646C)),
+  indigo('黛蓝', Color(0xFF425066), Color(0xFF8E9DB8)),
+  azurite('石青', Color(0xFF2E6F78), Color(0xFF6FB1B9)),
+  bamboo('竹青', Color(0xFF4F7D5B), Color(0xFF8DBB98)),
+  ink('墨', Color(0xFF1C2023), Color(0xFFE4E7E6));
 
   final String label;
   final Color light;
@@ -161,7 +156,6 @@ class SettingsNotifier extends Notifier<AppSettings> {
       reduceMotion: j?['reduceMotion'] as bool? ?? d.reduceMotion,
       notifyRecognized: j?['notifyRecognized'] as bool? ?? d.notifyRecognized,
       notifyFinished: j?['notifyFinished'] as bool? ?? d.notifyFinished,
-      scrape: j?['scrape'] as bool? ?? d.scrape,
     );
   }
 
@@ -185,7 +179,6 @@ class SettingsNotifier extends Notifier<AppSettings> {
       'reduceMotion': state.reduceMotion,
       'notifyRecognized': state.notifyRecognized,
       'notifyFinished': state.notifyFinished,
-      'scrape': state.scrape,
     });
     if (old.tmdbApiKey != state.tmdbApiKey) {
       _boot.secrets.write(_tmdbSecret, state.tmdbApiKey.trim());

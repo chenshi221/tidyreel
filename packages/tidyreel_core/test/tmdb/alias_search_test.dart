@@ -112,6 +112,65 @@ void main() {
     },
   );
 
+  test('show() falls back to a zh-TW translation without a CN alias', () async {
+    final a = _Adapter({
+      '/tv/120911|1': {
+        'id': 120911,
+        'name': 'The Terminal List',
+        'seasons': [],
+      },
+      '/tv/120911/translations|1': {
+        'translations': [
+          {
+            'iso_639_1': 'en',
+            'iso_3166_1': 'US',
+            'data': {'name': 'X'},
+          },
+          {
+            'iso_639_1': 'zh',
+            'iso_3166_1': 'CN',
+            'data': {'name': ''},
+          },
+          {
+            'iso_639_1': 'zh',
+            'iso_3166_1': 'TW',
+            'data': {'name': '終極名單'},
+          },
+        ],
+      },
+    });
+    final p = TmdbProvider(
+      const TmdbConfig(apiKey: 'k'),
+      dio: Dio()..httpClientAdapter = a,
+    );
+    expect((await p.show(120911)).info.title, '終極名單');
+  });
+
+  test('movie() prefers the zh-CN translation over aliases', () async {
+    final a = _Adapter({
+      '/movie/9|1': {'id': 9, 'title': 'Dark Matter'},
+      '/movie/9/translations|1': {
+        'translations': [
+          {
+            'iso_639_1': 'zh',
+            'iso_3166_1': 'CN',
+            'data': {'title': '人生复本'},
+          },
+        ],
+      },
+      '/movie/9/alternative_titles|1': {
+        'titles': [
+          {'iso_3166_1': 'TW', 'title': '人生複本'},
+        ],
+      },
+    });
+    final p = TmdbProvider(
+      const TmdbConfig(apiKey: 'k'),
+      dio: Dio()..httpClientAdapter = a,
+    );
+    expect((await p.movie(9)).info.title, '人生复本');
+  });
+
   test('sharesToken: per character for CJK, per word for Latin', () {
     expect(sharesToken('流人', '潮流合伙人'), isTrue);
     expect(sharesToken('流人', 'Slow Horses'), isFalse);
