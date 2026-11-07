@@ -219,24 +219,22 @@ void main() {
     expect(find.byType(Dialog), findsOneWidget);
   });
 
-  testWidgets('delete asks for confirmation', (tester) async {
+  testWidgets('delete is immediate and 撤销 brings it back', (tester) async {
     final (_, c) = await pumpPage(tester, const SourcesPage());
+    const id = ConnectionId('demo-alist');
+    c.read(connectionPasswordsProvider.notifier).set({id: 's3cret'});
+    await tester.pump();
     await tester.tap(find.byTooltip('更多').first);
     await tester.pumpAndSettle();
     await tester.tap(find.text('删除'));
-    await tester.pumpAndSettle();
-    expect(find.text('删除连接'), findsOneWidget);
-    await tester.tap(find.text('取消'));
-    await tester.pumpAndSettle();
-    expect(c.read(connectionsProvider), hasLength(2));
-
-    await tester.tap(find.byTooltip('更多').first);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('删除'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(FilledButton, '删除'));
     await tester.pumpAndSettle();
     expect(c.read(connectionsProvider), hasLength(1));
+    expect(c.read(connectionPasswordsProvider)[id], isNull);
+
+    await tester.tap(find.text('撤销'));
+    await tester.pumpAndSettle();
+    expect(c.read(connectionsProvider), hasLength(2));
+    expect(c.read(connectionPasswordsProvider)[id], 's3cret');
   });
 
   testWidgets('pasted /dav/PC URL becomes WebDAV /dav + 连接路径 /PC', (

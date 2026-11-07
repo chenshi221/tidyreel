@@ -85,7 +85,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('organize')));
     await tester.pumpAndSettle();
     // The preview comes first; 取消 leaves nothing behind.
-    expect(find.text('提交前预览'), findsOneWidget);
+    expect(find.text('识别前预览'), findsOneWidget);
     await tester.tap(find.text('取消').last);
     await tester.pumpAndSettle();
     expect(await tm.watchAll().first, isEmpty);
@@ -156,7 +156,7 @@ void main() {
     expect(find.text('取消收藏'), findsOneWidget);
     await tester.tap(find.text('整理（原地）'));
     await tester.pumpAndSettle();
-    expect(find.text('提交前预览'), findsOneWidget);
+    expect(find.text('识别前预览'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('preview-submit')));
     await tester.pumpAndSettle();
     final tasks = await tm.watchAll().first;

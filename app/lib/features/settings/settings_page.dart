@@ -154,7 +154,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               children: [
                 SettingRow(
                   title: '默认整理模式',
-                  caption: '提交任务时的默认选项，确认时还能改',
+                  caption: '确认识别结果时还能改',
                   control: Segmented<OrganizeMode>(
                     options: const {
                       OrganizeMode.inPlace: '原地整理',
@@ -166,7 +166,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 ),
                 SettingRow(
                   title: '自动删除垃圾文件',
-                  caption: '开启后垃圾文件的删除默认勾选，执行前仍需确认',
+                  caption: '广告等垃圾文件默认勾选删除，删除前会再问一次',
                   control: MacSwitch(
                     key: const ValueKey('auto-junk'),
                     value: s.autoDeleteJunk,
@@ -175,21 +175,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   ),
                 ),
                 SettingRow(
-                  title: '提交前预览',
-                  caption: '先快速扫一遍，显示文件数量和风险提示，再决定是否提交',
+                  title: '识别前预览',
+                  caption: '先快速扫一遍文件数量和可能的问题，再决定是否开始',
                   control: toggle(
                     'scan-preview',
                     s.scanPreview,
                     (v) => s.copyWith(scanPreview: v),
-                  ),
-                ),
-                SettingRow(
-                  title: '执行前确认',
-                  caption: '在确认页点「执行」时，再弹一次汇总确认',
-                  control: toggle(
-                    'confirm-execute',
-                    s.confirmBeforeExecute,
-                    (v) => s.copyWith(confirmBeforeExecute: v),
                   ),
                 ),
                 SettingRow(
@@ -256,8 +247,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   ),
                 ),
                 SettingRow(
-                  title: '「立即执行」的门槛',
-                  caption: '识别分数达到多少，任务卡片上的「立即执行」才会处理它',
+                  title: '「有把握」的标准',
+                  caption: '「只整理有把握的」按这个标准挑选作品',
                   control: Segmented<double>(
                     options: {0.6: '宽松', 0.7: '标准', 0.85: '严格'},
                     value:
@@ -376,7 +367,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   ),
                 ),
                 SettingRow(
-                  title: '执行完成时提示',
+                  title: '整理完成时提示',
                   control: toggle(
                     'notify-finished',
                     s.notifyFinished,
@@ -391,10 +382,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             child: Rows(
               children: [
                 SettingRow(
-                  title: '清空已结束的任务',
+                  title: '清空已完成的任务',
                   caption: finished.isEmpty
-                      ? '没有已结束的任务'
-                      : '共 ${finished.length} 条。不动文件，但删除后无法再撤销',
+                      ? '没有已完成的任务'
+                      : '共 ${finished.length} 条。不会动文件，但清空后就不能再撤销',
                   control: OutlinedButton(
                     key: const ValueKey('settings-clear-tasks'),
                     onPressed: finished.isEmpty
@@ -433,7 +424,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                             const Text(
                               '理片 Tidyreel',
                               style: TextStyle(
-                                fontSize: 14,
+                                fontSize: TypeScale.body,
                                 fontWeight: FontWeight.w600,
                               ),
                             ),

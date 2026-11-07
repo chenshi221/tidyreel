@@ -116,7 +116,7 @@ class _FolderPickerState extends State<_FolderPicker> {
                                 ),
                                 decoration: BoxDecoration(
                                   color: hover ? p.hover : Colors.transparent,
-                                  borderRadius: BorderRadius.circular(Radii.md),
+                                  borderRadius: BorderRadius.circular(Radii.sm),
                                 ),
                                 child: Row(
                                   children: [

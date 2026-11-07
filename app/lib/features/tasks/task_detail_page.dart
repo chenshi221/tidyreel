@@ -74,10 +74,9 @@ class TaskDetailPage extends ConsumerWidget {
     return PageScaffold(
       title: '任务详情',
       subtitle: [
-        taskId,
         if (task != null) stageLabel(task.stage),
         if (task != null && task.message.isNotEmpty) task.message,
-      ].join('  ·  '),
+      ].join('，'),
       leading: Builder(
         builder: (context) {
           // Opened from 最近整理 (?from=sources): back goes back there.
@@ -118,7 +117,7 @@ class TaskDetailPage extends ConsumerWidget {
           ),
         if (canUndo)
           OutlinedButton.icon(
-            onPressed: () => confirmUndo(context, ref, id),
+            onPressed: () => undoTask(context, ref, id),
             icon: const Icon(CupertinoIcons.arrow_uturn_left, size: 13),
             label: const Text('撤销'),
           ),
@@ -203,8 +202,8 @@ class _Body extends StatelessWidget {
     if (records.isEmpty) {
       return const EmptyState(
         icon: CupertinoIcons.doc_text,
-        title: '没有执行记录',
-        message: '这个任务还没有改动过任何文件',
+        title: '还没有整理记录',
+        message: '这个任务还没有改动任何文件',
       );
     }
     final groups = {
@@ -280,10 +279,9 @@ class _WorkSection extends StatelessWidget {
                     Text(
                       m == null
                           ? fallbackTitle
-                          : [
-                              m.title,
-                              if (m.year != null) '${m.year}',
-                            ].join(' · '),
+                          : m.year == null
+                          ? m.title
+                          : '${m.title}（${m.year}）',
                       style: theme.textTheme.titleMedium,
                     ),
                     const SizedBox(height: 4),
@@ -338,7 +336,7 @@ class _OpRow extends StatelessWidget {
       OpStatus.failed => ('失败', p.danger),
       OpStatus.undone => ('已撤销', p.textMuted),
       OpStatus.skipped => ('跳过', p.textMuted),
-      OpStatus.pending => ('未执行', p.textMuted),
+      OpStatus.pending => ('未处理', p.textMuted),
     };
     final (from, to) = switch (op.kind) {
       OpKind.mkdir => ('新建文件夹', op.dst),
@@ -364,7 +362,10 @@ class _OpRow extends StatelessWidget {
                 children: [
                   Text(
                     _name(from),
-                    style: TextStyle(fontSize: 11.5, color: p.textMuted),
+                    style: TextStyle(
+                      fontSize: TypeScale.small,
+                      color: p.textMuted,
+                    ),
                   ),
                   Text(
                     '→ ${_name(to)}',
@@ -376,7 +377,10 @@ class _OpRow extends StatelessWidget {
                   if (record.error != null)
                     Text(
                       _explain(record.error!),
-                      style: TextStyle(fontSize: 11.5, color: p.danger),
+                      style: TextStyle(
+                        fontSize: TypeScale.small,
+                        color: p.danger,
+                      ),
                     ),
                 ],
               ),

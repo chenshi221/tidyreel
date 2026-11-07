@@ -95,7 +95,7 @@ void main() {
     await tester.tap(find.text('地图'));
     await tester.pumpAndSettle();
     expect(find.byType(RepoMapView), findsOneWidget);
-    expect(find.textContaining('个文件 · 未整理'), findsOneWidget);
+    expect(find.textContaining('个文件，未整理'), findsOneWidget);
     expect(find.text('TB'), findsOneWidget);
     // List-only controls step aside.
     expect(find.text('只看未整理的'), findsNothing);
@@ -249,11 +249,158 @@ void main() {
     expect(tapped, isNotEmpty);
 
     await tester.tap(find.byKey(const ValueKey('map-fit')));
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(
       viewer.transformationController!.value.getMaxScaleOnAxis(),
       lessThan(1),
     );
+  });
+
+  testWidgets('zoom eases, and quick clicks build on each other', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: OrganicMap(
+            blocks: [
+              for (var i = 0; i < 5; i++)
+                MapBlock(
+                  id: 'b$i',
+                  label: 'b$i',
+                  bytes: 1,
+                  state: BlockState.other,
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final view = tester
+        .widget<InteractiveViewer>(find.byKey(const ValueKey('map-viewer')))
+        .transformationController!;
+    final start = view.value.getMaxScaleOnAxis();
+    await tester.tap(find.byKey(const ValueKey('map-zoom-in')));
+    await tester.pump(); // the animation's first frame
+    await tester.pump(const Duration(milliseconds: 60));
+    final mid = view.value.getMaxScaleOnAxis();
+    expect(mid, greaterThan(start));
+    expect(mid, lessThan(start * 1.5));
+    await tester.tap(find.byKey(const ValueKey('map-zoom-in')));
+    await tester.pumpAndSettle();
+    expect(view.value.getMaxScaleOnAxis(), closeTo(start * 2.25, 1e-6));
+  });
+
+  test('a pebble at the frame is clipped, then inset: whole and inside', () {
+    const frame = Rect.fromLTWH(0, 0, 400, 300);
+    final big = [
+      const Offset(-100, -50),
+      const Offset(250, -80),
+      const Offset(300, 200),
+      const Offset(-60, 260),
+    ];
+    final p = insetConvex(clipToRect(big, frame), 6);
+    expect(p, isNotEmpty);
+    for (final pt in p) {
+      expect(frame.deflate(5.99).contains(pt), isTrue, reason: '$pt');
+    }
+    expect(clipToRect(big, const Rect.fromLTWH(500, 500, 10, 10)), isEmpty);
+  });
+
+  test('radial resampling keeps the shape and blends point by point', () {
+    final square = [
+      Offset.zero,
+      const Offset(10, 0),
+      const Offset(10, 10),
+      const Offset(0, 10),
+    ];
+    final r = resampleRadial(square, 8);
+    expect(r, hasLength(8));
+    expect(r.first.dx, closeTo(10, 1e-9)); // angle 0 hits the right side
+    expect(polygonArea(r), closeTo(100, 1e-6)); // corners are on the rays
+    final moved = [for (final p in r) p + const Offset(20, 0)];
+    expect(lerpPolygon(r, moved, 0.5).first.dx, closeTo(20, 1e-9));
+  });
+
+  testWidgets('big pebbles keep their names at every zoom', (tester) async {
+    addTearDown(() => mapZoomStyle.value = MapZoomStyle.frame);
+    tester.view.physicalSize = const Size(1000, 760);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    // Long names on big pebbles used to be laid out wider than the rounded
+    // outline and then hidden.
+    const sizes = [520, 410, 380, 300, 220, 160, 52, 35, 28, 20, 12, 6, 3];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: OrganicMap(
+            blocks: [
+              for (final (i, gb) in sizes.indexed)
+                MapBlock(
+                  id: '/$i',
+                  label: i.isEven
+                      ? '[Nekomoe kissaten] Bocchi the Rock! [BDRip] $i'
+                      : 'Fate/stay night Unlimited Blade Works $i',
+                  bytes: gb * 1000000000,
+                  state: BlockState.organized,
+                  caption: '$gb GB',
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    for (final style in MapZoomStyle.values) {
+      mapZoomStyle.value = style;
+      await tester.pumpAndSettle();
+      for (var i = 0; i < 6; i++) {
+        expect(debugUnlabeled, isEmpty, reason: '${style.name}, zoom $i');
+        await tester.tap(find.byKey(const ValueKey('map-zoom-in')));
+        await tester.pumpAndSettle();
+      }
+      await tester.tap(find.byKey(const ValueKey('map-fit')));
+      await tester.pumpAndSettle();
+    }
+  });
+
+  testWidgets('every style zooms and fits without errors', (tester) async {
+    addTearDown(() => mapZoomStyle.value = MapZoomStyle.frame);
+    tester.view.physicalSize = const Size(900, 450);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: OrganicMap(
+            blocks: [
+              for (var i = 0; i < 250; i++)
+                MapBlock(
+                  id: 'b$i',
+                  label: 'b$i',
+                  bytes: 1,
+                  state: BlockState.other,
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    for (final style in MapZoomStyle.values) {
+      await tester.tap(find.text(style.label));
+      await tester.pumpAndSettle();
+      for (var i = 0; i < 3; i++) {
+        await tester.tap(find.byKey(const ValueKey('map-zoom-in')));
+        await tester.pumpAndSettle();
+      }
+      await tester.drag(find.byType(OrganicMap), const Offset(-150, -60));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('map-fit')));
+      await tester.pumpAndSettle();
+    }
+    expect(tester.takeException(), isNull);
   });
 
   test('block labels drop the year and id tags', () {

@@ -36,6 +36,7 @@ List<MapCell> layoutOrganic(
   List<MapItem> items,
   Rect bounds, {
   int iterations = 120,
+  Map<String, Offset>? seeds,
 }) {
   final live = items.where((i) => i.value > 0).toList()
     ..sort((a, b) => b.value.compareTo(a.value));
@@ -54,12 +55,20 @@ List<MapCell> layoutOrganic(
   final total = live.fold(0.0, (s, i) => s + i.value);
   final area = bounds.width * bounds.height;
   final target = [for (final i in live) area * i.value / total];
+  // [seeds] (where the pebbles already are) keep a relayout recognisable;
+  // the tiny hashed jitter stops two equal seeds from sharing a cell.
   final sites = [
     for (final i in live)
-      Offset(
-        bounds.left + bounds.width * (0.08 + 0.84 * _unit('x${i.id}')),
-        bounds.top + bounds.height * (0.08 + 0.84 * _unit('y${i.id}')),
-      ),
+      if (seeds?[i.id] case final s?)
+        Offset(
+          s.dx.clamp(bounds.left + 1, bounds.right - 1) + _unit('x${i.id}'),
+          s.dy.clamp(bounds.top + 1, bounds.bottom - 1) + _unit('y${i.id}'),
+        )
+      else
+        Offset(
+          bounds.left + bounds.width * (0.08 + 0.84 * _unit('x${i.id}')),
+          bounds.top + bounds.height * (0.08 + 0.84 * _unit('y${i.id}')),
+        ),
   ];
   // Start from equal weights: a plain Voronoi diagram.
   final w0 = area / n * 0.1;
@@ -160,6 +169,62 @@ List<Offset> insetConvex(List<Offset> poly, double d) {
   }
   return cur.length >= 3 && polygonArea(cur) > 1e-6 ? cur : const [];
 }
+
+/// The part of convex [poly] inside [r]; empty when none is.
+List<Offset> clipToRect(List<Offset> poly, Rect r) {
+  var cur = poly;
+  for (final (n, t) in [
+    (const Offset(1, 0), r.left),
+    (const Offset(-1, 0), -r.right),
+    (const Offset(0, 1), r.top),
+    (const Offset(0, -1), -r.bottom),
+  ]) {
+    if (cur.length < 3) return const [];
+    cur = _cut(cur, n, t).$2;
+  }
+  return cur.length >= 3 ? cur : const [];
+}
+
+/// Bounding box of [poly].
+Rect polygonBounds(List<Offset> poly) {
+  var l = double.infinity, t = double.infinity;
+  var r = double.negativeInfinity, b = double.negativeInfinity;
+  for (final p in poly) {
+    l = math.min(l, p.dx);
+    t = math.min(t, p.dy);
+    r = math.max(r, p.dx);
+    b = math.max(b, p.dy);
+  }
+  return Rect.fromLTRB(l, t, r, b);
+}
+
+/// Convex [poly] as [n] points at even angles around its centroid, so any
+/// two pebbles can be blended point by point (see [lerpPolygon]).
+List<Offset> resampleRadial(List<Offset> poly, [int n = 48]) {
+  final c = polygonCentroid(poly);
+  return [for (var k = 0; k < n; k++) c + _ray(poly, c, 2 * math.pi * k / n)];
+}
+
+/// Where the ray from [c] at angle [a] leaves convex [poly], relative to [c].
+Offset _ray(List<Offset> poly, Offset c, double a) {
+  final d = Offset(math.cos(a), math.sin(a));
+  var best = 0.0;
+  for (var i = 0; i < poly.length; i++) {
+    final p = poly[i] - c, q = poly[(i + 1) % poly.length] - c;
+    final e = q - p;
+    final den = d.dx * e.dy - d.dy * e.dx;
+    if (den.abs() < 1e-12) continue;
+    final t = (p.dx * e.dy - p.dy * e.dx) / den;
+    final s = (p.dx * d.dy - p.dy * d.dx) / den;
+    if (t > best && s >= -1e-9 && s <= 1 + 1e-9) best = t;
+  }
+  return d * best;
+}
+
+/// Point-by-point blend of two [resampleRadial] outputs.
+List<Offset> lerpPolygon(List<Offset> a, List<Offset> b, double t) => [
+  for (var i = 0; i < a.length; i++) Offset.lerp(a[i], b[i], t)!,
+];
 
 /// Chaikin corner cutting: each round replaces every corner by two points
 /// [ratio] of the way along its edges (at most [maxCut] px), converging on a

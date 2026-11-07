@@ -6,7 +6,6 @@ import 'package:go_router/go_router.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
 import '../../data/providers.dart';
-import '../../data/settings.dart';
 import '../../ui/tokens.dart';
 import '../../ui/widgets.dart';
 import '../../widgets/common.dart';
@@ -305,25 +304,9 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
     }
     final ops = r.preview.ops.where((o) => o.selected).toList();
     if (ops.isEmpty) return;
-    int n(ExecPhase p) =>
-        ops.where((o) => o.phase == p && o.kind != OpKind.write).length;
-    final writes = ops.where((o) => o.kind == OpKind.write).length;
-    final groups = r.decisions.values.where((d) => d.selected).length;
-    final ok =
-        !ref.read(settingsProvider).confirmBeforeExecute ||
-        await confirmDialog(
-          context,
-          title: '执行任务',
-          content: Text(
-            '将处理 $groups 个作品：\n'
-            '· 重命名/移动文件 ${n(ExecPhase.files)} 项\n'
-            '· 整理文件夹 ${n(ExecPhase.folders)} 项\n'
-            '· 清理 ${n(ExecPhase.cleanup)} 项\n'
-            '${writes == 0 ? '' : '· 写入刮削文件 $writes 个（NFO、海报）\n'}'
-            '执行后可在任务页撤销。',
-          ),
-          confirmLabel: '执行',
-        );
+    // Only deleting can't be undone, so that is the one thing we ask about.
+    final deletes = ops.where((o) => o.kind == OpKind.delete).length;
+    final ok = deletes == 0 || await confirmPermanentDelete(context, deletes);
     if (!ok || !mounted || _executing) return;
     setState(() => _executing = true);
     final router = GoRouter.of(context);
@@ -432,7 +415,6 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
     return PageScaffold(
       title: '识别结果',
       subtitle: [
-        widget.taskId,
         if (paths != null && paths.length == 1) paths.single,
         if (paths != null && paths.length > 1) '${paths.length} 个文件夹',
       ].join('  ·  '),
@@ -448,7 +430,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
           ),
         const Tooltip(
           message:
-              '快捷键\n↑ ↓  切换作品\n← →  切换季 / 文件夹\n空格  勾选或取消作品\n⌘F  搜索\n⌘↩  执行',
+              '快捷键\n↑ ↓  切换作品\n← →  切换季 / 文件夹\n空格  勾选或取消作品\n⌘F  搜索\n⌘↩  开始整理',
           child: Padding(
             padding: EdgeInsets.all(8),
             child: Icon(CupertinoIcons.keyboard, size: 16),
@@ -528,8 +510,8 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                   padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
                   child: Segmented<int>(
                     options: {
-                      0: '可整理 (${_groups(matched: true).length})',
-                      1: '待手动识别 (${_groups(matched: false).length})',
+                      0: '可整理 ${_groups(matched: true).length}',
+                      1: '需手动匹配 ${_groups(matched: false).length}',
                     },
                     value: _tab,
                     onChanged: (v) => setState(() {
@@ -640,7 +622,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
       padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
       decoration: BoxDecoration(
         color: p.panel,
-        borderRadius: BorderRadius.circular(Radii.xl),
+        borderRadius: BorderRadius.circular(Radii.bar),
         border: Border.all(color: p.line, width: hairline),
         boxShadow: floatShadow(),
       ),
@@ -660,8 +642,8 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
               } on Object catch (e) {
                 if (!mounted) return;
                 final msg = '$e'.contains('libraryRoot')
-                    ? '请先在「来源」连接设置中配置媒体库目录'
-                    : '切换整理模式失败：$e';
+                    ? '这个连接还没设置媒体库，去「来源」编辑连接后再选'
+                    : '没能切换整理方式，请重试';
                 ScaffoldMessenger.of(context)
                   ..hideCurrentSnackBar()
                   ..showSnackBar(SnackBar(content: Text(msg)));
@@ -674,29 +656,31 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                 ? CupertinoIcons.checkmark_seal_fill
                 : CupertinoIcons.exclamationmark_triangle_fill,
             size: 14,
-            color: conflicts == 0 ? p.success : p.danger,
+            color: conflicts == 0 ? p.textFaint : p.danger,
           ),
           const SizedBox(width: 6),
           Text(
-            conflicts == 0 ? '没有冲突' : '$conflicts 处冲突，需处理后才能执行',
+            conflicts == 0 ? '没有冲突' : '$conflicts 处冲突，处理后才能整理',
             key: const ValueKey('conflict-count'),
             style: TextStyle(
-              fontSize: 12.5,
+              fontSize: TypeScale.small,
               color: conflicts == 0 ? p.textMuted : p.danger,
               fontWeight: conflicts == 0 ? null : FontWeight.w600,
             ),
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: 12),
           Text(
-            '· $ops 项操作',
-            style: TextStyle(fontSize: 12.5, color: p.textFaint),
+            '$ops 处改动',
+            style: TextStyle(fontSize: TypeScale.small, color: p.textMuted),
           ),
           const SizedBox(width: 18),
-          FilledButton.icon(
-            key: const ValueKey('execute-button'),
-            onPressed: conflicts == 0 && ops > 0 ? _execute : null,
-            icon: const Icon(CupertinoIcons.play_fill, size: 12),
-            label: const Text('执行任务  ⌘↩'),
+          Tooltip(
+            message: '⌘↩',
+            child: FilledButton(
+              key: const ValueKey('execute-button'),
+              onPressed: conflicts == 0 && ops > 0 ? _execute : null,
+              child: const Text('开始整理'),
+            ),
           ),
         ],
       ),

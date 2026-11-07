@@ -84,7 +84,6 @@ class _TasksPageState extends ConsumerState<TasksPage> {
     final showFinished = _filter != _Filter.active && finished.isNotEmpty;
     return PageScaffold(
       title: '任务',
-      subtitle: '扫描和识别在后台进行，识别完成后在这里确认和执行',
       actions: [
         if (showFinished)
           TextButton.icon(
@@ -95,9 +94,9 @@ class _TasksPageState extends ConsumerState<TasksPage> {
           ),
         Segmented<_Filter>(
           options: {
-            _Filter.all: '全部 (${all.length})',
-            _Filter.active: '进行中 (${active.length})',
-            _Filter.finished: '已完成 (${finished.length})',
+            _Filter.all: '全部 ${all.length}',
+            _Filter.active: '进行中 ${active.length}',
+            _Filter.finished: '已完成 ${finished.length}',
           },
           value: _filter,
           onChanged: (v) => setState(() => _filter = v),
@@ -120,9 +119,7 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                   _Filter.active => '没有进行中的任务',
                   _Filter.finished => '还没有已完成的任务',
                 },
-                message: _filter == _Filter.finished
-                    ? null
-                    : '去「来源」选择文件夹，提交一个整理任务',
+                message: _filter == _Filter.finished ? null : '去「来源」选一个文件夹开始整理',
               )
             : ListView(
                 padding: const EdgeInsets.fromLTRB(48, 0, 40, 28),
@@ -146,15 +143,15 @@ class _TasksPageState extends ConsumerState<TasksPage> {
   }
 }
 
-const _steps = ['导入', '识别', '待确认', '文件', '文件夹'];
+const _steps = ['导入', '识别', '确认', '重命名', '整理文件夹'];
 
 /// One line of progress while a stage runs.
 String _runningLabel(TaskStage s, double? progress) {
   final what = switch (s) {
     TaskStage.importing => '正在导入',
     TaskStage.recognizing => '正在识别',
-    TaskStage.renamingFiles => '正在改名文件',
-    TaskStage.renamingFolders => '正在改名文件夹',
+    TaskStage.renamingFiles => '正在重命名文件',
+    TaskStage.renamingFolders => '正在整理文件夹',
     _ => stageLabel(s),
   };
   return progress == null ? what : '$what ${(progress * 100).round()}%';
@@ -176,6 +173,9 @@ String stageLabel(TaskStage s) => switch (s) {
   TaskStage.partiallyFailed => '部分失败',
   TaskStage.cancelled => '已取消',
   TaskStage.undone => '已撤销',
+  TaskStage.awaitingReview => '待确认',
+  TaskStage.renamingFiles => '正在重命名文件',
+  TaskStage.renamingFolders => '正在整理文件夹',
   _ => _steps[_currentStep(s)],
 };
 
@@ -224,13 +224,17 @@ class TaskCard extends ConsumerWidget {
     };
 
     Future<void> runConfident() async {
-      final ok = await confirmDialog(
-        context,
-        title: '立即执行',
-        content: const Text('将只执行高置信、没有冲突的项，其余保持不动。确定执行吗？'),
-        confirmLabel: '执行',
-      );
-      if (!ok) return;
+      // Deletes of uncertain works are dropped by the run, so this may
+      // over-count; asking too often beats deleting unasked.
+      final ops = (await tm.review(t.id)).preview.ops;
+      final deletes = ops
+          .where(
+            (o) => o.selected && o.kind == OpKind.delete && o.warning == null,
+          )
+          .length;
+      if (deletes > 0 && context.mounted) {
+        if (!await confirmPermanentDelete(context, deletes)) return;
+      }
       try {
         await tm.run(t.id, onlyConfident: true);
       } on StateError catch (e) {
@@ -241,7 +245,7 @@ class TaskCard extends ConsumerWidget {
       }
     }
 
-    Future<void> undo() => confirmUndo(context, ref, t.id);
+    Future<void> undo() => undoTask(context, ref, t.id);
 
     List<MenuAction?> menu() => [
       MenuAction(
@@ -255,7 +259,7 @@ class TaskCard extends ConsumerWidget {
           () => context.go('/tasks/${t.id.value}/review'),
           icon: CupertinoIcons.eye,
         ),
-        MenuAction('立即执行', runConfident, icon: CupertinoIcons.play),
+        MenuAction('只整理有把握的', runConfident, icon: CupertinoIcons.play),
       ],
       if (t.stage == TaskStage.partiallyFailed)
         MenuAction('重试失败项', () async {
@@ -301,11 +305,11 @@ class TaskCard extends ConsumerWidget {
 
     final running = t.stage.isActive && t.stage != TaskStage.awaitingReview;
     final counts = [
-      '视频 ${t.videoCount}',
-      if (t.subtitleCount > 0) '字幕 ${t.subtitleCount}',
-      if (t.folderCount > 0) '文件夹 ${t.folderCount}',
-      if (unassigned > 0) '未归类 $unassigned',
-    ].join(' · ');
+      '${t.videoCount} 个视频',
+      if (t.subtitleCount > 0) '${t.subtitleCount} 个字幕',
+      if (t.folderCount > 0) '${t.folderCount} 个文件夹',
+      if (unassigned > 0) '$unassigned 个未归类',
+    ].join('，');
     // Why a task stopped short; progress messages are the stepper's job.
     final problem =
         t.message.isNotEmpty &&
@@ -329,7 +333,7 @@ class TaskCard extends ConsumerWidget {
                 icon: CupertinoIcons.folder,
                 width: 64,
                 height: 96,
-                radius: Radii.md,
+                radius: Radii.sm,
               ),
               const SizedBox(width: 18),
               Expanded(
@@ -355,7 +359,7 @@ class TaskCard extends ConsumerWidget {
                           t.mode == OrganizeMode.inPlace ? '原地整理' : '移动到媒体库',
                           if (t.scrape) '刮削',
                           if (recognized) counts else where,
-                        ].join(' · '),
+                        ].join('，'),
                         style: theme.textTheme.bodySmall,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -401,7 +405,10 @@ class TaskCard extends ConsumerWidget {
               ),
               const SizedBox(width: 12),
               if (t.stage == TaskStage.awaitingReview) ...[
-                TextButton(onPressed: runConfident, child: const Text('立即执行')),
+                TextButton(
+                  onPressed: runConfident,
+                  child: const Text('只整理有把握的'),
+                ),
                 const SizedBox(width: 4),
                 FilledButton(
                   onPressed: () => context.go('/tasks/${t.id.value}/review'),
@@ -493,7 +500,7 @@ class TaskStepper extends StatelessWidget {
                 Text(
                   _steps[i],
                   style: TextStyle(
-                    fontSize: 11,
+                    fontSize: TypeScale.small,
                     fontWeight: i == cur ? FontWeight.w600 : FontWeight.w400,
                     color: i == cur
                         ? p.text
@@ -540,7 +547,7 @@ Future<bool> confirmDeleteTask(
     title: tasks.length == 1 ? '删除任务记录' : '清空 ${tasks.length} 条任务记录',
     content: Text(
       '只删除理片里的记录，不会动网盘或磁盘上的文件。'
-      '${undoable ? '\n删除后就不能再撤销这些任务做过的改名了。' : ''}',
+      '${undoable ? '删除后这些任务就不能再撤销了。' : ''}',
     ),
     confirmLabel: '删除',
     destructive: true,
@@ -561,16 +568,9 @@ Future<bool> confirmDeleteTask(
   return true;
 }
 
-/// Undo a whole task after confirmation.
-Future<void> confirmUndo(BuildContext context, WidgetRef ref, TaskId id) async {
-  final ok = await confirmDialog(
-    context,
-    title: '撤销整批',
-    content: const Text('将把这个任务改过的文件恢复成原来的名字和位置。确定撤销吗？'),
-    confirmLabel: '撤销',
-    destructive: true,
-  );
-  if (!ok || !context.mounted) return;
+/// Undo a whole task. No confirmation: undoing only restores names and
+/// places, and the task can be recognized and run again afterwards.
+Future<void> undoTask(BuildContext context, WidgetRef ref, TaskId id) async {
   try {
     await ref.read(taskManagerProvider).undo(id);
   } on StateError catch (e) {

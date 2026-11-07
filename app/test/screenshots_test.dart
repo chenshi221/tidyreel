@@ -18,6 +18,7 @@ import 'package:tidyreel/shell/sidebar.dart';
 import 'package:tidyreel/data/providers.dart';
 import 'package:tidyreel/data/settings.dart';
 import 'package:tidyreel/features/map/map_providers.dart';
+import 'package:tidyreel/features/map/organic_map.dart';
 import 'package:tidyreel/features/sources/sources_providers.dart';
 import 'package:tidyreel_core/testing.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
@@ -78,8 +79,12 @@ Future<void> _loadFonts() async {
   ]);
 }
 
-Future<void> _shot(WidgetTester tester, String name) async {
-  await tester.pumpAndSettle();
+Future<void> _shot(
+  WidgetTester tester,
+  String name, {
+  bool settle = true,
+}) async {
+  if (settle) await tester.pumpAndSettle();
   final boundary = tester.renderObject<RenderRepaintBoundary>(
     find.byKey(const ValueKey('shot-root')),
   );
@@ -215,6 +220,25 @@ void main() {
     c.read(browserMapModeProvider.notifier).set(true);
     await _settleTasks(tester);
     await _shot(tester, '12-map');
+    // Both zoom styles, zoomed in.
+    for (final style in [MapZoomStyle.frame, MapZoomStyle.semantic]) {
+      mapZoomStyle.value = style;
+      await tester.pumpAndSettle();
+      for (var i = 0; i < 3; i++) {
+        await tester.tap(find.byKey(const ValueKey('map-zoom-in')));
+        await tester.pumpAndSettle();
+      }
+      await _shot(tester, '12-map-${style.name}');
+    }
+    // Mid-morph: corners stay round while the picture changes shape.
+    await tester.tap(find.byKey(const ValueKey('map-zoom-out')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 90));
+    await _shot(tester, '12-map-semantic-morph', settle: false);
+    await tester.pumpAndSettle();
+    mapZoomStyle.value = MapZoomStyle.frame;
+    c.read(browserDirProvider.notifier).set(root);
+    await _settleTasks(tester);
     c.read(browserDirProvider.notifier).set('$root/动漫');
     await _settleTasks(tester);
     await _shot(tester, '13-map-anime');

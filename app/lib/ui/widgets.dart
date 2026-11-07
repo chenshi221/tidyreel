@@ -355,7 +355,7 @@ class Segmented<T extends Object> extends StatelessWidget {
             child: Text(
               e.value,
               style: TextStyle(
-                fontSize: 12.5,
+                fontSize: TypeScale.small,
                 fontWeight: e.key == value ? FontWeight.w600 : FontWeight.w400,
                 color: p.text,
                 fontFamilyFallback: sansFallback,
@@ -514,7 +514,7 @@ class Tag extends StatelessWidget {
       child: Text(
         text,
         style: TextStyle(
-          fontSize: 11,
+          fontSize: TypeScale.small,
           fontWeight: FontWeight.w500,
           color: c,
           fontFamilyFallback: sansFallback,
@@ -650,14 +650,14 @@ class GradientProgress extends StatelessWidget {
 /// A stable hue per season number so 第 1 季 / 第 2 季 read apart at a glance.
 Color seasonColor(int season) {
   const hues = [
-    Color(0xFF8E9496), // 0: specials, neutral
+    Color(0xFF948E88), // 0: specials, neutral
     Color(0xFF9D2933),
     Color(0xFF425066),
     Color(0xFF4F7D5B),
     Color(0xFF7E5A86), // 紫棠
-    Color(0xFFA9761F), // 姜黄
+    Color(0xFF7A7030), // 秋香
     Color(0xFF2E6F78), // 石青
-    Color(0xFFA8452F), // 赭
+    Color(0xFF6E4F5E), // 葡萄褐
   ];
   if (season <= 0) return hues[0];
   return hues[1 + (season - 1) % (hues.length - 1)];
@@ -903,7 +903,7 @@ class LinkText extends StatelessWidget {
       builder: (_, hover) => Text(
         text,
         style: TextStyle(
-          fontSize: 12.5,
+          fontSize: TypeScale.small,
           color: hover ? p.text : p.textMuted,
           decoration: TextDecoration.underline,
           decorationColor: hover ? p.text : p.textFaint,
