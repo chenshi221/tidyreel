@@ -255,7 +255,7 @@ class RepoMapSummary extends StatelessWidget {
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               const Spinner(size: 13),
-              Text('正在统计 · 已读 ${s.dirsListed} 个文件夹'),
+              Text('正在统计，已读 ${s.dirsListed} 个文件夹'),
               LinkText('停止', onTap: s.cancel),
             ],
           )
@@ -275,7 +275,7 @@ class RepoMapSummary extends StatelessWidget {
               '${stats.files} 个文件',
               if (stats.unorganized > 0) '未整理 ${fmtSize(stats.unorganized)}',
               if (s.skipped.isNotEmpty) '跳过 ${s.skipped.length} 个读不了的文件夹',
-            ].join(' · '),
+            ].join('，'),
             style: TextStyle(color: p.textMuted),
           )
         : Wrap(

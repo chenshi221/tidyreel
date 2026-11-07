@@ -63,7 +63,7 @@ class CandidateTile extends StatelessWidget {
     final p = Palette.of(context);
     return HoverRow(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-      borderRadius: BorderRadius.circular(Radii.md),
+      borderRadius: BorderRadius.circular(Radii.sm),
       leading: Poster(posterPath: c.posterPath, width: 34, height: 51),
       title: Text(c.title),
       subtitle: Column(
@@ -371,7 +371,8 @@ class _Rating extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const c = Color(0xFFD9A21B);
+    // Neutral star: the page's only colour stays the accent.
+    final c = Palette.of(context).textMuted;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -560,7 +561,7 @@ class _GroupCard extends StatelessWidget {
                     Text(
                       comp.label,
                       style: TextStyle(
-                        fontSize: 11,
+                        fontSize: TypeScale.small,
                         color: comp.incomplete ? p.warning : p.textMuted,
                         fontWeight: comp.incomplete ? FontWeight.w600 : null,
                       ),
@@ -572,8 +573,11 @@ class _GroupCard extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(left: 28, top: 6),
                 child: Text(
-                  '电影 · ${g.files.length} 个文件',
-                  style: TextStyle(fontSize: 11, color: p.textMuted),
+                  '${g.files.length} 个文件',
+                  style: TextStyle(
+                    fontSize: TypeScale.small,
+                    color: p.textMuted,
+                  ),
                 ),
               ),
             if (m == null)
@@ -915,7 +919,7 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
-                  fontSize: 14,
+                  fontSize: TypeScale.body,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -1015,7 +1019,7 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
                             : hover
                             ? p.hover
                             : Colors.transparent,
-                        borderRadius: BorderRadius.circular(Radii.md),
+                        borderRadius: BorderRadius.circular(Radii.sm),
                       ),
                       child: Row(
                         children: [
@@ -1049,7 +1053,7 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
-                                      fontSize: 11,
+                                      fontSize: TypeScale.small,
                                       color: p.warning,
                                     ),
                                   ),
@@ -1113,7 +1117,7 @@ class WorkHeader extends StatelessWidget {
       if (m?.year != null) '${m!.year}',
       if (m?.originCountry != null) _country(m!.originCountry),
       if (genres.isNotEmpty) genres.take(3).join(' / '),
-      isTv ? comp.label : '电影 · ${g.files.length} 个文件',
+      isTv ? comp.label : '电影，${g.files.length} 个文件',
     ];
 
     return Container(
@@ -1243,7 +1247,7 @@ class WorkHeader extends StatelessWidget {
                               ),
                               decoration: BoxDecoration(
                                 color: p.panel.withValues(alpha: 0.7),
-                                borderRadius: BorderRadius.circular(5),
+                                borderRadius: BorderRadius.circular(Radii.sm),
                                 border: Border.all(
                                   color: p.line,
                                   width: hairline,
@@ -1252,7 +1256,7 @@ class WorkHeader extends StatelessWidget {
                               child: Text(
                                 t,
                                 style: TextStyle(
-                                  fontSize: 11.5,
+                                  fontSize: TypeScale.small,
                                   color: t == comp.label && comp.incomplete
                                       ? p.warning
                                       : fg,
@@ -1280,7 +1284,7 @@ class WorkHeader extends StatelessWidget {
                           key: ValueKey(overview),
                           overview,
                           style: TextStyle(
-                            fontSize: 12.5,
+                            fontSize: TypeScale.small,
                             height: 1.5,
                             color: fgMuted,
                           ),
@@ -1290,7 +1294,10 @@ class WorkHeader extends StatelessWidget {
                         const SizedBox(height: 10),
                         Text(
                           '还没有匹配到 TMDB 条目，在左侧搜索或点右侧「重新搜索」',
-                          style: TextStyle(fontSize: 12.5, color: p.danger),
+                          style: TextStyle(
+                            fontSize: TypeScale.small,
+                            color: p.danger,
+                          ),
                         ),
                       ],
                     ],
@@ -1410,13 +1417,13 @@ class DetailPane extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
             decoration: BoxDecoration(
               color: Palette.of(context).warning.withValues(alpha: 0.10),
-              borderRadius: BorderRadius.circular(Radii.md),
+              borderRadius: BorderRadius.circular(Radii.sm),
             ),
             child: Text(
               m == null
-                  ? '还没有匹配作品，执行时会跳过。先在右侧「重新搜索 TMDB」选定作品。'
-                  : '这个作品没有勾选，执行时会跳过，下面也不会生成新名字。在左侧列表勾选它即可。',
-              style: const TextStyle(fontSize: 12.5),
+                  ? '还没有匹配作品，整理时会跳过。在右侧「重新搜索 TMDB」选定作品即可。'
+                  : '这个作品没有勾选，整理时会跳过。在左侧列表勾选它即可。',
+              style: const TextStyle(fontSize: TypeScale.small),
             ),
           ),
         ],
@@ -1427,7 +1434,7 @@ class DetailPane extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(12, 6, 6, 6),
             decoration: BoxDecoration(
               color: Palette.of(context).warning.withValues(alpha: 0.10),
-              borderRadius: BorderRadius.circular(Radii.md),
+              borderRadius: BorderRadius.circular(Radii.sm),
             ),
             child: Row(
               children: [
@@ -1437,7 +1444,7 @@ class DetailPane extends StatelessWidget {
                     'S${_pad(o.target.season)}E${_pad(o.target.episode)}，'
                     '但 TMDB 第 ${o.target.season} 季只有 ${o.size} 集。'
                     '要改成 S${_pad(o.target.season + 1)}E01，后面的文件依次顺延吗？',
-                    style: const TextStyle(fontSize: 12.5),
+                    style: const TextStyle(fontSize: TypeScale.small),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -1460,7 +1467,7 @@ class DetailPane extends StatelessWidget {
               _SeasonChip(
                 key: ValueKey('season-tab-$s'),
                 label: s == noSeason
-                    ? '全部 (${rows.length})'
+                    ? '全部 ${rows.length}'
                     : '${seasonTabLabel(s)} (${seasonCountLabel(group, rows, s)})',
                 posterPath: group.show?.seasons
                     .where((x) => x.number == s)
@@ -1546,7 +1553,7 @@ class DetailPane extends StatelessWidget {
       if (subs > 0) '$subs 个字幕',
       if (audio > 0) '$audio 条音轨',
       if (other > 0) '$other 个其他文件',
-    ].join(' · ');
+    ].join('，');
   }
 
   Widget _rowFor(_Entry e, int current) {
@@ -1645,7 +1652,7 @@ class _VideoBlockState extends State<_VideoBlock> {
                 Text(
                   widget.summary,
                   style: TextStyle(
-                    fontSize: 11.5,
+                    fontSize: TypeScale.small,
                     color: hover ? p.text : p.textMuted,
                   ),
                 ),
@@ -1698,22 +1705,13 @@ class _SeasonChip extends StatelessWidget {
           color: selected
               ? (color ?? p.text)
               : (hover ? (color ?? p.text).withValues(alpha: 0.07) : p.panel),
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(Radii.lg),
           border: Border.all(
             color: selected
                 ? (color ?? p.text)
                 : (color?.withValues(alpha: 0.35) ?? p.line),
             width: selected ? hairline : 1,
           ),
-          boxShadow: selected
-              ? [
-                  BoxShadow(
-                    color: (color ?? p.text).withValues(alpha: 0.28),
-                    blurRadius: 8,
-                    offset: const Offset(0, 2),
-                  ),
-                ]
-              : null,
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -1747,7 +1745,7 @@ class _SeasonChip extends StatelessWidget {
             Text(
               label,
               style: TextStyle(
-                fontSize: 12.5,
+                fontSize: TypeScale.small,
                 fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
                 color: selected
                     ? (color == null ? p.canvas : Colors.white)
@@ -1781,7 +1779,7 @@ class _EpBadge extends StatelessWidget {
         color: dim
             ? Colors.transparent
             : (c?.withValues(alpha: 0.13) ?? p.sidebar),
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: BorderRadius.circular(Radii.sm),
         border: Border.all(
           color: dim ? p.lineStrong : (c?.withValues(alpha: 0.3) ?? p.line),
           width: dim ? 1 : hairline,
@@ -1900,7 +1898,10 @@ class _EpisodeRow extends ConsumerWidget {
                           const SizedBox(width: 8),
                           Text(
                             _date(ep!.airDate),
-                            style: TextStyle(fontSize: 11, color: p.textFaint),
+                            style: TextStyle(
+                              fontSize: TypeScale.small,
+                              color: p.textFaint,
+                            ),
                           ),
                         ],
                       ],
@@ -1917,7 +1918,10 @@ class _EpisodeRow extends ConsumerWidget {
                       r.file.name,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 11.5, color: p.textFaint),
+                      style: TextStyle(
+                        fontSize: TypeScale.small,
+                        color: p.textFaint,
+                      ),
                     ),
                   ),
                   Row(
@@ -1960,7 +1964,7 @@ class _EpisodeRow extends ConsumerWidget {
               Tag(r.op!.warning!, color: p.warning),
             if (lowConfidence) ...[
               const SizedBox(width: 4),
-              Tag('低置信', color: p.warning),
+              Tag('不确定', color: p.warning),
             ],
             const SizedBox(width: 4),
             AnimatedOpacity(
@@ -2023,7 +2027,10 @@ class _SidecarRow extends StatelessWidget {
                     r.file.name,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 11, color: p.textFaint),
+                    style: TextStyle(
+                      fontSize: TypeScale.small,
+                      color: p.textFaint,
+                    ),
                   ),
                   Text(
                     '→ ${r.newLabel}',
@@ -2085,7 +2092,7 @@ class _MissingRow extends ConsumerWidget {
               ].join('  ·  '),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: 12.5, color: p.textFaint),
+              style: TextStyle(fontSize: TypeScale.small, color: p.textFaint),
             ),
           ),
           Tag('本地缺失', color: p.warning),
@@ -2144,7 +2151,10 @@ class _FolderOps extends StatelessWidget {
                             OpKind.write => '写入 ${o.dst}',
                           },
                           style: o.kind == OpKind.relocate
-                              ? TextStyle(fontSize: 11.5, color: p.textFaint)
+                              ? TextStyle(
+                                  fontSize: TypeScale.small,
+                                  color: p.textFaint,
+                                )
                               : const TextStyle(
                                   fontSize: 13,
                                   fontWeight: FontWeight.w500,
@@ -2153,7 +2163,10 @@ class _FolderOps extends StatelessWidget {
                         if (o.warning != null && o.kind == OpKind.write)
                           Text(
                             o.warning!,
-                            style: TextStyle(fontSize: 11.5, color: p.warning),
+                            style: TextStyle(
+                              fontSize: TypeScale.small,
+                              color: p.warning,
+                            ),
                           ),
                         if (o.kind == OpKind.relocate)
                           Text(
@@ -2243,7 +2256,10 @@ class _OptionRow extends StatelessWidget {
                   if (caption != null)
                     Text(
                       caption!,
-                      style: TextStyle(fontSize: 11, color: p.textMuted),
+                      style: TextStyle(
+                        fontSize: TypeScale.small,
+                        color: p.textMuted,
+                      ),
                     ),
                 ],
               ),
@@ -2314,7 +2330,10 @@ class ActionPane extends ConsumerWidget {
                           m == null
                               ? '在 TMDB 里搜索并选择'
                               : 'TMDB ${m.tmdbId}${m.year != null ? ' · ${m.year}' : ''}',
-                          style: TextStyle(fontSize: 11, color: p.textMuted),
+                          style: TextStyle(
+                            fontSize: TypeScale.small,
+                            color: p.textMuted,
+                          ),
                         ),
                       ],
                     ),
@@ -2392,7 +2411,7 @@ class ActionPane extends ConsumerWidget {
               control: Container(
                 decoration: BoxDecoration(
                   border: Border.all(color: p.lineStrong, width: hairline),
-                  borderRadius: BorderRadius.circular(Radii.md),
+                  borderRadius: BorderRadius.circular(Radii.sm),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -2470,12 +2489,15 @@ class UnassignedPane extends StatelessWidget {
       children: [
         Text(
           '未归类 ${files.length} 个文件',
-          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+          style: const TextStyle(
+            fontSize: TypeScale.headline,
+            fontWeight: FontWeight.w700,
+          ),
         ),
         const SizedBox(height: 4),
         Text(
-          '这些文件没归进任何作品，执行时原样保留。',
-          style: TextStyle(fontSize: 12.5, color: p.textMuted),
+          '这些文件没归进任何作品，整理时原样保留。',
+          style: TextStyle(fontSize: TypeScale.small, color: p.textMuted),
         ),
         for (final d in dirs) ...[
           const SizedBox(height: 14),
@@ -2676,7 +2698,7 @@ Future<Set<GroupId>?> showMergeDialog(
                                               '《${match?.title ?? g?.anchorTitle ?? ''}》'
                                               '${match?.year == null ? '' : ' (${match!.year})'}',
                                               style: const TextStyle(
-                                                fontSize: 14,
+                                                fontSize: TypeScale.body,
                                                 fontWeight: FontWeight.w500,
                                               ),
                                             ),
@@ -2684,7 +2706,7 @@ Future<Set<GroupId>?> showMergeDialog(
                                             SelectableText(
                                               '合并到 ${m.into}',
                                               style: TextStyle(
-                                                fontSize: 12.5,
+                                                fontSize: TypeScale.small,
                                                 color: p.text,
                                               ),
                                             ),

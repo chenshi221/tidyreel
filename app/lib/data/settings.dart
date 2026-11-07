@@ -18,7 +18,6 @@ class AppSettings {
 
   /// Storage request starts per second (Alist rate limit); next app start.
   final int requestsPerSecond;
-  final bool confirmBeforeExecute;
 
   /// Quick scan + warnings before a task is submitted.
   final bool scanPreview;
@@ -45,7 +44,6 @@ class AppSettings {
     this.themeMode = ThemeMode.light,
     this.concurrency = 4,
     this.requestsPerSecond = 5,
-    this.confirmBeforeExecute = true,
     this.scanPreview = true,
     this.tmdbLanguage = 'zh-CN',
     this.confidenceThreshold = 0.7,
@@ -65,7 +63,6 @@ class AppSettings {
     ThemeMode? themeMode,
     int? concurrency,
     int? requestsPerSecond,
-    bool? confirmBeforeExecute,
     bool? scanPreview,
     String? tmdbLanguage,
     double? confidenceThreshold,
@@ -83,7 +80,6 @@ class AppSettings {
     themeMode: themeMode ?? this.themeMode,
     concurrency: concurrency ?? this.concurrency,
     requestsPerSecond: requestsPerSecond ?? this.requestsPerSecond,
-    confirmBeforeExecute: confirmBeforeExecute ?? this.confirmBeforeExecute,
     scanPreview: scanPreview ?? this.scanPreview,
     tmdbLanguage: tmdbLanguage ?? this.tmdbLanguage,
     confidenceThreshold: confidenceThreshold ?? this.confidenceThreshold,
@@ -111,7 +107,7 @@ enum AccentChoice {
   indigo('黛蓝', Color(0xFF425066), Color(0xFF8E9DB8)),
   azurite('石青', Color(0xFF2E6F78), Color(0xFF6FB1B9)),
   bamboo('竹青', Color(0xFF4F7D5B), Color(0xFF8DBB98)),
-  ink('墨', Color(0xFF1C2023), Color(0xFFE4E7E6));
+  ink('墨', Color(0xFF221F1C), Color(0xFFE7E4DF));
 
   final String label;
   final Color light;
@@ -143,8 +139,6 @@ class SettingsNotifier extends Notifier<AppSettings> {
       requestsPerSecond:
           ((j?['requestsPerSecond'] as num?)?.toInt() ?? d.requestsPerSecond)
               .clamp(1, 20),
-      confirmBeforeExecute:
-          j?['confirmBeforeExecute'] as bool? ?? d.confirmBeforeExecute,
       scanPreview: j?['scanPreview'] as bool? ?? d.scanPreview,
       tmdbLanguage: j?['tmdbLanguage'] as String? ?? d.tmdbLanguage,
       confidenceThreshold:
@@ -169,7 +163,6 @@ class SettingsNotifier extends Notifier<AppSettings> {
       'themeMode': state.themeMode.name,
       'concurrency': state.concurrency,
       'requestsPerSecond': state.requestsPerSecond,
-      'confirmBeforeExecute': state.confirmBeforeExecute,
       'scanPreview': state.scanPreview,
       'tmdbLanguage': state.tmdbLanguage,
       'confidenceThreshold': state.confidenceThreshold,

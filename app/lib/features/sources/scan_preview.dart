@@ -215,7 +215,7 @@ class _PreviewSheetState extends State<_PreviewSheet> {
                 Text(
                   '$atLeast$value',
                   style: TextStyle(
-                    fontSize: 18,
+                    fontSize: TypeScale.headline,
                     fontWeight: FontWeight.w700,
                     color: p.text,
                   ),
@@ -235,7 +235,7 @@ class _PreviewSheetState extends State<_PreviewSheet> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text('提交前预览', style: theme.textTheme.titleLarge),
+              Text('识别前预览', style: theme.textTheme.titleLarge),
               const SizedBox(height: 4),
               Text(
                 widget.paths.length == 1
@@ -254,7 +254,10 @@ class _PreviewSheetState extends State<_PreviewSheet> {
                     children: [
                       CupertinoActivityIndicator(),
                       SizedBox(height: 10),
-                      Text('正在快速扫描…', style: TextStyle(fontSize: 12.5)),
+                      Text(
+                        '正在快速扫描…',
+                        style: TextStyle(fontSize: TypeScale.small),
+                      ),
                     ],
                   ),
                 )
@@ -305,7 +308,7 @@ class _PreviewSheetState extends State<_PreviewSheet> {
                     ),
                     decoration: BoxDecoration(
                       color: p.warning.withValues(alpha: 0.10),
-                      borderRadius: BorderRadius.circular(Radii.md),
+                      borderRadius: BorderRadius.circular(Radii.sm),
                     ),
                     child: Row(
                       children: [
@@ -318,7 +321,7 @@ class _PreviewSheetState extends State<_PreviewSheet> {
                         Expanded(
                           child: Text(
                             w,
-                            style: const TextStyle(fontSize: 12.5),
+                            style: const TextStyle(fontSize: TypeScale.small),
                           ),
                         ),
                       ],
@@ -327,7 +330,7 @@ class _PreviewSheetState extends State<_PreviewSheet> {
                 ],
                 const SizedBox(height: 12),
                 Text(
-                  '提交后只扫描和识别，不会改任何文件；在确认页点「执行」才会改名，执行后也能撤销。',
+                  '这一步只识别，不改任何文件。确认结果后点「开始整理」才会改名，之后也能撤销。',
                   style: theme.textTheme.bodySmall,
                 ),
               ],
@@ -345,7 +348,7 @@ class _PreviewSheetState extends State<_PreviewSheet> {
                     onPressed: r == null
                         ? null
                         : () => Navigator.pop(context, true),
-                    child: Text(warnings.isEmpty ? '提交为任务' : '仍然提交'),
+                    child: Text(warnings.isEmpty ? '开始识别' : '仍然开始'),
                   ),
                 ],
               ),

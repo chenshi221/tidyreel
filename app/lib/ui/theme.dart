@@ -88,10 +88,15 @@ ThemeData buildTheme(Brightness brightness, {Color? accent}) {
       weight: FontWeight.w600,
       spacing: -0.3,
     ),
-    titleLarge: t(bt.titleLarge, 17, weight: FontWeight.w500, spacing: -0.2),
+    titleLarge: t(
+      bt.titleLarge,
+      TypeScale.headline,
+      weight: FontWeight.w500,
+      spacing: -0.2,
+    ),
     titleMedium: t(bt.titleMedium, TypeScale.headline, weight: FontWeight.w500),
     titleSmall: t(bt.titleSmall, TypeScale.body, weight: FontWeight.w500),
-    bodyLarge: t(bt.bodyLarge, 14, height: 1.5),
+    bodyLarge: t(bt.bodyLarge, TypeScale.body, height: 1.5),
     bodyMedium: t(bt.bodyMedium, TypeScale.body, height: 1.5),
     bodySmall: t(
       bt.bodySmall,
@@ -100,10 +105,10 @@ ThemeData buildTheme(Brightness brightness, {Color? accent}) {
       height: 1.45,
     ),
     labelLarge: t(bt.labelLarge, TypeScale.body, weight: FontWeight.w500),
-    labelMedium: t(bt.labelMedium, 12, weight: FontWeight.w500),
+    labelMedium: t(bt.labelMedium, TypeScale.small, weight: FontWeight.w500),
     labelSmall: t(
       bt.labelSmall,
-      11,
+      TypeScale.small,
       weight: FontWeight.w500,
       color: p.textFaint,
     ),
@@ -126,7 +131,7 @@ ThemeData buildTheme(Brightness brightness, {Color? accent}) {
     fontFamilyFallback: sansFallback,
   );
   OutlineInputBorder inputBorder(Color c, [double w = 1]) => OutlineInputBorder(
-    borderRadius: BorderRadius.circular(Radii.md),
+    borderRadius: BorderRadius.circular(Radii.sm),
     borderSide: BorderSide(color: c, width: w),
   );
 
@@ -192,7 +197,7 @@ ThemeData buildTheme(Brightness brightness, {Color? accent}) {
     iconButtonTheme: IconButtonThemeData(
       style: IconButton.styleFrom(
         foregroundColor: p.textMuted,
-        shape: rounded(Radii.md),
+        shape: rounded(Radii.sm),
         hoverColor: p.hover,
         padding: const EdgeInsets.all(6),
         minimumSize: const Size(28, 28),
@@ -220,12 +225,12 @@ ThemeData buildTheme(Brightness brightness, {Color? accent}) {
       side: BorderSide(color: p.lineStrong, width: hairline),
       shape: rounded(Radii.lg),
       labelStyle: TextStyle(
-        fontSize: 12.5,
+        fontSize: TypeScale.small,
         color: p.text,
         fontFamilyFallback: sansFallback,
       ),
       secondaryLabelStyle: TextStyle(
-        fontSize: 12.5,
+        fontSize: TypeScale.small,
         color: p.text,
         fontFamilyFallback: sansFallback,
       ),
@@ -369,7 +374,10 @@ ThemeData buildTheme(Brightness brightness, {Color? accent}) {
     badgeTheme: BadgeThemeData(
       backgroundColor: p.text,
       textColor: p.canvas,
-      textStyle: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.w600),
+      textStyle: const TextStyle(
+        fontSize: TypeScale.small,
+        fontWeight: FontWeight.w600,
+      ),
     ),
     tooltipTheme: TooltipThemeData(
       decoration: BoxDecoration(
@@ -380,7 +388,7 @@ ThemeData buildTheme(Brightness brightness, {Color? accent}) {
       ),
       textStyle: TextStyle(
         color: p.text,
-        fontSize: 11.5,
+        fontSize: TypeScale.small,
         fontFamilyFallback: sansFallback,
       ),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),

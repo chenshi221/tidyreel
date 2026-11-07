@@ -57,7 +57,6 @@ class _NamingPageState extends ConsumerState<NamingPage> {
     final profile = ref.watch(namingProfileProvider);
     return PageScaffold(
       title: '命名规则',
-      subtitle: '电影和剧集分开设置，每一项改动都会实时显示在右侧示例里',
       actions: [
         Segmented<bool>(
           options: const {false: '电影', true: '剧集'},
@@ -125,9 +124,8 @@ class _PlayerMenu extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 10),
         decoration: BoxDecoration(
           color: p.panel,
-          borderRadius: BorderRadius.circular(Radii.md),
+          borderRadius: BorderRadius.circular(Radii.sm),
           border: Border.all(color: p.lineStrong, width: hairline),
-          boxShadow: panelShadow(),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -180,7 +178,7 @@ class _Preview extends ConsumerWidget {
     final mono = TextStyle(
       fontFamily: monoFamily,
       fontFamilyFallback: [...monoFallback, ...sansFallback],
-      fontSize: 12.5,
+      fontSize: TypeScale.small,
       height: 1.5,
     );
 
@@ -229,7 +227,7 @@ class _Preview extends ConsumerWidget {
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
               color: p.accent.withValues(alpha: 0.07),
-              borderRadius: BorderRadius.circular(Radii.md),
+              borderRadius: BorderRadius.circular(Radii.sm),
               border: Border.all(
                 color: p.accent.withValues(alpha: 0.25),
                 width: hairline,
@@ -940,7 +938,7 @@ class _TextOptionState extends State<_TextOption> {
           ? const TextStyle(
               fontFamily: monoFamily,
               fontFamilyFallback: [...monoFallback, ...sansFallback],
-              fontSize: 12.5,
+              fontSize: TypeScale.small,
             )
           : const TextStyle(fontSize: 13),
       onChanged: widget.onChanged,
@@ -1026,7 +1024,7 @@ class _RewriteRowState extends State<_RewriteRow> {
     const mono = TextStyle(
       fontFamily: monoFamily,
       fontFamilyFallback: [...monoFallback, ...sansFallback],
-      fontSize: 12.5,
+      fontSize: TypeScale.small,
     );
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),

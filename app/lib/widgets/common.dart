@@ -27,8 +27,9 @@ String fmtSize(int bytes) {
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   var v = bytes.toDouble();
   var i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
+  // Decimal units, as Finder shows them (macOS is the primary platform).
+  while (v >= 1000 && i < units.length - 1) {
+    v /= 1000;
     i++;
   }
   return '${v.toStringAsFixed(i == 0 ? 0 : 1)} ${units[i]}';
@@ -188,13 +189,6 @@ class Poster extends StatelessWidget {
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(radius),
         border: Border.all(color: p.line, width: hairline),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.12),
-            blurRadius: width > 80 ? 14 : 4,
-            offset: Offset(0, width > 80 ? 5 : 1),
-          ),
-        ],
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(radius),
@@ -236,21 +230,33 @@ Future<bool> confirmDialog(
             onPressed: () => Navigator.pop(ctx, false),
             child: const Text('取消'),
           ),
-          FilledButton(
-            style: destructive
-                ? FilledButton.styleFrom(
-                    backgroundColor: Theme.of(ctx).colorScheme.error,
-                  )
-                : null,
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text(confirmLabel),
-          ),
+          // Destructive: a red word, not a red slab.
+          destructive
+              ? OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Theme.of(ctx).colorScheme.error,
+                  ),
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: Text(confirmLabel),
+                )
+              : FilledButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: Text(confirmLabel),
+                ),
         ],
       ),
     ) ??
     false;
 
-const warningColor = Color(0xFFB7791F);
+/// The one confirmation before running: deleting files can't be undone.
+Future<bool> confirmPermanentDelete(BuildContext context, int count) =>
+    confirmDialog(
+      context,
+      title: '永久删除 $count 个文件？',
+      content: const Text('这些是广告和垃圾文件，删除后无法撤销。改名和移动仍可在任务页撤销。'),
+      confirmLabel: '删除并整理',
+      destructive: true,
+    );
 
 /// A network image also kept on disk (app cache dir), so posters show at once
 /// after a restart instead of downloading again. TMDB image URLs never change.

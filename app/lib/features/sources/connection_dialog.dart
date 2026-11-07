@@ -538,7 +538,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
           padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
           decoration: BoxDecoration(
             color: p.hover,
-            borderRadius: BorderRadius.circular(Radii.md),
+            borderRadius: BorderRadius.circular(Radii.sm),
           ),
           child: Row(
             children: [
@@ -695,7 +695,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
                           color: resultColor.withValues(alpha: 0.08),
-                          borderRadius: BorderRadius.circular(Radii.md),
+                          borderRadius: BorderRadius.circular(Radii.sm),
                           border: Border.all(
                             color: resultColor.withValues(alpha: 0.3),
                             width: hairline,
@@ -717,7 +717,10 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                                 result.status == ConnStatus.connected
                                     ? '连接成功'
                                     : (result.detail ?? '连接失败'),
-                                style: TextStyle(fontSize: 12.5, color: p.text),
+                                style: TextStyle(
+                                  fontSize: TypeScale.small,
+                                  color: p.text,
+                                ),
                               ),
                             ),
                           ],
@@ -796,9 +799,8 @@ class _TemplateMenu extends StatelessWidget {
         padding: const EdgeInsets.only(left: 10, right: 6),
         decoration: BoxDecoration(
           color: p.panel,
-          borderRadius: BorderRadius.circular(Radii.md),
+          borderRadius: BorderRadius.circular(Radii.sm),
           border: Border.all(color: p.lineStrong, width: hairline),
-          boxShadow: panelShadow(),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -842,9 +844,8 @@ class _SchemeMenu extends StatelessWidget {
         padding: const EdgeInsets.only(left: 9, right: 5),
         decoration: BoxDecoration(
           color: p.panel,
-          borderRadius: BorderRadius.circular(Radii.md),
+          borderRadius: BorderRadius.circular(Radii.sm),
           border: Border.all(color: p.lineStrong, width: hairline),
-          boxShadow: panelShadow(),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,

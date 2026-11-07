@@ -90,7 +90,7 @@ class Sidebar extends ConsumerWidget {
           ..hideCurrentSnackBar()
           ..showSnackBar(
             SnackBar(
-              content: Text('$name · $msg'),
+              content: Text('「$name」$msg'),
               action: SnackBarAction(
                 label: '查看',
                 onPressed: () => context.go(path!),
@@ -316,7 +316,7 @@ class _NavItem extends StatelessWidget {
         padding: EdgeInsets.symmetric(horizontal: collapsed ? 9 : 10),
         decoration: BoxDecoration(
           color: selected ? p.selected : (hover ? p.hover : Colors.transparent),
-          borderRadius: BorderRadius.circular(Radii.md + 2),
+          borderRadius: BorderRadius.circular(Radii.sm + 2),
         ),
         child: collapsed
             ? Center(
@@ -377,10 +377,10 @@ class _TaskItem extends StatelessWidget {
               '根目录';
     final name = t.paths.length > 1 ? '$first 等 ${t.paths.length} 项' : first;
     final status = switch (t.stage) {
-      TaskStage.importing => '导入中 · ${t.importedCount} 个文件',
+      TaskStage.importing => '已导入 ${t.importedCount} 个文件',
       TaskStage.recognizing => '识别中…',
       TaskStage.awaitingReview => '识别完成，待确认',
-      _ => '执行中 · ${stageLabel(t.stage)}',
+      _ => stageLabel(t.stage),
     };
     return Hoverable(
       onTap: onTap,
@@ -427,14 +427,14 @@ class _TaskItem extends StatelessWidget {
                     name,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 12.5, color: p.text),
+                    style: TextStyle(fontSize: TypeScale.small, color: p.text),
                   ),
                   Text(
                     status,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      fontSize: 11,
+                      fontSize: TypeScale.small,
                       color: review ? p.accent : p.textFaint,
                     ),
                   ),
@@ -466,7 +466,7 @@ class _FavItem extends StatelessWidget {
     final p = Palette.of(context);
     final name = path.split('/').where((s) => s.isNotEmpty).lastOrNull ?? '根目录';
     return Tooltip(
-      message: '$connection · $path',
+      message: '$connection：$path',
       waitDuration: const Duration(milliseconds: 600),
       child: Hoverable(
         onTap: onTap,

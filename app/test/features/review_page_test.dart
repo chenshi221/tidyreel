@@ -28,8 +28,8 @@ void main() {
 
   testWidgets('shows groups, tabs, seasons and new names', (tester) async {
     await open(tester);
-    expect(find.text('可整理 (2)'), findsOneWidget);
-    expect(find.text('待手动识别 (1)'), findsOneWidget);
+    expect(find.text('可整理 2'), findsOneWidget);
+    expect(find.text('需手动匹配 1'), findsOneWidget);
     expect(find.text('异兽魔都'), findsWidgets);
     expect(
       find.text('本地 2 季 23 集 / TMDB 2 季 23 集'),
@@ -45,7 +45,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('→ /下载/完成/异兽魔都 (2020)'), findsOneWidget);
 
-    await tester.tap(find.text('待手动识别 (1)'));
+    await tester.tap(find.text('需手动匹配 1'));
     await tester.pumpAndSettle();
     expect(find.text('未知视频'), findsWidgets);
     expect(find.byKey(const ValueKey('inline-search-g3')), findsOneWidget);
@@ -178,7 +178,7 @@ void main() {
     expect(find.text('TMDB 上没有剧集组'), findsOneWidget);
 
     // unmatched group: inline search moves it to 可整理
-    await tester.tap(find.text('待手动识别 (1)'));
+    await tester.tap(find.text('需手动匹配 1'));
     await tester.pumpAndSettle();
     final box = find
         .descendant(
@@ -199,7 +199,7 @@ void main() {
     d = (await tm.review(id) as TaskReview).decisions[const GroupId('g3')]!;
     expect(d.match?.tmdbId, 27205);
     expect(d.selected, isTrue); // picking a match checks the group
-    expect(find.text('可整理 (3)'), findsOneWidget);
+    expect(find.text('可整理 3'), findsOneWidget);
     // The manual tab just emptied: back to 可整理 by itself.
     expect(
       tester.widget<Segmented<int>>(find.byType(Segmented<int>).first).value,
@@ -231,10 +231,8 @@ void main() {
       isFalse,
     );
 
+    // Nothing to delete, so no confirmation: it runs straight away.
     await tester.tap(find.byKey(const ValueKey('execute-button')));
-    await tester.pumpAndSettle();
-    expect(find.textContaining('重命名/移动文件'), findsOneWidget);
-    await tester.tap(find.text('执行'));
     await tester.pumpAndSettle();
     expect(find.text('ROUTE detail ${id.value}'), findsOneWidget);
   });

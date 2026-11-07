@@ -535,7 +535,7 @@ class _SelectionBar extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
       decoration: BoxDecoration(
         color: p.panel,
-        borderRadius: BorderRadius.circular(Radii.xl),
+        borderRadius: BorderRadius.circular(Radii.bar),
         border: Border.all(color: p.line, width: hairline),
         boxShadow: floatShadow(),
       ),
@@ -546,37 +546,11 @@ class _SelectionBar extends StatelessWidget {
             key: const ValueKey('show-selected'),
             onPressed: onShowSelected,
             style: TextButton.styleFrom(foregroundColor: p.text),
-            icon: Container(
-              constraints: const BoxConstraints(minWidth: 22),
-              height: 22,
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: p.accent,
-                borderRadius: BorderRadius.circular(11),
-              ),
-              child: Text(
-                '$count',
-                style: TextStyle(
-                  color: p.onAccent,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-            label: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  '已选 $count 项',
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(width: 2),
-                const Icon(CupertinoIcons.chevron_up, size: 11),
-              ],
+            icon: const Icon(CupertinoIcons.chevron_up, size: 11),
+            iconAlignment: IconAlignment.end,
+            label: Text(
+              '已选 $count 项',
+              style: const TextStyle(fontWeight: FontWeight.w600),
             ),
           ),
           const SizedBox(width: 8),
@@ -663,9 +637,8 @@ class _SortMenu extends StatelessWidget {
           color: Palette.of(context).lineStrong,
           width: hairline,
         ),
-        borderRadius: BorderRadius.circular(Radii.md),
+        borderRadius: BorderRadius.circular(Radii.sm),
         color: Palette.of(context).panel,
-        boxShadow: panelShadow(),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -818,7 +791,10 @@ class _EntryTile extends StatelessWidget {
                   if (meta.isNotEmpty)
                     Text(
                       meta,
-                      style: TextStyle(fontSize: 11.5, color: p.textMuted),
+                      style: TextStyle(
+                        fontSize: TypeScale.small,
+                        color: p.textMuted,
+                      ),
                     ),
                 ],
               ),

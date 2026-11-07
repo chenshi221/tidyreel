@@ -64,60 +64,60 @@ class Palette extends ThemeExtension<Palette> {
     required this.contour,
   });
 
-  // Cool 月白 paper and 墨 text; colours from 中国传统色. Greys lean neither
-  // blue nor yellow so the single 胭脂 accent carries the warmth.
+  // Warm 宣纸 paper and 墨 text; colours from 中国传统色. Greys lean slightly
+  // warm; every text grey meets WCAG AA (4.5:1) on canvas, sidebar and panel.
   static const light = Palette(
-    canvas: Color(0xFFF5F6F5),
-    sidebar: Color(0xFFEDEFEE),
-    panel: Color(0xFFFCFCFB),
-    hover: Color(0x0B1C2023),
-    selected: Color(0x141C2023),
-    line: Color(0xFFE3E6E5),
-    lineStrong: Color(0xFFC9CECD),
-    text: Color(0xFF1C2023),
-    textMuted: Color(0xFF5F6669),
-    textFaint: Color(0xFF969C9F),
+    canvas: Color(0xFFF6F5F2),
+    sidebar: Color(0xFFEEECE8),
+    panel: Color(0xFFFCFBF9),
+    hover: Color(0x0B221F1C),
+    selected: Color(0x14221F1C),
+    line: Color(0xFFE5E2DD),
+    lineStrong: Color(0xFFCBC6BF),
+    text: Color(0xFF221F1C),
+    textMuted: Color(0xFF55504A),
+    textFaint: Color(0xFF6E6760),
     accent: Color(0xFF9D2933),
     accentSoft: Color(0xFFF3E4E5),
     onAccent: Color(0xFFFFFFFF),
-    success: Color(0xFF3F7A5C),
-    warning: Color(0xFFA9761F),
-    danger: Color(0xFFA8452F),
+    success: Color(0xFF3D7556),
+    warning: Color(0xFF786A1E),
+    danger: Color(0xFFA93636),
     tones: [
-      Color(0xFFE4E7E6),
-      Color(0xFFD0D5D4),
-      Color(0xFF9AA1A2),
-      Color(0xFF6D7477),
-      Color(0xFF2A2F32),
+      Color(0xFFE7E4DF),
+      Color(0xFFD3CFC8),
+      Color(0xFFA19A92),
+      Color(0xFF746D66),
+      Color(0xFF2E2A27),
     ],
-    contour: Color(0x611C2023),
+    contour: Color(0x61221F1C),
   );
 
   static const dark = Palette(
-    canvas: Color(0xFF17191A),
-    sidebar: Color(0xFF131516),
-    panel: Color(0xFF1E2122),
+    canvas: Color(0xFF1A1918),
+    sidebar: Color(0xFF151413),
+    panel: Color(0xFF22201F),
     hover: Color(0x0FFFFFFF),
     selected: Color(0x1AFFFFFF),
-    line: Color(0xFF2B2F31),
-    lineStrong: Color(0xFF454A4D),
-    text: Color(0xFFE8EAEA),
-    textMuted: Color(0xFFA2A8AB),
-    textFaint: Color(0xFF6F7579),
+    line: Color(0xFF2F2C2A),
+    lineStrong: Color(0xFF4A4643),
+    text: Color(0xFFEAE7E3),
+    textMuted: Color(0xFFAEA8A1),
+    textFaint: Color(0xFF8F8881),
     accent: Color(0xFFD0646C),
     accentSoft: Color(0xFF3A2427),
     onAccent: Color(0xFFFFFFFF),
-    success: Color(0xFF7FB197),
-    warning: Color(0xFFD6A55A),
-    danger: Color(0xFFD97B66),
+    success: Color(0xFF86B898),
+    warning: Color(0xFFCDB56A),
+    danger: Color(0xFFE27C72),
     tones: [
-      Color(0xFFE4E7E6),
-      Color(0xFF8E9496),
-      Color(0xFF494E51),
-      Color(0xFF34383A),
-      Color(0xFF292D2F),
+      Color(0xFFE7E4DF),
+      Color(0xFF948E88),
+      Color(0xFF4E4A47),
+      Color(0xFF383532),
+      Color(0xFF2D2A28),
     ],
-    contour: Color(0x66E8EAEA),
+    contour: Color(0x66EAE7E3),
   );
 
   static Palette of(BuildContext context) =>
@@ -191,11 +191,14 @@ abstract final class Space {
   static const xxl = 32.0;
 }
 
+/// Nested corners stay concentric: inner radius = outer radius − padding.
 abstract final class Radii {
-  static const sm = 5.0;
-  static const md = 6.0;
+  static const sm = 6.0;
   static const lg = 10.0;
   static const xl = 12.0;
+
+  /// Floating bars that hold [lg] buttons inside an 8pt inset.
+  static const bar = lg + 8;
 
   /// Map blocks and other "pebble" shapes.
   static const pebble = 34.0;
@@ -235,15 +238,6 @@ List<BoxShadow> floatShadow([double strength = 1]) => [
   BoxShadow(
     color: Colors.black.withValues(alpha: 0.06 * strength),
     blurRadius: 3,
-    offset: const Offset(0, 1),
-  ),
-];
-
-/// Barely-there lift for inset panels.
-List<BoxShadow> panelShadow() => [
-  BoxShadow(
-    color: Colors.black.withValues(alpha: 0.035),
-    blurRadius: 2,
     offset: const Offset(0, 1),
   ),
 ];

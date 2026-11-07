@@ -91,10 +91,7 @@ class SourcesPage extends ConsumerWidget {
         ),
         label('收藏', CupertinoIcons.star),
         if (favorites.isEmpty)
-          Text(
-            '打开一个连接，在文件夹右上角点 ☆ 收藏，常用的下载目录就会出现在这里',
-            style: theme.textTheme.bodySmall,
-          )
+          Text('打开一个文件夹，点右上角的 ☆，常用目录就会出现在这里', style: theme.textTheme.bodySmall)
         else
           Panel(
             padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
@@ -160,25 +157,33 @@ Future<void> _edit(
   ref.invalidate(connectionStatusProvider(draft.config.id));
 }
 
-Future<void> _delete(
-  BuildContext context,
-  WidgetRef ref,
-  ConnectionConfig c,
-) async {
-  final ok = await confirmDialog(
-    context,
-    title: '删除连接',
-    content: Text('确定删除「${c.name}」吗？只会删除这条连接配置和保存的密码，不会动网盘或磁盘上的任何文件。'),
-    confirmLabel: '删除',
-    destructive: true,
-  );
-  if (ok && context.mounted) {
-    ref.read(connectionsEditorProvider.notifier).remove(c.id);
-  }
+/// Deletes at once and offers 撤销: only the config and saved password go,
+/// never a file, so a confirmation dialog would be noise.
+void _delete(BuildContext context, WidgetRef ref, ConnectionConfig c) {
+  final password = ref.read(connectionPasswordsProvider)[c.id];
+  ref.read(connectionsEditorProvider.notifier).remove(c.id);
+  ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(
+      SnackBar(
+        content: Text('已删除「${c.name}」'),
+        action: SnackBarAction(
+          label: '撤销',
+          onPressed: () {
+            ref.read(connectionsEditorProvider.notifier).upsert(c);
+            if (password != null) {
+              ref.read(connectionPasswordsProvider.notifier).set({
+                ...ref.read(connectionPasswordsProvider),
+                c.id: password,
+              });
+            }
+          },
+        ),
+      ),
+    );
 }
 
-/// One connection as two lines of text: name, then type · address · status.
-/// The ring on the left picks which connection the map shows.
+/// One connection as two lines of text: name, then type, address and status.
 class _ConnectionRow extends ConsumerWidget {
   final ConnectionConfig connection;
 
@@ -199,36 +204,33 @@ class _ConnectionRow extends ConsumerWidget {
     final failed = value != null && value.status != ConnStatus.connected;
     final start = normalizeDir(c.startDir);
 
+    List<MenuAction?> menu() => [
+      MenuAction('打开', () => openBrowser(ref, c), icon: CupertinoIcons.folder),
+      MenuAction(
+        '编辑',
+        () => _edit(context, ref, c),
+        icon: CupertinoIcons.pencil,
+      ),
+      MenuAction(
+        '复制为新连接',
+        () => _edit(context, ref, c, true),
+        icon: CupertinoIcons.doc_on_doc,
+      ),
+      MenuAction(
+        '重新检测',
+        () => ref.invalidate(connectionStatusProvider(c.id)),
+        icon: CupertinoIcons.arrow_clockwise,
+      ),
+      null,
+      MenuAction(
+        '删除',
+        () => _delete(context, ref, c),
+        icon: CupertinoIcons.trash,
+        destructive: true,
+      ),
+    ];
     return ContextMenuArea(
-      items: () => [
-        MenuAction(
-          '打开',
-          () => openBrowser(ref, c),
-          icon: CupertinoIcons.folder,
-        ),
-        MenuAction(
-          '编辑',
-          () => _edit(context, ref, c),
-          icon: CupertinoIcons.pencil,
-        ),
-        MenuAction(
-          '复制',
-          () => _edit(context, ref, c, true),
-          icon: CupertinoIcons.doc_on_doc,
-        ),
-        MenuAction(
-          '重新检测',
-          () => ref.invalidate(connectionStatusProvider(c.id)),
-          icon: CupertinoIcons.arrow_clockwise,
-        ),
-        null,
-        MenuAction(
-          '删除',
-          () => _delete(context, ref, c),
-          icon: CupertinoIcons.trash,
-          destructive: true,
-        ),
-      ],
+      items: menu,
       child: Hoverable(
         key: ValueKey('conn ${c.id.value}'),
         onTap: () => openBrowser(ref, c),
@@ -305,32 +307,7 @@ class _ConnectionRow extends ConsumerWidget {
               AnimatedOpacity(
                 duration: const Duration(milliseconds: 120),
                 opacity: hover || failed ? 1 : 0.35,
-                child: PopupMenuButton<String>(
-                  tooltip: '更多',
-                  icon: const Icon(CupertinoIcons.ellipsis, size: 16),
-                  onSelected: (v) {
-                    if (v == 'edit') _edit(context, ref, c);
-                    if (v == 'copy') _edit(context, ref, c, true);
-                    if (v == 'delete') _delete(context, ref, c);
-                  },
-                  itemBuilder: (_) => [
-                    const PopupMenuItem(
-                      value: 'edit',
-                      height: 30,
-                      child: Text('编辑'),
-                    ),
-                    const PopupMenuItem(
-                      value: 'copy',
-                      height: 30,
-                      child: Text('复制（同一服务器的另一个文件夹）'),
-                    ),
-                    PopupMenuItem(
-                      value: 'delete',
-                      height: 30,
-                      child: Text('删除', style: TextStyle(color: p.danger)),
-                    ),
-                  ],
-                ),
+                child: MoreButton(items: menu),
               ),
             ],
           ),
@@ -340,7 +317,6 @@ class _ConnectionRow extends ConsumerWidget {
   }
 }
 
-/// Posters of what one finished task organized; click opens its details.
 /// A favorite folder: same two lines and … menu as a connection.
 class _FavoriteRow extends ConsumerWidget {
   final ConnectionConfig connection;
