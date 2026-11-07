@@ -1828,7 +1828,7 @@ class _EpisodeRow extends ConsumerWidget {
           .firstOrNull;
     }
     final badge = target == null ? '—' : _pad(target.episode);
-    final newName = r.ignored ? '已忽略' : r.newName ?? '（无改动）';
+    final newName = r.newLabel;
     // The planner flags real guesses on the op ("识别置信度较低"); only a file
     // it skipped falls back to the parser's own confidence.
     final lowConfidence =
@@ -2026,7 +2026,7 @@ class _SidecarRow extends StatelessWidget {
                     style: TextStyle(fontSize: 11, color: p.textFaint),
                   ),
                   Text(
-                    '→ ${r.ignored ? '已忽略' : r.newName ?? '（无改动）'}',
+                    '→ ${r.newLabel}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(

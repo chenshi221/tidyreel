@@ -1,5 +1,7 @@
 import 'dart:math';
 
+import '../model/metadata.dart';
+
 final _nonWord = RegExp(r'[^\p{L}\p{N}]', unicode: true);
 
 /// Lower-cased title with everything but letters / digits removed and
@@ -360,4 +362,32 @@ List<String> relaxedQueries(String title, String rawName) {
     for (final q in [noPrefix, noBrackets, cjk, ?latin])
       if (normTitle(q).isNotEmpty && seen.add(normTitle(q))) q,
   ];
+}
+
+final _hanRe = RegExp(r'[\u4e00-\u9fff]');
+
+bool hasHan(String s) => _hanRe.hasMatch(s);
+
+/// TMDB has no Chinese name for some titles, and show() / movie() then fall
+/// back to a Chinese translation or alias: name the files with it ("流人",
+/// not "Slow Horses").
+Candidate chineseNamed(Candidate c, Candidate? detail) {
+  final t = detail?.title;
+  if (t == null || detail!.tmdbId != c.tmdbId || t == c.title) return c;
+  if (_hanRe.hasMatch(c.title) || !_hanRe.hasMatch(t)) return c;
+  return Candidate(
+    tmdbId: c.tmdbId,
+    kind: c.kind,
+    title: t,
+    englishTitle: c.englishTitle ?? c.title,
+    originalTitle: c.originalTitle,
+    year: c.year,
+    posterPath: c.posterPath,
+    originCountry: c.originCountry,
+    voteAverage: c.voteAverage,
+    overview: c.overview,
+    backdropPath: c.backdropPath,
+    genres: c.genres,
+    aliases: c.aliases,
+  );
 }

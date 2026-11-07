@@ -97,6 +97,13 @@ class ReviewRow {
 
   String? get newName =>
       op == null || op!.dst.isEmpty ? null : op!.dst.split('/').last;
+
+  /// What the row shows after the arrow.
+  String get newLabel => ignored
+      ? '已忽略'
+      : op != null && op!.src == op!.dst
+      ? '（名称不变）'
+      : newName ?? '（无改动）';
 }
 
 List<ReviewRow> rowsOf(MediaGroup g, GroupDecision? d, TaskReview r) {

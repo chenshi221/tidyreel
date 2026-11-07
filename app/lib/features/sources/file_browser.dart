@@ -117,7 +117,12 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
   );
 
   /// Submits [only] (one row's 整理 button) or the current selection.
-  Future<void> _submit([String? only, OrganizeMode? mode]) async {
+  /// [scrape] = 刮削: organize and also write .nfo files and artwork.
+  Future<void> _submit([
+    String? only,
+    OrganizeMode? mode,
+    bool scrape = false,
+  ]) async {
     final paths = only != null
         ? [only]
         : (ref.read(browserSelectionProvider).toList()..sort());
@@ -143,6 +148,7 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
           widget.connection.id,
           paths,
           mode ?? ref.read(browserModeProvider),
+          scrape: scrape,
         );
     if (!mounted) return;
     if (only == null) ref.read(browserSelectionProvider.notifier).clear();
@@ -196,6 +202,11 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
         '整理（移动到媒体库）',
         () => _submit(path, OrganizeMode.moveToLibrary),
         icon: CupertinoIcons.tray_arrow_down,
+      ),
+      MenuAction(
+        '刮削',
+        () => _submit(path, null, true),
+        icon: CupertinoIcons.photo_on_rectangle,
       ),
     ];
 
@@ -470,7 +481,8 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
                           onCancel: ref
                               .read(browserSelectionProvider.notifier)
                               .clear,
-                          onSubmit: _submit,
+                          onOrganize: _submit,
+                          onScrape: () => _submit(null, null, true),
                           onShowSelected: _showSelected,
                           hint: ref.watch(
                             settingsProvider.select((s) => s.mediaHint),
@@ -491,13 +503,14 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
   }
 }
 
-/// Floating bar for the 多选 → 提交为任务 step.
+/// Floating bar for the 多选 → 整理 / 刮削 step.
 class _SelectionBar extends StatelessWidget {
   final int count;
   final OrganizeMode mode;
   final void Function(OrganizeMode) onMode;
   final VoidCallback onCancel;
-  final VoidCallback onSubmit;
+  final VoidCallback onOrganize;
+  final VoidCallback onScrape;
   final VoidCallback onShowSelected;
   final MediaHint hint;
   final void Function(MediaHint) onHint;
@@ -507,7 +520,8 @@ class _SelectionBar extends StatelessWidget {
     required this.mode,
     required this.onMode,
     required this.onCancel,
-    required this.onSubmit,
+    required this.onOrganize,
+    required this.onScrape,
     required this.onShowSelected,
     required this.hint,
     required this.onHint,
@@ -601,10 +615,19 @@ class _SelectionBar extends StatelessWidget {
           const SizedBox(width: 16),
           TextButton(onPressed: onCancel, child: const Text('取消')),
           const SizedBox(width: 4),
-          FilledButton.icon(
-            onPressed: onSubmit,
-            icon: const Icon(CupertinoIcons.arrow_up_circle_fill, size: 15),
-            label: const Text('提交为任务'),
+          OutlinedButton(
+            key: const ValueKey('organize'),
+            onPressed: onOrganize,
+            child: const Text('整理'),
+          ),
+          const SizedBox(width: 8),
+          Tooltip(
+            message: '整理，并写入 NFO 和海报',
+            child: FilledButton(
+              key: const ValueKey('scrape'),
+              onPressed: onScrape,
+              child: const Text('刮削'),
+            ),
           ),
         ],
       ),

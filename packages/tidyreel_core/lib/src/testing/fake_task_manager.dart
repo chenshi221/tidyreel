@@ -41,6 +41,7 @@ class FakeTaskManager implements TaskManager {
       connection: t.connection,
       paths: t.paths,
       mode: t.mode,
+      scrape: t.scrape,
       stage: stage,
       message: message,
       importedCount: imported ?? t.importedCount,
@@ -59,8 +60,9 @@ class FakeTaskManager implements TaskManager {
   Future<TaskId> submit(
     ConnectionId connection,
     List<String> paths,
-    OrganizeMode mode,
-  ) async {
+    OrganizeMode mode, {
+    bool scrape = false,
+  }) async {
     final id = TaskId(
       'T${++_seq}-${DateTime.now().microsecondsSinceEpoch.toRadixString(16).substring(5, 11)}',
     );
@@ -73,6 +75,7 @@ class FakeTaskManager implements TaskManager {
         connection: connection,
         paths: paths,
         mode: mode,
+        scrape: scrape,
         stage: TaskStage.importing,
         message: '正在导入文件',
         videoCount: files.where((f) => f.role == FileRole.video).length,
@@ -133,6 +136,7 @@ class FakeTaskManager implements TaskManager {
         connection: t.connection,
         paths: t.paths,
         mode: mode,
+        scrape: t.scrape,
         stage: t.stage,
         message: t.message,
         importedCount: t.importedCount,
@@ -178,6 +182,18 @@ class FakeTaskManager implements TaskManager {
   Future<void> retryFailed(TaskId id) async {
     await Future<void>.delayed(step);
     _put(_with(id, TaskStage.done, '整理完成'));
+  }
+
+  @override
+  Future<void> retry(TaskId id) async {
+    _put(_with(id, TaskStage.importing, '正在导入文件', imported: 0));
+    final r = _reviews[id]!;
+    unawaited(
+      _pipeline(
+        id,
+        r.scan.groups.expand((g) => g.files).length + r.scan.unassigned.length,
+      ),
+    );
   }
 
   @override

@@ -11,8 +11,9 @@ abstract interface class TaskManager {
   Future<TaskId> submit(
     ConnectionId connection,
     List<String> paths,
-    OrganizeMode mode,
-  );
+    OrganizeMode mode, {
+    bool scrape = false,
+  });
 
   /// All tasks, newest first; emits on every change.
   Stream<List<TaskSummary>> watchAll();
@@ -38,6 +39,11 @@ abstract interface class TaskManager {
 
   /// Runs a partly failed task's failed (and therefore skipped) ops again.
   Future<void> retryFailed(TaskId id);
+
+  /// Imports and recognizes a task again from scratch (same folders, mode and
+  /// 刮削 choice). For a task that stopped before changing any file (failed or
+  /// cancelled) and for an undone one. See [canRetry].
+  Future<void> retry(TaskId id);
 
   /// Removes a task that isn't running (anything but importing, recognizing
   /// or executing) together with its undo history. Files are not touched.

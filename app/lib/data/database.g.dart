@@ -1116,6 +1116,19 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, TaskRow> {
     type: DriftSqlType.string,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _scrapeMeta = const VerificationMeta('scrape');
+  @override
+  late final GeneratedColumn<bool> scrape = GeneratedColumn<bool>(
+    'scrape',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("scrape" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
   static const VerificationMeta _stageMeta = const VerificationMeta('stage');
   @override
   late final GeneratedColumn<String> stage = GeneratedColumn<String>(
@@ -1241,6 +1254,7 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, TaskRow> {
     connectionId,
     pathsJson,
     mode,
+    scrape,
     stage,
     message,
     importedCount,
@@ -1296,6 +1310,12 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, TaskRow> {
       );
     } else if (isInserting) {
       context.missing(_modeMeta);
+    }
+    if (data.containsKey('scrape')) {
+      context.handle(
+        _scrapeMeta,
+        scrape.isAcceptableOrUnknown(data['scrape']!, _scrapeMeta),
+      );
     }
     if (data.containsKey('stage')) {
       context.handle(
@@ -1414,6 +1434,10 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, TaskRow> {
         DriftSqlType.string,
         data['${effectivePrefix}mode'],
       )!,
+      scrape: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}scrape'],
+      )!,
       stage: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}stage'],
@@ -1472,6 +1496,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
   final String connectionId;
   final String pathsJson;
   final String mode;
+  final bool scrape;
   final String stage;
   final String message;
   final int importedCount;
@@ -1490,6 +1515,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
     required this.connectionId,
     required this.pathsJson,
     required this.mode,
+    required this.scrape,
     required this.stage,
     required this.message,
     required this.importedCount,
@@ -1509,6 +1535,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
     map['connection_id'] = Variable<String>(connectionId);
     map['paths_json'] = Variable<String>(pathsJson);
     map['mode'] = Variable<String>(mode);
+    map['scrape'] = Variable<bool>(scrape);
     map['stage'] = Variable<String>(stage);
     map['message'] = Variable<String>(message);
     map['imported_count'] = Variable<int>(importedCount);
@@ -1537,6 +1564,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
       connectionId: Value(connectionId),
       pathsJson: Value(pathsJson),
       mode: Value(mode),
+      scrape: Value(scrape),
       stage: Value(stage),
       message: Value(message),
       importedCount: Value(importedCount),
@@ -1569,6 +1597,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
       connectionId: serializer.fromJson<String>(json['connectionId']),
       pathsJson: serializer.fromJson<String>(json['pathsJson']),
       mode: serializer.fromJson<String>(json['mode']),
+      scrape: serializer.fromJson<bool>(json['scrape']),
       stage: serializer.fromJson<String>(json['stage']),
       message: serializer.fromJson<String>(json['message']),
       importedCount: serializer.fromJson<int>(json['importedCount']),
@@ -1590,6 +1619,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
       'connectionId': serializer.toJson<String>(connectionId),
       'pathsJson': serializer.toJson<String>(pathsJson),
       'mode': serializer.toJson<String>(mode),
+      'scrape': serializer.toJson<bool>(scrape),
       'stage': serializer.toJson<String>(stage),
       'message': serializer.toJson<String>(message),
       'importedCount': serializer.toJson<int>(importedCount),
@@ -1609,6 +1639,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
     String? connectionId,
     String? pathsJson,
     String? mode,
+    bool? scrape,
     String? stage,
     String? message,
     int? importedCount,
@@ -1625,6 +1656,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
     connectionId: connectionId ?? this.connectionId,
     pathsJson: pathsJson ?? this.pathsJson,
     mode: mode ?? this.mode,
+    scrape: scrape ?? this.scrape,
     stage: stage ?? this.stage,
     message: message ?? this.message,
     importedCount: importedCount ?? this.importedCount,
@@ -1647,6 +1679,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
           : this.connectionId,
       pathsJson: data.pathsJson.present ? data.pathsJson.value : this.pathsJson,
       mode: data.mode.present ? data.mode.value : this.mode,
+      scrape: data.scrape.present ? data.scrape.value : this.scrape,
       stage: data.stage.present ? data.stage.value : this.stage,
       message: data.message.present ? data.message.value : this.message,
       importedCount: data.importedCount.present
@@ -1678,6 +1711,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
           ..write('connectionId: $connectionId, ')
           ..write('pathsJson: $pathsJson, ')
           ..write('mode: $mode, ')
+          ..write('scrape: $scrape, ')
           ..write('stage: $stage, ')
           ..write('message: $message, ')
           ..write('importedCount: $importedCount, ')
@@ -1699,6 +1733,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
     connectionId,
     pathsJson,
     mode,
+    scrape,
     stage,
     message,
     importedCount,
@@ -1719,6 +1754,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
           other.connectionId == this.connectionId &&
           other.pathsJson == this.pathsJson &&
           other.mode == this.mode &&
+          other.scrape == this.scrape &&
           other.stage == this.stage &&
           other.message == this.message &&
           other.importedCount == this.importedCount &&
@@ -1737,6 +1773,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
   final Value<String> connectionId;
   final Value<String> pathsJson;
   final Value<String> mode;
+  final Value<bool> scrape;
   final Value<String> stage;
   final Value<String> message;
   final Value<int> importedCount;
@@ -1754,6 +1791,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
     this.connectionId = const Value.absent(),
     this.pathsJson = const Value.absent(),
     this.mode = const Value.absent(),
+    this.scrape = const Value.absent(),
     this.stage = const Value.absent(),
     this.message = const Value.absent(),
     this.importedCount = const Value.absent(),
@@ -1772,6 +1810,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
     required String connectionId,
     required String pathsJson,
     required String mode,
+    this.scrape = const Value.absent(),
     required String stage,
     required String message,
     required int importedCount,
@@ -1800,6 +1839,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
     Expression<String>? connectionId,
     Expression<String>? pathsJson,
     Expression<String>? mode,
+    Expression<bool>? scrape,
     Expression<String>? stage,
     Expression<String>? message,
     Expression<int>? importedCount,
@@ -1818,6 +1858,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
       if (connectionId != null) 'connection_id': connectionId,
       if (pathsJson != null) 'paths_json': pathsJson,
       if (mode != null) 'mode': mode,
+      if (scrape != null) 'scrape': scrape,
       if (stage != null) 'stage': stage,
       if (message != null) 'message': message,
       if (importedCount != null) 'imported_count': importedCount,
@@ -1838,6 +1879,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
     Value<String>? connectionId,
     Value<String>? pathsJson,
     Value<String>? mode,
+    Value<bool>? scrape,
     Value<String>? stage,
     Value<String>? message,
     Value<int>? importedCount,
@@ -1856,6 +1898,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
       connectionId: connectionId ?? this.connectionId,
       pathsJson: pathsJson ?? this.pathsJson,
       mode: mode ?? this.mode,
+      scrape: scrape ?? this.scrape,
       stage: stage ?? this.stage,
       message: message ?? this.message,
       importedCount: importedCount ?? this.importedCount,
@@ -1885,6 +1928,9 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
     }
     if (mode.present) {
       map['mode'] = Variable<String>(mode.value);
+    }
+    if (scrape.present) {
+      map['scrape'] = Variable<bool>(scrape.value);
     }
     if (stage.present) {
       map['stage'] = Variable<String>(stage.value);
@@ -1932,6 +1978,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
           ..write('connectionId: $connectionId, ')
           ..write('pathsJson: $pathsJson, ')
           ..write('mode: $mode, ')
+          ..write('scrape: $scrape, ')
           ..write('stage: $stage, ')
           ..write('message: $message, ')
           ..write('importedCount: $importedCount, ')
@@ -2733,6 +2780,7 @@ typedef $$TasksTableCreateCompanionBuilder = TasksCompanion Function({
   required String connectionId,
   required String pathsJson,
   required String mode,
+  Value<bool> scrape,
   required String stage,
   required String message,
   required int importedCount,
@@ -2751,6 +2799,7 @@ typedef $$TasksTableUpdateCompanionBuilder = TasksCompanion Function({
   Value<String> connectionId,
   Value<String> pathsJson,
   Value<String> mode,
+  Value<bool> scrape,
   Value<String> stage,
   Value<String> message,
   Value<int> importedCount,
@@ -2790,6 +2839,11 @@ class $$TasksTableFilterComposer extends Composer<_$AppDatabase, $TasksTable> {
 
   ColumnFilters<String> get mode => $composableBuilder(
     column: $table.mode,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get scrape => $composableBuilder(
+    column: $table.scrape,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -2878,6 +2932,11 @@ class $$TasksTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<bool> get scrape => $composableBuilder(
+    column: $table.scrape,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get stage => $composableBuilder(
     column: $table.stage,
     builder: (column) => ColumnOrderings(column),
@@ -2957,6 +3016,9 @@ class $$TasksTableAnnotationComposer
   GeneratedColumn<String> get mode =>
       $composableBuilder(column: $table.mode, builder: (column) => column);
 
+  GeneratedColumn<bool> get scrape =>
+      $composableBuilder(column: $table.scrape, builder: (column) => column);
+
   GeneratedColumn<String> get stage =>
       $composableBuilder(column: $table.stage, builder: (column) => column);
 
@@ -3033,6 +3095,7 @@ class $$TasksTableTableManager
                 Value<String> connectionId = const Value.absent(),
                 Value<String> pathsJson = const Value.absent(),
                 Value<String> mode = const Value.absent(),
+                Value<bool> scrape = const Value.absent(),
                 Value<String> stage = const Value.absent(),
                 Value<String> message = const Value.absent(),
                 Value<int> importedCount = const Value.absent(),
@@ -3050,6 +3113,7 @@ class $$TasksTableTableManager
                 connectionId: connectionId,
                 pathsJson: pathsJson,
                 mode: mode,
+                scrape: scrape,
                 stage: stage,
                 message: message,
                 importedCount: importedCount,
@@ -3069,6 +3133,7 @@ class $$TasksTableTableManager
                 required String connectionId,
                 required String pathsJson,
                 required String mode,
+                Value<bool> scrape = const Value.absent(),
                 required String stage,
                 required String message,
                 required int importedCount,
@@ -3086,6 +3151,7 @@ class $$TasksTableTableManager
                 connectionId: connectionId,
                 pathsJson: pathsJson,
                 mode: mode,
+                scrape: scrape,
                 stage: stage,
                 message: message,
                 importedCount: importedCount,

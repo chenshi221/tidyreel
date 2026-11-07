@@ -411,6 +411,18 @@ class AnchorRecognizer implements Recognizer {
     final show = match != null && kind == MediaKind.episode
         ? await metadata.show(match!.tmdbId)
         : null;
+    // No zh-CN title: show() / movie() may have found a Chinese one.
+    if (match case final m? when !hasHan(m.title)) {
+      Candidate? detail = show?.info;
+      if (m.kind == MediaKind.movie) {
+        try {
+          detail = (await metadata.movie(m.tmdbId)).info;
+        } on Object {
+          // Keep the search title.
+        }
+      }
+      match = chineseNamed(m, detail);
+    }
     return _Lookup(d, vids, kind, anchor, year, match, score, show);
   }
 

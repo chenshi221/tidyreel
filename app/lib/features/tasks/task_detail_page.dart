@@ -109,6 +109,13 @@ class TaskDetailPage extends ConsumerWidget {
             icon: const Icon(CupertinoIcons.arrow_clockwise, size: 13),
             label: const Text('重试失败项'),
           ),
+        if (task != null && canRetry(task))
+          OutlinedButton.icon(
+            key: const ValueKey('retry-task'),
+            onPressed: () => retryTask(context, ref, id),
+            icon: const Icon(CupertinoIcons.arrow_clockwise, size: 13),
+            label: const Text('重新识别'),
+          ),
         if (canUndo)
           OutlinedButton.icon(
             onPressed: () => confirmUndo(context, ref, id),

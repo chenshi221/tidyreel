@@ -30,6 +30,7 @@ Future<void> applyPlan(RenamePlan plan, MemoryStorageBackend be) async {
       case OpKind.mkdir:
         await be.mkdirs(op.dst);
       case OpKind.relocate:
+        if (op.src == op.dst) continue;
         final srcDir = p.posix.dirname(op.src);
         final dstDir = p.posix.dirname(op.dst);
         if (srcDir == dstDir) {

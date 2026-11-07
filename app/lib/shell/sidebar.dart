@@ -176,13 +176,13 @@ class Sidebar extends ConsumerWidget {
                 item(
                   '/sources',
                   CupertinoIcons.folder,
-                  CupertinoIcons.folder_fill,
+                  CupertinoIcons.folder,
                   '来源',
                 ),
                 item(
                   '/tasks',
                   CupertinoIcons.square_list,
-                  CupertinoIcons.square_list_fill,
+                  CupertinoIcons.square_list,
                   '任务',
                   badge: pending,
                 ),
@@ -230,21 +230,11 @@ class Sidebar extends ConsumerWidget {
                     ),
                   ),
                 if (!collapsed)
-                  _Summary(
-                    waiting: pending,
-                    done: tasks
-                        .where(
-                          (t) =>
-                              t.stage == TaskStage.done ||
-                              t.stage == TaskStage.partiallyFailed,
-                        )
-                        .length,
-                    onTap: () => go('/tasks'),
-                  ),
+                  Divider(height: 17, thickness: hairline, color: p.line),
                 item(
                   '/settings',
                   CupertinoIcons.gear,
-                  CupertinoIcons.gear_solid,
+                  CupertinoIcons.gear,
                   '设置',
                 ),
               ],
@@ -316,20 +306,17 @@ class _NavItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
-    final iconW = Icon(icon, size: 15, color: selected ? p.text : p.textFaint);
+    final iconW = Icon(icon, size: 16, color: selected ? p.text : p.textMuted);
     final body = Hoverable(
       onTap: onTap,
       builder: (context, hover) => AnimatedContainer(
         duration: const Duration(milliseconds: 100),
-        height: 32,
+        height: 34,
         margin: const EdgeInsets.only(bottom: 2),
-        padding: EdgeInsets.symmetric(horizontal: collapsed ? 9 : 12),
+        padding: EdgeInsets.symmetric(horizontal: collapsed ? 9 : 10),
         decoration: BoxDecoration(
-          // Selection is the ink itself; only the collapsed rail gets a fill.
-          color: selected && collapsed
-              ? p.selected
-              : (hover ? p.hover : Colors.transparent),
-          borderRadius: BorderRadius.circular(Radii.lg),
+          color: selected ? p.selected : (hover ? p.hover : Colors.transparent),
+          borderRadius: BorderRadius.circular(Radii.md + 2),
         ),
         child: collapsed
             ? Center(
@@ -345,7 +332,7 @@ class _NavItem extends StatelessWidget {
                     child: Text(
                       label,
                       style: TextStyle(
-                        fontSize: 14,
+                        fontSize: TypeScale.body,
                         color: selected ? p.text : p.textMuted,
                         fontWeight: selected
                             ? FontWeight.w500
@@ -505,60 +492,6 @@ class _FavItem extends StatelessWidget {
               ),
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Two counts at the foot of the sidebar: what waits for you, what's done.
-class _Summary extends StatelessWidget {
-  final int waiting;
-  final int done;
-  final VoidCallback onTap;
-
-  const _Summary({
-    required this.waiting,
-    required this.done,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final p = Palette.of(context);
-    Widget stat(String value, String label, {bool hot = false}) => Expanded(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w500,
-              color: hot ? p.accent : p.text,
-              fontFeatures: const [FontFeature.tabularFigures()],
-            ),
-          ),
-          Text(label, style: TextStyle(fontSize: 11, color: p.textFaint)),
-        ],
-      ),
-    );
-    return Hoverable(
-      key: const ValueKey('side-summary'),
-      onTap: onTap,
-      builder: (context, hover) => Container(
-        margin: const EdgeInsets.fromLTRB(0, 8, 0, 6),
-        padding: const EdgeInsets.fromLTRB(12, 9, 12, 9),
-        decoration: BoxDecoration(
-          color: hover ? p.hover : p.panel,
-          borderRadius: BorderRadius.circular(Radii.lg),
-          border: Border.all(color: p.line, width: hairline),
-        ),
-        child: Row(
-          children: [
-            stat('$waiting', '待确认', hot: waiting > 0),
-            stat('$done', '已整理'),
-          ],
         ),
       ),
     );

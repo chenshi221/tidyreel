@@ -27,7 +27,7 @@ class SourcesPage extends ConsumerWidget {
       for (final t in ref.watch(tasksProvider).value ?? const <TaskSummary>[])
         if (t.stage == TaskStage.done || t.stage == TaskStage.partiallyFailed)
           t,
-    ].take(8).toList();
+    ].take(3).toList();
     final favorites = [
       for (final c in conns)
         for (final f in c.favorites) (conn: c, path: f),
@@ -107,19 +107,16 @@ class SourcesPage extends ConsumerWidget {
           ),
         if (done.isNotEmpty) ...[
           label('最近整理', CupertinoIcons.clock),
-          SizedBox(
-            // Poster 132 + gap 6 + two lines, with room for CJK line heights.
-            height: 182,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              children: [
-                for (var i = 0; i < done.length; i++)
-                  FadeIn(
-                    index: i,
-                    child: _RecentTask(task: done[i]),
-                  ),
-              ],
-            ),
+          Wrap(
+            spacing: 20,
+            runSpacing: 16,
+            children: [
+              for (var i = 0; i < done.length; i++)
+                FadeIn(
+                  index: i,
+                  child: _RecentTask(task: done[i]),
+                ),
+            ],
           ),
         ],
       ],
@@ -200,12 +197,7 @@ class _ConnectionRow extends ConsumerWidget {
       null => ('检测中', p.textFaint),
     };
     final failed = value != null && value.status != ConnStatus.connected;
-    final meta = [
-      connectionTypeLabel(c.type),
-      c.endpoint,
-      if (normalizeDir(c.startDir) != '/') '路径 ${normalizeDir(c.startDir)}',
-      if (c.libraryRoot != null) '媒体库 ${c.libraryRoot}',
-    ].join('  ·  ');
+    final start = normalizeDir(c.startDir);
 
     return ContextMenuArea(
       items: () => [
@@ -247,12 +239,7 @@ class _ConnectionRow extends ConsumerWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              IconTile(
-                connectionTypeIcon(c.type),
-                size: 36,
-                color: Colors.white,
-                background: connectionTypeColor(c.type),
-              ),
+              IconTile(connectionTypeIcon(c.type), size: 40, outlined: true),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(
@@ -263,7 +250,8 @@ class _ConnectionRow extends ConsumerWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontSize: 16,
+                        fontSize: TypeScale.headline,
+                        fontWeight: FontWeight.w500,
                         color: p.text,
                         decoration: hover
                             ? TextDecoration.underline
@@ -271,17 +259,30 @@ class _ConnectionRow extends ConsumerWidget {
                         decorationColor: p.textFaint,
                       ),
                     ),
-                    const SizedBox(height: 3),
-                    Text(
-                      meta,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 12, color: p.textFaint),
+                    const SizedBox(height: 5),
+                    Row(
+                      children: [
+                        _TypeTag(connectionTypeLabel(c.type)),
+                        const SizedBox(width: 10),
+                        Flexible(child: _Meta(null, c.endpoint, mono: true)),
+                        if (start != '/') ...[
+                          const SizedBox(width: 14),
+                          Flexible(child: _Meta(CupertinoIcons.folder, start)),
+                        ],
+                        if (c.libraryRoot != null) ...[
+                          const SizedBox(width: 14),
+                          Flexible(
+                            child: _Meta(
+                              CupertinoIcons.tray_arrow_down,
+                              c.libraryRoot!,
+                              tooltip: '媒体库',
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
-                    const SizedBox(height: 2),
-                    StatusPill(label: label, color: color, busy: value == null),
                     if (failed && value.detail != null) ...[
-                      const SizedBox(height: 2),
+                      const SizedBox(height: 4),
                       Text(
                         value.detail!,
                         maxLines: 3,
@@ -292,6 +293,8 @@ class _ConnectionRow extends ConsumerWidget {
                   ],
                 ),
               ),
+              const SizedBox(width: 12),
+              StatusPill(label: label, color: color, busy: value == null),
               if (failed)
                 IconButton(
                   tooltip: '重新检测',
@@ -373,7 +376,7 @@ class _FavoriteRow extends ConsumerWidget {
           padding: const EdgeInsets.symmetric(vertical: 9),
           child: Row(
             children: [
-              IconTile(CupertinoIcons.star_fill, size: 36, color: p.textMuted),
+              IconTile(CupertinoIcons.star, size: 40, outlined: true),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(
@@ -384,7 +387,8 @@ class _FavoriteRow extends ConsumerWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontSize: 16,
+                        fontSize: TypeScale.headline,
+                        fontWeight: FontWeight.w500,
                         color: p.text,
                         decoration: hover
                             ? TextDecoration.underline
@@ -392,12 +396,13 @@ class _FavoriteRow extends ConsumerWidget {
                         decorationColor: p.textFaint,
                       ),
                     ),
-                    const SizedBox(height: 3),
-                    Text(
-                      '${connection.name}  ·  $path',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 12, color: p.textFaint),
+                    const SizedBox(height: 5),
+                    Row(
+                      children: [
+                        _TypeTag(connection.name),
+                        const SizedBox(width: 10),
+                        Flexible(child: _Meta(null, path, mono: true)),
+                      ],
                     ),
                   ],
                 ),
@@ -415,55 +420,130 @@ class _FavoriteRow extends ConsumerWidget {
   }
 }
 
+/// The latest finished task as one large poster (its first work).
 class _RecentTask extends ConsumerWidget {
   final TaskSummary task;
 
   const _RecentTask({required this.task});
 
+  static const _w = 148.0;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final p = Palette.of(context);
     final works = ref.watch(taskWorksProvider(task.id)).value ?? const [];
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        for (final w in works.take(4))
-          Padding(
-            padding: const EdgeInsets.only(right: 14),
-            child: Hoverable(
-              key: ValueKey('recent ${task.id.value} ${w.tmdbId}'),
-              onTap: () => context.go('/tasks/${task.id.value}?from=sources'),
-              builder: (context, hover) => AnimatedSlide(
-                duration: const Duration(milliseconds: 160),
-                offset: Offset(0, hover ? -0.02 : 0),
-                child: SizedBox(
-                  width: 88,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Poster(posterPath: w.posterPath, width: 88, height: 132),
-                      const SizedBox(height: 6),
-                      HoverMarquee(
-                        text: w.title,
-                        active: hover,
-                        style: TextStyle(
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w500,
-                          color: hover ? p.text : p.textMuted,
-                        ),
-                      ),
-                      if (w.year != null)
-                        Text(
-                          '${w.year}',
-                          style: TextStyle(fontSize: 11, color: p.textFaint),
-                        ),
-                    ],
-                  ),
+    final w = works.firstOrNull;
+    final title = w == null
+        ? task.paths.first.split('/').where((s) => s.isNotEmpty).lastOrNull ??
+              '根目录'
+        : works.length > 1
+        ? '${w.title} 等 ${works.length} 部'
+        : w.title;
+    return Hoverable(
+      key: ValueKey('recent ${task.id.value}'),
+      onTap: () => context.go('/tasks/${task.id.value}?from=sources'),
+      builder: (context, hover) => AnimatedSlide(
+        duration: const Duration(milliseconds: 160),
+        offset: Offset(0, hover ? -0.015 : 0),
+        child: SizedBox(
+          width: _w,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Poster(
+                posterPath: w?.posterPath,
+                icon: CupertinoIcons.folder,
+                width: _w,
+                height: _w * 1.5,
+                radius: Radii.lg,
+              ),
+              const SizedBox(height: 10),
+              HoverMarquee(
+                text: title,
+                active: hover,
+                style: TextStyle(
+                  fontSize: TypeScale.body,
+                  fontWeight: FontWeight.w500,
+                  color: p.text,
                 ),
               ),
+              const SizedBox(height: 2),
+              Text(
+                [
+                  if (w?.year != null) '${w!.year}',
+                  '${task.videoCount} 个视频',
+                ].join('  '),
+                style: TextStyle(fontSize: TypeScale.small, color: p.textFaint),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Connection type (or owning connection) as a small framed tag.
+class _TypeTag extends StatelessWidget {
+  final String text;
+
+  const _TypeTag(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(Radii.sm),
+        border: Border.all(color: p.lineStrong, width: hairline),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(fontSize: TypeScale.small, color: p.textMuted),
+      ),
+    );
+  }
+}
+
+/// One fact on the second line: an optional glyph and the value. Addresses and
+/// paths use the mono face so they read as data.
+class _Meta extends StatelessWidget {
+  final IconData? icon;
+  final String text;
+  final bool mono;
+  final String? tooltip;
+
+  const _Meta(this.icon, this.text, {this.mono = false, this.tooltip});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    final row = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (icon != null) ...[
+          Icon(icon, size: 12, color: p.textFaint),
+          const SizedBox(width: 4),
+        ],
+        Flexible(
+          child: Text(
+            text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: TypeScale.small,
+              color: p.textMuted,
+              fontFamily: mono ? monoFamily : null,
+              // Paths hold CJK names; the mono face has no such glyphs.
+              fontFamilyFallback: mono
+                  ? [...monoFallback, ...sansFallback]
+                  : null,
             ),
           ),
+        ),
       ],
     );
+    return tooltip == null ? row : Tooltip(message: tooltip, child: row);
   }
 }

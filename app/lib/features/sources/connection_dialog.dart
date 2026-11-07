@@ -16,17 +16,10 @@ String connectionTypeLabel(ConnectionType t) => switch (t) {
   ConnectionType.local => '本地',
 };
 
-Color connectionTypeColor(ConnectionType t) => switch (t) {
-  ConnectionType.alist => const Color(0xFF3E7CB1),
-  ConnectionType.webdav => const Color(0xFF8B5FBF),
-  ConnectionType.smb => const Color(0xFFD08A2E),
-  ConnectionType.local => const Color(0xFF5A9A5E),
-};
-
 IconData connectionTypeIcon(ConnectionType t) => switch (t) {
   ConnectionType.alist => CupertinoIcons.cloud,
   ConnectionType.webdav => CupertinoIcons.globe,
-  ConnectionType.smb => CupertinoIcons.archivebox,
+  ConnectionType.smb => CupertinoIcons.square_stack_3d_up,
   ConnectionType.local => CupertinoIcons.desktopcomputer,
 };
 

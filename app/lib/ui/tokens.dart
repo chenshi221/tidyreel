@@ -64,58 +64,60 @@ class Palette extends ThemeExtension<Palette> {
     required this.contour,
   });
 
+  // Cool 月白 paper and 墨 text; colours from 中国传统色. Greys lean neither
+  // blue nor yellow so the single 胭脂 accent carries the warmth.
   static const light = Palette(
-    canvas: Color(0xFFF1EFE7),
-    sidebar: Color(0xFFEAE7DE),
-    panel: Color(0xFFF8F7F2),
-    hover: Color(0x0D1D1C1A),
-    selected: Color(0x171D1C1A),
-    line: Color(0xFFE0DCD1),
-    lineStrong: Color(0xFFC4BFB2),
-    text: Color(0xFF1D1C1A),
-    textMuted: Color(0xFF69675F),
-    textFaint: Color(0xFF9D9A90),
-    accent: Color(0xFFC96442),
-    accentSoft: Color(0xFFF4E6DD),
+    canvas: Color(0xFFF5F6F5),
+    sidebar: Color(0xFFEDEFEE),
+    panel: Color(0xFFFCFCFB),
+    hover: Color(0x0B1C2023),
+    selected: Color(0x141C2023),
+    line: Color(0xFFE3E6E5),
+    lineStrong: Color(0xFFC9CECD),
+    text: Color(0xFF1C2023),
+    textMuted: Color(0xFF5F6669),
+    textFaint: Color(0xFF969C9F),
+    accent: Color(0xFF9D2933),
+    accentSoft: Color(0xFFF3E4E5),
     onAccent: Color(0xFFFFFFFF),
-    success: Color(0xFF5B8A66),
-    warning: Color(0xFFB08537),
-    danger: Color(0xFFB8564C),
+    success: Color(0xFF3F7A5C),
+    warning: Color(0xFFA9761F),
+    danger: Color(0xFFA8452F),
     tones: [
-      Color(0xFFE4E1D6),
-      Color(0xFFD3CFC3),
-      Color(0xFF9E9B91),
-      Color(0xFF74726A),
-      Color(0xFF2D2C29),
+      Color(0xFFE4E7E6),
+      Color(0xFFD0D5D4),
+      Color(0xFF9AA1A2),
+      Color(0xFF6D7477),
+      Color(0xFF2A2F32),
     ],
-    contour: Color(0x611D1C1A),
+    contour: Color(0x611C2023),
   );
 
   static const dark = Palette(
-    canvas: Color(0xFF1B1B1A),
-    sidebar: Color(0xFF171716),
-    panel: Color(0xFF232322),
+    canvas: Color(0xFF17191A),
+    sidebar: Color(0xFF131516),
+    panel: Color(0xFF1E2122),
     hover: Color(0x0FFFFFFF),
     selected: Color(0x1AFFFFFF),
-    line: Color(0xFF2F2E2C),
-    lineStrong: Color(0xFF4A4945),
-    text: Color(0xFFEBE9E2),
-    textMuted: Color(0xFFA4A29A),
-    textFaint: Color(0xFF75736D),
-    accent: Color(0xFFDB7A59),
-    accentSoft: Color(0xFF3D2D27),
+    line: Color(0xFF2B2F31),
+    lineStrong: Color(0xFF454A4D),
+    text: Color(0xFFE8EAEA),
+    textMuted: Color(0xFFA2A8AB),
+    textFaint: Color(0xFF6F7579),
+    accent: Color(0xFFD0646C),
+    accentSoft: Color(0xFF3A2427),
     onAccent: Color(0xFFFFFFFF),
-    success: Color(0xFF86AE8F),
-    warning: Color(0xFFD2A65A),
-    danger: Color(0xFFD9867D),
+    success: Color(0xFF7FB197),
+    warning: Color(0xFFD6A55A),
+    danger: Color(0xFFD97B66),
     tones: [
-      Color(0xFFE6E3D8),
-      Color(0xFF908E87),
-      Color(0xFF4A4946),
-      Color(0xFF353533),
-      Color(0xFF2A2A28),
+      Color(0xFFE4E7E6),
+      Color(0xFF8E9496),
+      Color(0xFF494E51),
+      Color(0xFF34383A),
+      Color(0xFF292D2F),
     ],
-    contour: Color(0x66EBE9E2),
+    contour: Color(0x66E8EAEA),
   );
 
   static Palette of(BuildContext context) =>
@@ -209,14 +211,15 @@ const sansFallback = [
 const monoFamily = 'Menlo';
 const monoFallback = ['SF Mono', 'Consolas', 'monospace'];
 
-/// macOS type scale (points).
+/// macOS type scale (points). Pages use title / headline / body / small only;
+/// display is for the one hero number.
 abstract final class TypeScale {
   /// Hero numbers (repository size, pending count): large and thin.
   static const display = 64.0;
-  static const title = 24.0;
+  static const title = 26.0;
   static const headline = 15.0;
   static const body = 13.0;
-  static const small = 11.5;
+  static const small = 12.0;
 }
 
 /// Hairline width: one physical pixel on Retina.

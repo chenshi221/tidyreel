@@ -147,8 +147,9 @@ class DefaultTaskManager implements TaskManager {
   Future<TaskId> submit(
     ConnectionId connection,
     List<String> paths,
-    OrganizeMode mode,
-  ) async {
+    OrganizeMode mode, {
+    bool scrape = false,
+  }) async {
     await _ready;
     final cleanPaths = [
       for (final raw in paths)
@@ -163,6 +164,7 @@ class DefaultTaskManager implements TaskManager {
         connection: connection,
         paths: List.unmodifiable(cleanPaths),
         mode: mode,
+        scrape: scrape,
         stage: TaskStage.importing,
         message: '正在导入文件',
         createdAt: DateTime.now(),
@@ -285,6 +287,30 @@ class DefaultTaskManager implements TaskManager {
     } finally {
       t.busy = false;
     }
+  }
+
+  @override
+  Future<void> retry(TaskId id) async {
+    final t = await _get(id);
+    if (!canRetry(t.summary)) throw StateError('这个任务不能重试');
+    if (t.busy) throw StateError('任务正在处理中');
+    t
+      ..cancelled = false
+      ..scan = null
+      ..decisions = const {}
+      ..plan = null;
+    await _set(
+      t,
+      _with(
+        t.summary,
+        stage: TaskStage.importing,
+        message: '正在导入文件',
+        imported: 0,
+        progress: () => null,
+      ),
+      force: true,
+    );
+    unawaited(_pipeline(t));
   }
 
   @override
@@ -502,7 +528,17 @@ class DefaultTaskManager implements TaskManager {
   /// Planner output plus a conflict check against what already exists at the targets.
   Future<RenamePlan> _plan(_Task t) async {
     final s = t.summary;
-    final opts = options(s.connection, s.mode);
+    final o = options(s.connection, s.mode);
+    final opts = !s.scrape
+        ? o
+        : PlanOptions(
+            mode: o.mode,
+            libraryRoot: o.libraryRoot,
+            naming: o.naming,
+            deleteJunk: o.deleteJunk,
+            confidenceThreshold: o.confidenceThreshold,
+            scrape: true,
+          );
     final be = backendFor(s.connection);
     // What's already in each target folder: for conflicts (never overwrite),
     // and so a show folder already there is merged into. Planning again can
@@ -737,6 +773,7 @@ class DefaultTaskManager implements TaskManager {
     connection: s.connection,
     paths: s.paths,
     mode: mode ?? s.mode,
+    scrape: s.scrape,
     stage: stage ?? s.stage,
     message: message ?? s.message,
     importedCount: imported ?? s.importedCount,

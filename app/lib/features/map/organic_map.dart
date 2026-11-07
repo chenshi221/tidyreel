@@ -485,8 +485,8 @@ class _MapPainter extends CustomPainter {
     final ink = fill == null
         ? p.text
         : fill.computeLuminance() > 0.33
-        ? const Color(0xFF1D1C1A)
-        : const Color(0xFFF1EFE7);
+        ? Palette.light.text
+        : Palette.light.canvas;
     final c = polygonCentroid(b.polygon);
     // Smoothing eats the corners; the middle of each chord is what's left.
     final width = chordWidth(b.polygon, c.dy) * 0.78;

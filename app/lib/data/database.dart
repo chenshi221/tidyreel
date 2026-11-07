@@ -66,6 +66,7 @@ class Tasks extends Table {
   TextColumn get connectionId => text()();
   TextColumn get pathsJson => text()();
   TextColumn get mode => text()();
+  BoolColumn get scrape => boolean().withDefault(const Constant(false))();
   TextColumn get stage => text()();
   TextColumn get message => text()();
   IntColumn get importedCount => integer()();
@@ -100,7 +101,7 @@ class AppDatabase extends _$AppDatabase {
   }
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -110,6 +111,9 @@ class AppDatabase extends _$AppDatabase {
     onUpgrade: (m, from, to) async {
       if (from < 2) {
         await m.createIndex(historyRecordsDstStatus);
+      }
+      if (from < 3) {
+        await m.addColumn(tasks, tasks.scrape);
       }
     },
   );

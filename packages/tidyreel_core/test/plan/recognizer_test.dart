@@ -18,19 +18,23 @@ class _Wrong extends FakeMetadataProvider {
 
 /// TMDB knows the show only by an English title plus an alias.
 class _Aliased extends FakeMetadataProvider {
+  static const _slow = Candidate(
+    tmdbId: 95480,
+    kind: MediaKind.episode,
+    title: 'Slow Horses',
+    aliases: ['流人'],
+  );
+
+  @override
+  Future<ShowDetail> show(int tmdbId) async =>
+      const ShowDetail(info: _slow, seasons: []);
+
   @override
   Future<List<Candidate>> search(
     String query, {
     MediaKind? kind,
     int? year,
-  }) async => [
-    Candidate(
-      tmdbId: Demo.friends.tmdbId,
-      kind: MediaKind.episode,
-      title: 'Slow Horses',
-      aliases: const ['流人'],
-    ),
-  ];
+  }) async => [_slow];
 }
 
 class _Alt implements AltTitleSource {

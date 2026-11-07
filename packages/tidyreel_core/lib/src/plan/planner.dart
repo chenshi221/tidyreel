@@ -326,8 +326,17 @@ class _PlanBuilder {
 
     // --- folders
     final groupSelected = items.any((it) => it.selected);
+    // A movie without a zh-CN title: movie() may find a Chinese one.
+    Candidate? movieInfo;
+    if (!isTv && !_han.hasMatch(match.title)) {
+      try {
+        movieInfo = (await metadata.movie(match.tmdbId)).info;
+      } on Object {
+        // Keep the search title.
+      }
+    }
     final titleVars = _titleVars(
-      _chineseNamed(match, show),
+      chineseNamed(match, show?.info ?? movieInfo),
       naming,
       g.anchorTitle,
     );
@@ -814,8 +823,9 @@ class _PlanBuilder {
   /// Adds a relocate op for [src] (default: the item's video) to `item.dstDir/name`.
   void _emit(_Item it, String name, GroupId gid, {ScanFile? source}) {
     final src = source ?? it.file;
+    // Same name still gets an op: running it records the file as organized
+    // (the executor treats src == dst as done, and undo as a no-op).
     final dst = joinPath(it.dstDir, name);
-    if (src.path == dst) return;
     fileOps.add(
       RenameOp(
         id: OpId('r-${stableHash(src.path)}'),
@@ -899,29 +909,6 @@ class _PlanBuilder {
   }
 
   // ---- helpers ------------------------------------------------------------
-
-  /// TMDB has no Chinese name for some shows, and show() then falls back to a
-  /// Chinese alias: name the files with it ("流人", not "Slow Horses").
-  Candidate _chineseNamed(Candidate c, ShowDetail? show) {
-    final t = show?.info.title;
-    if (t == null || show!.info.tmdbId != c.tmdbId || t == c.title) return c;
-    if (_han.hasMatch(c.title) || !_han.hasMatch(t)) return c;
-    return Candidate(
-      tmdbId: c.tmdbId,
-      kind: c.kind,
-      title: t,
-      englishTitle: c.englishTitle ?? c.title,
-      originalTitle: c.originalTitle,
-      year: c.year,
-      posterPath: c.posterPath,
-      originCountry: c.originCountry,
-      voteAverage: c.voteAverage,
-      overview: c.overview,
-      backdropPath: c.backdropPath,
-      genres: c.genres,
-      aliases: c.aliases,
-    );
-  }
 
   /// [local] is the title already on disk: when TMDB's differs only in
   /// punctuation ("全金属狂潮" vs "全金属狂潮！"), keep it rather than rename
