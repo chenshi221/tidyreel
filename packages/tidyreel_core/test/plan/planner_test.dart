@@ -662,6 +662,94 @@ void main() {
       expect(fileOps(strict).single.selected, isFalse);
     });
 
+    for (final kind in [MediaKind.movie, MediaKind.episode]) {
+      for (final weak in ['parse', 'match', 'both']) {
+        test(
+          '${kind.name}: manually selecting a weak $weak keeps warnings',
+          () async {
+            final scan = scanOf([
+              MediaGroup(
+                id: const GroupId('g1'),
+                kind: kind,
+                anchorTitle: '测试',
+                rootDir: root,
+                files: [
+                  for (var n = 1; n <= 2; n++)
+                    video(
+                      '$root/$n.mkv',
+                      kind: kind,
+                      season: kind == MediaKind.episode ? 1 : null,
+                      episode: kind == MediaKind.episode ? n : null,
+                      confidence: weak == 'match' ? 0.9 : 0.3,
+                    ),
+                ],
+                match: kind == MediaKind.movie
+                    ? Demo.inception
+                    : Demo.dorohedoro,
+                matchScore: weak == 'parse' ? 0.95 : 0.3,
+              ),
+            ]);
+            final automatic = await plan(scan);
+            expect(automatic.ops.every((o) => !o.selected), isTrue);
+
+            const decisions = {
+              GroupId('g1'): GroupDecision(
+                overrides: {'$root/1.mkv': FileOverride()},
+              ),
+            };
+            final confirmed = await plan(scan, decisions: decisions);
+            final selected = opFor(confirmed, '$root/1.mkv');
+            expect(selected.selected, isTrue);
+            expect(selected.warning, opFor(automatic, '$root/1.mkv').warning);
+            expect(selected.warning, contains('置信度较低'));
+            expect(opFor(confirmed, '$root/2.mkv').selected, isFalse);
+
+            final collision = await plan(
+              scan,
+              decisions: decisions,
+              existing: {selected.dst},
+            );
+            expect(collision.conflicts, isNotEmpty);
+
+            final ignored = await plan(
+              scan,
+              decisions: {
+                const GroupId('g1'): const GroupDecision(
+                  overrides: {'$root/1.mkv': FileOverride(ignore: true)},
+                ),
+              },
+            );
+            expect(ignored.ops.any((o) => o.selected), isFalse);
+          },
+        );
+      }
+    }
+
+    test(
+      'manual selection does not accept an invalid episode number',
+      () async {
+        final p = await plan(
+          scanOf([
+            tvGroup([
+              video('$root/a.mkv', season: 1, episode: 1, confidence: 0.3),
+              other('$root/a.srt', FileRole.subtitle),
+            ]),
+          ]),
+          decisions: {
+            const GroupId('g1'): const GroupDecision(
+              episodeOffset: -1,
+              overrides: {
+                '$root/a.mkv': FileOverride(),
+                '$root/a.srt': FileOverride(),
+              },
+            ),
+          },
+        );
+        expect(fileOps(p).every((o) => !o.selected), isTrue);
+        expect(opFor(p, '$root/a.mkv').warning, contains('集号无效'));
+      },
+    );
+
     test(
       'a weak group match makes its rows unselected unless the user picked it',
       () async {
@@ -678,6 +766,52 @@ void main() {
         expect(fileOps(picked).single.selected, isTrue);
       },
     );
+
+    for (final role in [FileRole.subtitle, FileRole.sidecar]) {
+      test(
+        '${role.name} follows the video unless explicitly selected or ignored',
+        () async {
+          const videoPath = '$root/a.mkv';
+          final companionPath =
+              '$root/a.${role == FileRole.subtitle ? 'srt' : 'jpg'}';
+          final scan = scanOf([
+            tvGroup([
+              video(videoPath, season: 1, episode: 1, confidence: 0.3),
+              other(companionPath, role),
+            ]),
+          ]);
+          Future<RenamePlan> withOverrides(
+            Map<String, FileOverride> overrides,
+          ) => plan(
+            scan,
+            decisions: {
+              const GroupId('g1'): GroupDecision(overrides: overrides),
+            },
+          );
+          expect(opFor(await plan(scan), companionPath).selected, isFalse);
+          final followed = await withOverrides({
+            videoPath: const FileOverride(),
+          });
+          expect(opFor(followed, companionPath).selected, isTrue);
+          final ignored = await withOverrides({
+            videoPath: const FileOverride(),
+            companionPath: const FileOverride(ignore: true),
+          });
+          expect(ignored.ops.any((o) => o.src == companionPath), isFalse);
+          final picked = await withOverrides({
+            companionPath: const FileOverride(),
+          });
+          expect(opFor(picked, videoPath).selected, isFalse);
+          expect(opFor(picked, companionPath).selected, isTrue);
+          expect(
+            picked.ops
+                .where((o) => o.kind == OpKind.mkdir)
+                .every((o) => o.selected),
+            isTrue,
+          );
+        },
+      );
+    }
 
     test('specials go to Season 00', () async {
       final p = await plan(

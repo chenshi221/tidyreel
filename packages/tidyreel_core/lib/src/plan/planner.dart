@@ -308,10 +308,13 @@ class _PlanBuilder {
       }
     }
     for (final it in items) {
-      // A download with more episodes than TMDB lists is still named (and
-      // selected); the warning stays visible.
+      // A per-file decision confirms confidence warnings, not invalid episodes.
+      final confirmed = d.overrides.containsKey(it.file.path);
       it.selected =
-          !lowMatch && it.warnings.every((w) => w == _overflowWarning);
+          (!lowMatch || confirmed) &&
+          it.warnings.every(
+            (w) => w == _overflowWarning || (confirmed && w == '识别置信度较低'),
+          );
       if (lowMatch) it.warnings.add('片名匹配置信度较低');
     }
 
@@ -525,6 +528,8 @@ class _PlanBuilder {
     final subTargets = <String, int>{};
     for (final f in g.files) {
       if (f.role != FileRole.subtitle && f.role != FileRole.sidecar) continue;
+      final override = d.overrides[f.path];
+      if (override?.ignore ?? false) continue;
       var m = matchVideo(f, [for (final it in items) it.file]);
       if (m == null && items.length == 1 && f.role == FileRole.subtitle) {
         m = FollowMatch(items.first.file, '');
@@ -545,7 +550,15 @@ class _PlanBuilder {
       } else {
         name = '${it.newBase}${m.remainder}.$ext';
       }
-      _emit(it, name, g.id, source: f);
+      final selected =
+          it.selected ||
+          (override != null &&
+              it.warnings.every(
+                (w) =>
+                    w == _overflowWarning || w == '识别置信度较低' || w == '片名匹配置信度较低',
+              ));
+      _mkdir(it.dstDir, g.id, selected: selected);
+      _emit(it, name, g.id, source: f, selected: selected);
     }
 
     if (opts.scrape) {
@@ -821,7 +834,13 @@ class _PlanBuilder {
   }
 
   /// Adds a relocate op for [src] (default: the item's video) to `item.dstDir/name`.
-  void _emit(_Item it, String name, GroupId gid, {ScanFile? source}) {
+  void _emit(
+    _Item it,
+    String name,
+    GroupId gid, {
+    ScanFile? source,
+    bool? selected,
+  }) {
     final src = source ?? it.file;
     // Same name still gets an op: running it records the file as organized
     // (the executor treats src == dst as done, and undo as a no-op).
@@ -834,7 +853,7 @@ class _PlanBuilder {
         src: src.path,
         dst: dst,
         group: gid,
-        selected: it.selected,
+        selected: selected ?? it.selected,
         warning: source == null && it.warnings.isNotEmpty
             ? it.warnings.join('；')
             : null,

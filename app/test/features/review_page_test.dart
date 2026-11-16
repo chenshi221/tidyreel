@@ -11,6 +11,35 @@ import 'helpers.dart';
 const _g1 = GroupId('g1');
 const _file = '/下载/完成/异兽魔都 2020 1080p/[Sub] Dorohedoro S01E01 [1080p].mkv';
 
+/// Uses the real planner so checkbox changes must affect executable operations.
+class _PlanningTaskManager extends FakeTaskManager {
+  final ScanResult scan;
+
+  _PlanningTaskManager(this.scan) : super(step: Duration.zero);
+
+  @override
+  Future<TaskReview> review(TaskId id) async {
+    final r = await super.review(id);
+    return TaskReview(
+      id: id,
+      scan: scan,
+      decisions: r.decisions,
+      preview: await DefaultPlanner(FakeMetadataProvider())
+          .build(scan, r.decisions, const PlanOptions()),
+    );
+  }
+
+  @override
+  Future<TaskReview> updateDecision(
+    TaskId id,
+    GroupId group,
+    GroupDecision decision,
+  ) async {
+    await super.updateDecision(id, group, decision);
+    return review(id);
+  }
+}
+
 Future<void> tapKey(WidgetTester tester, String key) async {
   final f = find.byKey(ValueKey(key));
   await tester.ensureVisible(f);
@@ -25,6 +54,75 @@ void main() {
     await pumpPage(tester, ReviewPage(taskId: id.value), tm: tm);
     return (tm, id);
   }
+
+  testWidgets(
+    'low confidence defaults off but a user can select and deselect it',
+    (tester) async {
+      const path = '/下载/盗梦空间 (2010)/2010.1080p.mkv';
+      final tm = _PlanningTaskManager(
+        const ScanResult(
+          connection: ConnectionId('demo-alist'),
+          roots: ['/下载/盗梦空间 (2010)'],
+          groups: [
+            MediaGroup(
+              id: _g1,
+              kind: MediaKind.movie,
+              anchorTitle: '盗梦空间',
+              rootDir: '/下载/盗梦空间 (2010)',
+              match: Demo.inception,
+              matchScore: 0.3,
+              files: [
+                ScanFile(
+                  path: path,
+                  name: '2010.1080p.mkv',
+                  size: 1,
+                  role: FileRole.video,
+                  parsed: ParsedName(kind: MediaKind.movie, confidence: 0.3),
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+      await pumpPage(tester, const SizedBox(), tm: tm);
+      final id = await submitAndWait(tester, tm);
+      await pumpPage(tester, ReviewPage(taskId: id.value), tm: tm);
+      final row = find
+          .ancestor(
+            of: find.text('2010.1080p.mkv'),
+            matching: find.byType(Hoverable),
+          )
+          .first;
+      final checkbox = find.descendant(
+        of: row,
+        matching: find.byType(Checkbox),
+      );
+      final execute = find.byKey(const ValueKey('execute-button'));
+
+      expect(tester.widget<Checkbox>(checkbox).value, isFalse);
+      expect(tester.widget<FilledButton>(execute).onPressed, isNull);
+      expect(find.text('0 处改动'), findsOneWidget);
+      expect(find.textContaining('识别置信度较低'), findsOneWidget);
+
+      await tester.tap(checkbox);
+      await tester.pumpAndSettle();
+      expect(tester.widget<Checkbox>(checkbox).value, isTrue);
+      expect(tester.widget<FilledButton>(execute).onPressed, isNotNull);
+      expect(find.text('1 处改动'), findsOneWidget);
+      expect(find.textContaining('识别置信度较低'), findsOneWidget);
+      expect((await tm.review(id)).preview.ops.single.selected, isTrue);
+
+      await tester.tap(checkbox);
+      await tester.pumpAndSettle();
+      expect(tester.widget<Checkbox>(checkbox).value, isFalse);
+      expect(tester.widget<FilledButton>(execute).onPressed, isNull);
+      expect(find.text('0 处改动'), findsOneWidget);
+      expect(
+        (await tm.review(id)).preview.ops.where((o) => o.selected),
+        isEmpty,
+      );
+    },
+  );
 
   testWidgets('shows groups, tabs, seasons and new names', (tester) async {
     await open(tester);
