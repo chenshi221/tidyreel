@@ -1524,9 +1524,9 @@ class DetailPane extends StatelessWidget {
       items: () => [
         MenuAction('修改对应关系…', () => onEdit(row), icon: CupertinoIcons.pencil),
         MenuAction(
-          row.ignored ? '恢复（参与整理）' : '忽略这个文件',
-          () => onCheck(row, row.ignored),
-          icon: row.ignored
+          row.selected ? '忽略这个文件' : '参与整理',
+          () => onCheck(row, !row.selected),
+          icon: !row.selected
               ? CupertinoIcons.arrow_uturn_left
               : CupertinoIcons.eye_slash,
         ),
@@ -1855,7 +1855,7 @@ class _EpisodeRow extends ConsumerWidget {
             SizedBox(
               width: 28,
               child: Checkbox(
-                value: !r.ignored,
+                value: r.selected,
                 onChanged: (v) => onCheck(v ?? false),
               ),
             ),
@@ -2012,7 +2012,7 @@ class _SidecarRow extends StatelessWidget {
             SizedBox(
               width: 28,
               child: Checkbox(
-                value: !r.ignored,
+                value: r.selected,
                 onChanged: (v) => onCheck(v ?? false),
               ),
             ),

@@ -95,6 +95,8 @@ class ReviewRow {
 
   bool get ignored => override?.ignore ?? false;
 
+  bool get selected => !ignored && (op?.selected ?? false);
+
   String? get newName =>
       op == null || op!.dst.isEmpty ? null : op!.dst.split('/').last;
 
