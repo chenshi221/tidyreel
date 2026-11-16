@@ -880,7 +880,7 @@ void main() {
       expect(await f.read('/poster.jpg'), [9, 9, 9]);
     });
 
-    test('resume conservatively recovers write op only when bytes match expected content', () async {
+    test('resume never claims identical pre-existing content or deletes it on undo', () async {
       final f = MemoryStorageBackend();
       await f.write('/tvshow.nfo', 'same-content'.codeUnits);
       final ex = executor(history);
@@ -893,7 +893,9 @@ void main() {
       );
       final b = await history.beginBatch(task, conn, [op]);
       await run(ex.resume(b, f));
-      expect((await history.records(b)).single.status, OpStatus.done);
+      expect((await history.records(b)).single.status, OpStatus.failed);
+      await run(ex.undo(b, f));
+      expect(await f.read('/tvshow.nfo'), 'same-content'.codeUnits);
     });
 
     test('blocked folder undo keeps folder done with error, preserves file mapping, and retries cleanly', () async {

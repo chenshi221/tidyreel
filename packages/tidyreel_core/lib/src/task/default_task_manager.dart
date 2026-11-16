@@ -207,6 +207,7 @@ class DefaultTaskManager implements TaskManager {
   ) async {
     final t = await _get(id);
     _requireStage(t, TaskStage.awaitingReview);
+    if (t.busy) throw StateError('任务正在处理中');
     final scan = t.scan;
     if (scan == null) throw StateError('任务尚未识别完成');
     final gen = ++t.editGen;
@@ -238,6 +239,7 @@ class DefaultTaskManager implements TaskManager {
   Future<TaskReview> setMode(TaskId id, OrganizeMode mode) async {
     final t = await _get(id);
     _requireStage(t, TaskStage.awaitingReview);
+    if (t.busy) throw StateError('任务正在处理中');
     final scan = t.scan;
     if (scan == null) throw StateError('任务尚未识别完成');
     if (t.summary.mode == mode && t.plan != null) return _review(t);

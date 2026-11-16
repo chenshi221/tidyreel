@@ -797,20 +797,17 @@ class DefaultExecutor implements Executor {
         if (resuming && !await be.exists(op.src)) return;
         await be.remove(p.posix.dirname(op.src), [p.posix.basename(op.src)]);
       case OpKind.write:
+        // A pending log cannot prove who created an existing file, even when
+        // its content matches. Keep it untouched and require manual resolution.
+        if (resuming && await be.exists(op.dst)) {
+          throw StorageException(
+            StorageErrorCode.alreadyExists,
+            '目标已存在，无法确认是否由本任务创建，已保留：${op.dst}',
+          );
+        }
         final bytes = op.src.startsWith(writeTextPrefix)
             ? utf8.encode(op.src.substring(writeTextPrefix.length))
             : await fetch(Uri.parse(op.src));
-        // After a crash the file may already be written; only accept it as ours
-        // if its bytes match what this op would write.
-        if (resuming && await be.exists(op.dst)) {
-          try {
-            final existing = await be.read(op.dst);
-            if (bytes.isNotEmpty && _bytesEqual(existing, bytes)) return;
-          } on Object {
-            // Unreadable or read failure: do not blindly claim ownership.
-          }
-          throw StorageException(StorageErrorCode.alreadyExists, op.dst);
-        }
         await be.write(op.dst, bytes);
       case OpKind.relocate:
         // The tmp name carries this op's id, so a file there is ours whatever
@@ -928,13 +925,5 @@ class DefaultExecutor implements Executor {
       },
     );
     return c.stream;
-  }
-
-  static bool _bytesEqual(List<int> a, List<int> b) {
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (a[i] != b[i]) return false;
-    }
-    return true;
   }
 }

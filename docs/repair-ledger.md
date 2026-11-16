@@ -10,7 +10,7 @@
 
 | 编号 | 问题与根因 | 修复方案与涉及位置 | 回归测试与验证结果 |
 |---|---|---|---|
-| 1 | 刮削 `OpKind.write` 失败后执行 `retryFailed`/`resume`，仅凭目标路径 `exists()` 误判为“本批次已写入”，随后撤销时会删除用户原有文件 | `packages/tidyreel_core/lib/src/exec/executor.dart`：`resume` 恢复 `OpKind.write` 时比对磁盘字节与 `op.content`（`_bytesEqual`），仅内容完全一致才视作本批次已写入；否则保守重放且不声明所有权 | `executor_test.dart`: `resume conservatively recovers write op only when bytes match expected content`（通过） |
+| 1 | 刮削 `OpKind.write` 失败后执行 `retryFailed`/`resume`，仅凭目标路径 `exists()` 误判为“本批次已写入”，随后撤销时会删除用户原有文件 | `packages/tidyreel_core/lib/src/exec/executor.dart`：`resume` 恢复 `OpKind.write` 时发现已存在目标保守报告冲突，不依据内容一致推断文件所有权，避免撤销删除同内容用户文件 | `executor_test.dart`: `resume never claims identical pre-existing content or deletes it on undo`（通过） |
 | 2 | 撤销 → 重新识别 → 再次执行后，`_batchOf()` 返回按时间/历史记录匹配到的旧批次，`TaskSummary.batch` 仍指向首次批次，导致二次撤销失败 | `packages/tidyreel_core/lib/src/task/default_task_manager.dart`：在 `_Task` 上记录 `priorBatches`（含历史旧/已撤销批次），`_batchOf(id, exclude: t.priorBatches, includeUndone: false)` 过滤旧批次并绑定本次新建批次 | `task_manager_test.dart`: `issue 2: undo -> retry -> run binds TaskSummary to the new batch and second undo works`（通过） |
 | 3 | 导入或识别阶段取消任务后立即点击重试，旧异步流程未感知代数变化，回写旧的扫描结果、决策或计划覆盖新任务状态 | `packages/tidyreel_core/lib/src/task/default_task_manager.dart`：引入任务级 `pipelineGen` 代际计数，`_pipeline`/`_listAll` 各异步点检查 `stale()`，过期流程立刻中止不写回状态 | `task_manager_test.dart`: `issue 3: cancelled recognizer from old run cannot overwrite retried task review`（通过） |
 | 4 | 目录重命名撤销时原目录已被占用，旧实现将目录 op 标记为 `skipped`，导致从 `activeFolders` 丢失后续文件路径映射且失去可重试撤销资格 | `packages/tidyreel_core/lib/src/exec/executor.dart`、`packages/tidyreel_core/lib/src/task/default_task_manager.dart`：被占用的目录撤销保留 `OpStatus.done` 并记录 `error`，后续文件还原按 `activeFolders` 正确映射当前目录；只要仍有未还原磁盘改动即保留部分失败/可重试撤销状态 | `executor_test.dart`: `blocked folder undo keeps folder done with error, preserves file mapping, and retries cleanly`；`task_manager_test.dart`: `issue 4: blocked folder undo keeps task non-undone and retryable until unblocked`（通过） |
@@ -49,3 +49,9 @@
   - `dart format --set-exit-if-changed lib test`：62 个文件格式无变更
   - `flutter analyze`：`No issues found!`
   - `flutter test`：`+114 ~3` 全部通过（3 个跳过的测试为原有 `smb_live_test.dart` / 条件测试）
+
+## 父级复核补充
+
+- 相同字节不代表本批次所有权；恢复时已存在但未记为完成的写入保留文件并报告冲突。崩溃发生在文件写入与历史落盘之间时，此类刮削文件需用户核对，不能自动认领或撤销删除。
+- 执行取得任务锁之后拒绝新决定与模式编辑，避免执行准备期间插入修改。
+- 设置变化触发 `ReviewPage` 预览刷新期间，禁用执行入口直到新预览返回。

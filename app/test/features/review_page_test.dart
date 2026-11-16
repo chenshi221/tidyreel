@@ -21,6 +21,7 @@ class _PlanningTaskManager extends FakeTaskManager {
   final ScanResult scan;
   final PlanOptions planOptions;
   Completer<void>? updateGate;
+  Completer<void>? reviewGate;
   var runCalls = 0;
 
   _PlanningTaskManager(this.scan, {this.planOptions = const PlanOptions()})
@@ -28,6 +29,7 @@ class _PlanningTaskManager extends FakeTaskManager {
 
   @override
   Future<TaskReview> review(TaskId id) async {
+    await reviewGate?.future;
     final r = await super.review(id);
     return TaskReview(
       id: id,
@@ -64,6 +66,41 @@ Future<void> tapKey(WidgetTester tester, String key) async {
 }
 
 void main() {
+  testWidgets(
+    'settings reload disables execution until refreshed preview arrives',
+    (tester) async {
+      final scan = Demo.review(
+        const TaskId('sample'),
+        const ConnectionId('demo-alist'),
+        '/d',
+      ).scan;
+      final tm = _PlanningTaskManager(scan);
+      await pumpPage(tester, const SizedBox(), tm: tm);
+      final id = await submitAndWait(tester, tm);
+      final (_, container) = await pumpPage(
+        tester,
+        ReviewPage(taskId: id.value),
+        tm: tm,
+      );
+      final gate = Completer<void>();
+      tm.reviewGate = gate;
+      final naming = container.read(namingProfileProvider);
+      container
+          .read(namingProfileProvider.notifier)
+          .set(
+            naming.copyWith(
+              tv: naming.tv.copyWith(bilingual: !naming.tv.bilingual),
+            ),
+          );
+      await tester.pump();
+      final execute = find.byKey(const ValueKey('execute-button'));
+      expect(tester.widget<FilledButton>(execute).onPressed, isNull);
+      gate.complete();
+      await tester.pumpAndSettle();
+      expect(tester.widget<FilledButton>(execute).onPressed, isNotNull);
+    },
+  );
+
   Future<(dynamic, TaskId)> open(WidgetTester tester) async {
     final (tm, _) = await pumpPage(tester, const SizedBox());
     final id = await submitAndWait(tester, tm);

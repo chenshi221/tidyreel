@@ -202,6 +202,43 @@ class LockedFolder extends MemoryStorageBackend {
 }
 
 void main() {
+  test(
+    'execution preparation rejects later decision and mode changes',
+    () async {
+      final rig = Rig(MemoryStorageBackend({'/in/Good/a.mkv': 1}));
+      final history = _GatedBatchHistory();
+      rig.tm = DefaultTaskManager(
+        backendFor: (_) => rig.fs,
+        recognizer: rig.recognizer,
+        planner: rig.planner,
+        executor: DefaultExecutor(history, minInterval: Duration.zero),
+        history: history,
+        store: rig.store,
+        options: (_, mode) => PlanOptions(mode: mode),
+      );
+      final id = await rig.submitReady();
+      history.hold = true;
+      final running = rig.tm.run(id);
+      await history.entered.future;
+      await expectLater(
+        rig.tm.updateDecision(
+          id,
+          const GroupId('g:/in/Good'),
+          const GroupDecision(selected: false),
+        ),
+        throwsStateError,
+      );
+      await expectLater(
+        rig.tm.setMode(id, OrganizeMode.moveToLibrary),
+        throwsStateError,
+      );
+      history.release.complete();
+      await running;
+      expect(rig.fs.files, ['/in/Good_done/ok_a.mkv']);
+      await rig.tm.dispose();
+    },
+  );
+
   test('a 刮削 task plans with scrape on and keeps the flag', () async {
     final rig = Rig(MemoryStorageBackend(library()));
     final id = await rig.tm.submit(
@@ -1003,5 +1040,20 @@ class _GatedPlanner implements Planner {
       await release.future;
     }
     return plan;
+  }
+}
+
+class _GatedBatchHistory extends MemoryHistoryStore {
+  bool hold = false;
+  final entered = Completer<void>();
+  final release = Completer<void>();
+
+  @override
+  Future<List<BatchSummary>> batches() async {
+    if (hold && !entered.isCompleted) {
+      entered.complete();
+      await release.future;
+    }
+    return super.batches();
   }
 }

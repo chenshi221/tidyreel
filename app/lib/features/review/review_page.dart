@@ -81,15 +81,23 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
   }
 
   Future<void> _load() async {
+    final task = _id;
+    final seq = ++_updateSeq;
+    setState(() => _pendingUpdates++);
     try {
-      final r = await _tm.review(_id);
-      if (!mounted) return;
+      final r = await _tm.review(task);
+      if (!mounted || task != _id || seq != _updateSeq) return;
       setState(() {
         _review = r;
+        _error = null;
         _selectFirstVisible();
       });
     } catch (e) {
-      if (mounted) setState(() => _error = e);
+      if (mounted && task == _id && seq == _updateSeq) {
+        setState(() => _error = e);
+      }
+    } finally {
+      if (mounted && task == _id) setState(() => _pendingUpdates--);
     }
   }
 
