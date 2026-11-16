@@ -848,4 +848,82 @@ void main() {
       expect(recs[const OpId('del-1')], OpStatus.skipped);
     },
   );
+
+  group('safety regressions', () {
+    test('retryFailed -> resume never claims a pre-existing user file on write collision', () async {
+      final f = MemoryStorageBackend();
+      await f.write('/poster.jpg', [9, 9, 9]);
+      final ex = DefaultExecutor(
+        history,
+        minInterval: Duration.zero,
+        fetch: (_) async => [1, 2, 3],
+      );
+      const op = RenameOp(
+        id: OpId('w-user'),
+        kind: OpKind.write,
+        phase: ExecPhase.cleanup,
+        src: 'https://example.invalid/poster.jpg',
+        dst: '/poster.jpg',
+      );
+      await run(ex.execute(task, conn, const RenamePlan(ops: [op]), f));
+      final b = await theBatch(history);
+      expect((await history.records(b)).single.status, OpStatus.failed);
+
+      // Simulate retryFailed marking failed op back to pending and resuming.
+      await history.mark(b, op.id, OpStatus.pending);
+      await run(ex.resume(b, f));
+      expect((await history.records(b)).single.status, OpStatus.failed);
+
+      // Undoing the batch must leave the unrelated user file intact.
+      await run(ex.undo(b, f));
+      expect(await f.exists('/poster.jpg'), isTrue);
+      expect(await f.read('/poster.jpg'), [9, 9, 9]);
+    });
+
+    test('resume conservatively recovers write op only when bytes match expected content', () async {
+      final f = MemoryStorageBackend();
+      await f.write('/tvshow.nfo', 'same-content'.codeUnits);
+      final ex = executor(history);
+      const op = RenameOp(
+        id: OpId('w-nfo'),
+        kind: OpKind.write,
+        phase: ExecPhase.cleanup,
+        src: 'text:same-content',
+        dst: '/tvshow.nfo',
+      );
+      final b = await history.beginBatch(task, conn, [op]);
+      await run(ex.resume(b, f));
+      expect((await history.records(b)).single.status, OpStatus.done);
+    });
+
+    test('blocked folder undo keeps folder done with error, preserves file mapping, and retries cleanly', () async {
+      final f = MemoryStorageBackend({'/old/a.mkv': 1});
+      final ops = [
+        reloc('/old/a.mkv', '/old/b.mkv'),
+        reloc('/old', '/new', phase: ExecPhase.folders),
+      ];
+      final ex = executor(history);
+      await run(ex.execute(task, conn, RenamePlan(ops: ops), f));
+      final b = await theBatch(history);
+
+      // Occupy original folder path so folder rename cannot undo yet.
+      f.addFile('/old/unrelated.txt', 2);
+      await run(ex.undo(b, f));
+
+      var byId = {for (final r in await history.records(b)) r.op.id: r};
+      expect(byId[ops[1].id]!.status, OpStatus.done);
+      expect(byId[ops[1].id]!.error, isNotNull);
+      expect(byId[ops[0].id]!.status, OpStatus.undone);
+      expect(await f.exists('/new/a.mkv'), isTrue);
+      expect(await f.exists('/old/unrelated.txt'), isTrue);
+
+      // Once the occupant is cleared, a second undo succeeds completely.
+      await f.remove('/', ['old']);
+      await run(ex.undo(b, f));
+      byId = {for (final r in await history.records(b)) r.op.id: r};
+      expect(byId[ops[0].id]!.status, OpStatus.undone);
+      expect(byId[ops[1].id]!.status, OpStatus.undone);
+      expect(f.files, ['/old/a.mkv']);
+    });
+  });
 }

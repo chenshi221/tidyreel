@@ -111,6 +111,26 @@ class PlanOptions {
     this.confidenceThreshold = 0.7,
     this.scrape = false,
   });
+
+  @override
+  bool operator ==(Object other) =>
+      other is PlanOptions &&
+      other.mode == mode &&
+      other.libraryRoot == libraryRoot &&
+      other.naming == naming &&
+      other.deleteJunk == deleteJunk &&
+      other.confidenceThreshold == confidenceThreshold &&
+      other.scrape == scrape;
+
+  @override
+  int get hashCode => Object.hash(
+    mode,
+    libraryRoot,
+    naming,
+    deleteJunk,
+    confidenceThreshold,
+    scrape,
+  );
 }
 
 /// Execution order: all [files] ops, then [folders], then [cleanup].

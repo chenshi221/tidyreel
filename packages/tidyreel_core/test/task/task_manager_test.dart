@@ -582,4 +582,426 @@ void main() {
       expect((await tm2.watchAll().first).single.stage, TaskStage.done);
     },
   );
+
+  group('lifecycle and plan regressions', () {
+    test('issue 2: undo -> retry -> run binds TaskSummary to the new batch and second undo works', () async {
+      final rig = Rig(MemoryStorageBackend({'/in/Good/a.mkv': 1}));
+      final id = await rig.submitReady(['/in/Good']);
+      await rig.tm.run(id);
+      await rig.waitFor(id, (t) => t.stage == TaskStage.done);
+      final first = (await rig.tm.watchAll().first).single.batch;
+
+      await rig.tm.undo(id);
+      await rig.tm.retry(id);
+      await rig.waitFor(id, (t) => t.stage == TaskStage.awaitingReview);
+      await rig.tm.run(id);
+      await rig.waitFor(id, (t) => t.stage == TaskStage.done);
+      final second = (await rig.tm.watchAll().first).single.batch;
+
+      expect(second, isNotNull);
+      expect(second, isNot(first));
+      expect(rig.fs.files, ['/in/Good_done/ok_a.mkv']);
+
+      await rig.tm.undo(id);
+      expect((await rig.tm.watchAll().first).single.stage, TaskStage.undone);
+      expect(rig.fs.files, ['/in/Good/a.mkv']);
+    });
+
+    test('issue 3: cancelled recognizer from old run cannot overwrite retried task review', () async {
+      final rig = Rig(MemoryStorageBackend({'/in/Good/a.mkv': 1}));
+      final gate = Completer<void>();
+      rig.recognizer.gate = gate;
+      final id = await rig.tm.submit(conn, ['/in'], OrganizeMode.inPlace);
+      await rig.waitFor(id, (t) => t.stage == TaskStage.recognizing);
+      while (rig.recognizer.calls == 0) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      await rig.tm.cancel(id);
+      rig.recognizer.gate = null;
+      rig.fs.addFile('/in/Good/b.mkv');
+      await rig.tm.retry(id);
+      await rig.waitFor(id, (t) => t.stage == TaskStage.awaitingReview);
+
+      gate.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      final scan = (await rig.tm.review(id)).scan;
+      expect(scan.groups.single.files.map((f) => f.path).toList(), [
+        '/in/Good/a.mkv',
+        '/in/Good/b.mkv',
+      ]);
+    });
+
+    test('issue 4: blocked folder undo keeps task non-undone and retryable until unblocked', () async {
+      final fs = MemoryStorageBackend({'/in/Good/a.mkv': 1});
+      final rig = Rig(fs);
+      final id = await rig.submitReady(['/in/Good']);
+      await rig.tm.run(id);
+      await rig.waitFor(id, (t) => t.stage == TaskStage.done);
+
+      fs.addFile('/in/Good/unrelated.txt', 2);
+      await rig.tm.undo(id);
+      final t = (await rig.tm.watchAll().first).single;
+      expect(t.stage, isNot(TaskStage.undone));
+      expect(t.message, contains('已撤销部分操作'));
+      expect(canUndo(t), isTrue);
+
+      await fs.remove('/in', ['Good']);
+      await rig.tm.undo(id);
+      expect((await rig.tm.watchAll().first).single.stage, TaskStage.undone);
+      expect(fs.files, ['/in/Good/a.mkv']);
+    });
+
+    test('issue 5: onlyConfident honors manually confirmed low-confidence video with its subtitle, and drops unconfirmed subtitles', () async {
+      const root = '/d/异兽魔都 2020';
+      const gidLow = GroupId('g-low');
+      const gidConfirmed = GroupId('g-ok');
+      final fs = MemoryStorageBackend({
+        '/unconf/a.mkv': 1,
+        '/unconf/a.srt': 1,
+        '$root/b.mkv': 1,
+        '$root/b.srt': 1,
+      });
+      final scan = ScanResult(
+        connection: conn,
+        roots: const ['/unconf', root],
+        groups: [
+          const MediaGroup(
+            id: gidLow,
+            kind: MediaKind.episode,
+            anchorTitle: '异兽魔都',
+            rootDir: '/unconf',
+            match: Demo.dorohedoro,
+            matchScore: 0.2,
+            files: [
+              ScanFile(
+                path: '/unconf/a.mkv',
+                name: 'a.mkv',
+                size: 1,
+                role: FileRole.video,
+                parsed: ParsedName(season: 1, episodes: [1], confidence: 0.2),
+              ),
+              ScanFile(
+                path: '/unconf/a.srt',
+                name: 'a.srt',
+                size: 1,
+                role: FileRole.subtitle,
+              ),
+            ],
+          ),
+          const MediaGroup(
+            id: gidConfirmed,
+            kind: MediaKind.episode,
+            anchorTitle: '异兽魔都',
+            rootDir: root,
+            match: Demo.dorohedoro,
+            matchScore: 0.9,
+            files: [
+              ScanFile(
+                path: '$root/b.mkv',
+                name: 'b.mkv',
+                size: 1,
+                role: FileRole.video,
+                parsed: ParsedName(season: 1, episodes: [2], confidence: 0.2),
+              ),
+              ScanFile(
+                path: '$root/b.srt',
+                name: 'b.srt',
+                size: 1,
+                role: FileRole.subtitle,
+              ),
+            ],
+          ),
+        ],
+      );
+      final store = MemoryTaskStore();
+      const tid = TaskId('t5');
+      await store.saveSummary(
+        TaskSummary(
+          id: tid,
+          connection: conn,
+          paths: const ['/unconf', root],
+          mode: OrganizeMode.inPlace,
+          stage: TaskStage.awaitingReview,
+          createdAt: DateTime(2026),
+        ),
+      );
+      await store.saveReview(tid, scan, {
+        gidLow: const GroupDecision(),
+        gidConfirmed: const GroupDecision(
+          overrides: {'$root/b.mkv': FileOverride()},
+        ),
+      });
+      final h = MemoryHistoryStore();
+      final tm = DefaultTaskManager(
+        backendFor: (_) => fs,
+        recognizer: FakeRecognizer(),
+        planner: DefaultPlanner(FakeMetadataProvider()),
+        executor: DefaultExecutor(h, minInterval: Duration.zero),
+        history: h,
+        store: store,
+        options: (_, mode) => PlanOptions(mode: mode),
+      );
+
+      await tm.run(tid, onlyConfident: true);
+      expect((await tm.watchAll().first).single.stage, TaskStage.done);
+      // Unconfirmed low-confidence video & its subtitle/folder stay untouched.
+      expect(fs.files, containsAll(['/unconf/a.mkv', '/unconf/a.srt']));
+      // Manually confirmed video moves together with its subtitle and folder.
+      expect(fs.files.where((p) => p.contains('S01E02')).toList(), [
+        '/d/异兽魔都 (2020)/Season 01/异兽魔都.Dorohedoro.2020.S01E02.mkv',
+        '/d/异兽魔都 (2020)/Season 01/异兽魔都.Dorohedoro.2020.S01E02.srt',
+      ]);
+    });
+
+    test('issue 6: concurrent updateDecision enforces last-update-wins and blocks run while pending', () async {
+      const root = '/d/异兽魔都 2020';
+      const gid = GroupId('g1');
+      const tid = TaskId('t6');
+      final fs = MemoryStorageBackend({'$root/a.mkv': 1});
+      final scan = ScanResult(
+        connection: conn,
+        roots: const ['/d'],
+        groups: const [
+          MediaGroup(
+            id: gid,
+            kind: MediaKind.episode,
+            anchorTitle: '异兽魔都',
+            rootDir: root,
+            match: Demo.dorohedoro,
+            matchScore: 0.9,
+            files: [
+              ScanFile(
+                path: '$root/a.mkv',
+                name: 'a.mkv',
+                size: 1,
+                role: FileRole.video,
+                parsed: ParsedName(season: 1, episodes: [1], confidence: 0.9),
+              ),
+            ],
+          ),
+        ],
+      );
+      final store = MemoryTaskStore();
+      await store.saveSummary(
+        TaskSummary(
+          id: tid,
+          connection: conn,
+          paths: const ['/d'],
+          mode: OrganizeMode.inPlace,
+          stage: TaskStage.awaitingReview,
+          createdAt: DateTime(2026),
+        ),
+      );
+      await store.saveReview(tid, scan, {gid: const GroupDecision()});
+      final gated = _GatedPlanner(gid, offsetToGate: 1);
+      final h = MemoryHistoryStore();
+      final tm = DefaultTaskManager(
+        backendFor: (_) => fs,
+        recognizer: FakeRecognizer(),
+        planner: gated,
+        executor: DefaultExecutor(h, minInterval: Duration.zero),
+        history: h,
+        store: store,
+        options: (_, mode) => PlanOptions(mode: mode),
+      );
+
+      await tm.review(tid);
+      final first = tm.updateDecision(
+        tid,
+        gid,
+        const GroupDecision(episodeOffset: 1),
+      );
+      await gated.entered.future;
+      // Attempting run while edit is pending must fail rather than run stale plan.
+      await expectLater(tm.run(tid), throwsStateError);
+      await tm.updateDecision(tid, gid, const GroupDecision(episodeOffset: 2));
+      gated.release.complete();
+      await first;
+
+      final review = await tm.review(tid);
+      expect(review.decisions[gid]!.episodeOffset, 2);
+      final dst = review.preview.ops
+          .firstWhere(
+            (o) => o.kind == OpKind.relocate && o.phase == ExecPhase.files,
+          )
+          .dst;
+      expect(dst, contains('S01E03'));
+    });
+
+    test(
+      'issue 12: failed setMode restores original mode and plan atomically',
+      () async {
+        const root = '/d/异兽魔都 2020';
+        const gid = GroupId('g1');
+        const tid = TaskId('t12');
+        final fs = MemoryStorageBackend({'$root/a.mkv': 1});
+        final scan = ScanResult(
+          connection: conn,
+          roots: const ['/d'],
+          groups: const [
+            MediaGroup(
+              id: gid,
+              kind: MediaKind.episode,
+              anchorTitle: '异兽魔都',
+              rootDir: root,
+              match: Demo.dorohedoro,
+              matchScore: 0.9,
+              files: [
+                ScanFile(
+                  path: '$root/a.mkv',
+                  name: 'a.mkv',
+                  size: 1,
+                  role: FileRole.video,
+                  parsed: ParsedName(season: 1, episodes: [1], confidence: 0.9),
+                ),
+              ],
+            ),
+          ],
+        );
+        final store = MemoryTaskStore();
+        await store.saveSummary(
+          TaskSummary(
+            id: tid,
+            connection: conn,
+            paths: const ['/d'],
+            mode: OrganizeMode.inPlace,
+            stage: TaskStage.awaitingReview,
+            createdAt: DateTime(2026),
+          ),
+        );
+        await store.saveReview(tid, scan, {gid: const GroupDecision()});
+        final h = MemoryHistoryStore();
+        final tm = DefaultTaskManager(
+          backendFor: (_) => fs,
+          recognizer: FakeRecognizer(),
+          planner: DefaultPlanner(FakeMetadataProvider()),
+          executor: DefaultExecutor(h, minInterval: Duration.zero),
+          history: h,
+          store: store,
+          options: (_, mode) => PlanOptions(mode: mode), // missing libraryRoot
+        );
+
+        await tm.review(tid);
+        await expectLater(
+          tm.setMode(tid, OrganizeMode.moveToLibrary),
+          throwsArgumentError,
+        );
+        expect((await tm.watchAll().first).single.mode, OrganizeMode.inPlace);
+        expect(
+          (await store.loadAll()).single.summary.mode,
+          OrganizeMode.inPlace,
+        );
+      },
+    );
+
+    test('issue 13: reopening awaiting-review task reflects updated naming profile without rescan, and finished tasks stay unchanged', () async {
+      const root = '/d/异兽魔都 2020';
+      const gid = GroupId('g1');
+      var naming = NamingProfile.vidhub;
+      final fs = MemoryStorageBackend({'$root/a.mkv': 1});
+      final scan = ScanResult(
+        connection: conn,
+        roots: const ['/d'],
+        groups: const [
+          MediaGroup(
+            id: gid,
+            kind: MediaKind.episode,
+            anchorTitle: '异兽魔都',
+            rootDir: root,
+            match: Demo.dorohedoro,
+            matchScore: 0.9,
+            files: [
+              ScanFile(
+                path: '$root/a.mkv',
+                name: 'a.mkv',
+                size: 1,
+                role: FileRole.video,
+                parsed: ParsedName(season: 1, episodes: [1], confidence: 0.9),
+              ),
+            ],
+          ),
+        ],
+      );
+      final store = MemoryTaskStore();
+      const tid = TaskId('t13');
+      await store.saveSummary(
+        TaskSummary(
+          id: tid,
+          connection: conn,
+          paths: const ['/d'],
+          mode: OrganizeMode.inPlace,
+          stage: TaskStage.awaitingReview,
+          createdAt: DateTime(2026),
+        ),
+      );
+      await store.saveReview(tid, scan, {gid: const GroupDecision()});
+      final rec = FakeRecognizer();
+      final h = MemoryHistoryStore();
+      final tm = DefaultTaskManager(
+        backendFor: (_) => fs,
+        recognizer: rec,
+        planner: DefaultPlanner(FakeMetadataProvider()),
+        executor: DefaultExecutor(h, minInterval: Duration.zero),
+        history: h,
+        store: store,
+        options: (_, mode) => PlanOptions(mode: mode, naming: naming),
+      );
+
+      final before = await tm.review(tid);
+      expect(
+        before.preview.ops.firstWhere((o) => o.src == '$root/a.mkv').dst,
+        contains('异兽魔都.Dorohedoro.2020.S01E01.mkv'),
+      );
+
+      naming = naming.copyWith(
+        tv: naming.tv.copyWith(
+          customTemplate: () => 'CHANGED.S{season:02}E{episode:02}',
+        ),
+      );
+      final after = await tm.review(tid);
+      expect(
+        after.preview.ops.firstWhere((o) => o.src == '$root/a.mkv').dst,
+        contains('CHANGED.S01E01'),
+      );
+      expect(rec.calls, 0);
+
+      // Executing uses the fresh naming profile, and finished review does not replan.
+      await tm.run(tid);
+      expect(fs.files, ['/d/异兽魔都 (2020)/Season 01/CHANGED.S01E01.mkv']);
+      naming = NamingProfile.vidhub;
+      final finished = await tm.review(tid);
+      expect(
+        finished.preview.ops.firstWhere((o) => o.src == '$root/a.mkv').dst,
+        contains('CHANGED.S01E01'),
+      );
+    });
+  });
+}
+
+class _GatedPlanner implements Planner {
+  final GroupId gid;
+  final int offsetToGate;
+  final entered = Completer<void>();
+  final release = Completer<void>();
+
+  _GatedPlanner(this.gid, {required this.offsetToGate});
+
+  @override
+  Future<RenamePlan> build(
+    ScanResult scan,
+    Map<GroupId, GroupDecision> decisions,
+    PlanOptions options, {
+    Set<String> existing = const {},
+  }) async {
+    final plan = await DefaultPlanner(FakeMetadataProvider())
+        .build(scan, decisions, options, existing: existing);
+    if (decisions[gid]?.episodeOffset == offsetToGate &&
+        existing.isNotEmpty &&
+        !entered.isCompleted) {
+      entered.complete();
+      await release.future;
+    }
+    return plan;
+  }
 }

@@ -227,14 +227,14 @@ class DefaultExecutor implements Executor {
     /// [note] set => skipped (never overwrite / cannot undo). On [failure]
     /// the op stays done so the undo can be retried.
     Future<void> finish(RenameOp op, String? note, String? failure) async {
-      if (failure == null) {
-        await history.mark(
-          batch,
-          op.id,
-          note == null ? OpStatus.undone : OpStatus.skipped,
-          error: note,
-        );
-      }
+      await history.mark(
+        batch,
+        op.id,
+        failure != null
+            ? OpStatus.done
+            : (note == null ? OpStatus.undone : OpStatus.skipped),
+        error: failure ?? note,
+      );
       emit(
         ExecProgress(
           phase: op.phase,
@@ -246,7 +246,7 @@ class DefaultExecutor implements Executor {
       );
     }
 
-    Future<void> undoOne(RenameOp op) async {
+    Future<bool> undoOne(RenameOp op) async {
       String? note, failure;
       try {
         note = await _undoOp(be, op);
@@ -254,11 +254,19 @@ class DefaultExecutor implements Executor {
         failure = e.toString();
       }
       await finish(op, note, failure);
+      return failure == null;
     }
 
     // Folder renames first and one by one (they nest, and the file ops'
     // paths are from before them); then files, batched per folder and in
     // parallel; created folders last, once they are empty again.
+    final activeFolders = [
+      for (final r in await history.records(batch))
+        if (r.status == OpStatus.done &&
+            r.op.phase == ExecPhase.folders &&
+            r.op.kind == OpKind.relocate)
+          r.op,
+    ];
     final folders = [
       for (final o in todo)
         if (o.phase != ExecPhase.files) o,
@@ -273,15 +281,13 @@ class DefaultExecutor implements Executor {
     ];
     for (final op in folders) {
       if (cancelled()) return;
-      await undoOne(op);
+      final idx = activeFolders.indexWhere((f) => f.id == op.id);
+      final outer = idx < 0
+          ? const <RenameOp>[]
+          : activeFolders.sublist(idx + 1);
+      final ok = await undoOne(_mapOp(op, outer));
+      if (ok) activeFolders.removeWhere((f) => f.id == op.id);
     }
-    final activeFolders = [
-      for (final r in await history.records(batch))
-        if (r.status == OpStatus.done &&
-            r.op.phase == ExecPhase.folders &&
-            r.op.kind == OpKind.relocate)
-          r.op,
-    ];
     final mappedFiles = [for (final o in files) _mapOp(o, activeFolders)];
     final mappedMkdirs = [for (final o in mkdirs) _mapOp(o, activeFolders)];
 
@@ -426,7 +432,13 @@ class DefaultExecutor implements Executor {
         return null;
       case OpKind.relocate:
         if (op.src == op.dst) return null;
-        if (await be.exists(op.src)) return '原位置已被占用：${op.src}';
+        if (await be.exists(op.src)) {
+          final reason = '原位置已被占用：${op.src}';
+          if (op.phase == ExecPhase.folders) {
+            throw StorageException(StorageErrorCode.alreadyExists, reason);
+          }
+          return reason;
+        }
         if (!await be.exists(op.dst)) return '目标已不存在：${op.dst}';
         await _relocate(be, op.dst, op.src, op.id, resuming: false);
         return null;
@@ -785,11 +797,20 @@ class DefaultExecutor implements Executor {
         if (resuming && !await be.exists(op.src)) return;
         await be.remove(p.posix.dirname(op.src), [p.posix.basename(op.src)]);
       case OpKind.write:
-        // After a crash the file may already be written.
-        if (resuming && await be.exists(op.dst)) return;
         final bytes = op.src.startsWith(writeTextPrefix)
             ? utf8.encode(op.src.substring(writeTextPrefix.length))
             : await fetch(Uri.parse(op.src));
+        // After a crash the file may already be written; only accept it as ours
+        // if its bytes match what this op would write.
+        if (resuming && await be.exists(op.dst)) {
+          try {
+            final existing = await be.read(op.dst);
+            if (bytes.isNotEmpty && _bytesEqual(existing, bytes)) return;
+          } on Object {
+            // Unreadable or read failure: do not blindly claim ownership.
+          }
+          throw StorageException(StorageErrorCode.alreadyExists, op.dst);
+        }
         await be.write(op.dst, bytes);
       case OpKind.relocate:
         // The tmp name carries this op's id, so a file there is ours whatever
@@ -907,5 +928,13 @@ class DefaultExecutor implements Executor {
       },
     );
     return c.stream;
+  }
+
+  static bool _bytesEqual(List<int> a, List<int> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 }

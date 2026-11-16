@@ -22,6 +22,15 @@ class NameRewrite {
   final String replacement;
 
   const NameRewrite(this.pattern, this.replacement);
+
+  @override
+  bool operator ==(Object other) =>
+      other is NameRewrite &&
+      other.pattern == pattern &&
+      other.replacement == replacement;
+
+  @override
+  int get hashCode => Object.hash(pattern, replacement);
 }
 
 class NamingOptions {
@@ -129,6 +138,56 @@ class NamingOptions {
         : this.customTemplate,
     rewrites: rewrites ?? this.rewrites,
   );
+
+  @override
+  bool operator ==(Object other) =>
+      other is NamingOptions &&
+      other.titleLanguage == titleLanguage &&
+      other.bilingual == bilingual &&
+      other.includeYear == includeYear &&
+      other.yearInParens == yearInParens &&
+      other.showYear == showYear &&
+      other.episodeStyle == episodeStyle &&
+      other.episodeTitle == episodeTitle &&
+      other.extraInfo == extraInfo &&
+      other.separator == separator &&
+      other.releaseGroup == releaseGroup &&
+      other.tmdbIdTag == tmdbIdTag &&
+      _listEq(other.order, order) &&
+      other.folderTemplate == folderTemplate &&
+      other.seasonFolderTemplate == seasonFolderTemplate &&
+      other.singleSeasonFolder == singleSeasonFolder &&
+      other.customTemplate == customTemplate &&
+      _listEq(other.rewrites, rewrites);
+
+  @override
+  int get hashCode => Object.hashAll([
+    titleLanguage,
+    bilingual,
+    includeYear,
+    yearInParens,
+    showYear,
+    episodeStyle,
+    episodeTitle,
+    extraInfo,
+    separator,
+    releaseGroup,
+    tmdbIdTag,
+    ...order,
+    folderTemplate,
+    seasonFolderTemplate,
+    singleSeasonFolder,
+    customTemplate,
+    ...rewrites,
+  ]);
+}
+
+bool _listEq<T>(List<T> a, List<T> b) {
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
 }
 
 /// Full naming setup: player preset + separate movie / TV options + library folder names.
@@ -165,4 +224,16 @@ class NamingProfile {
     movieDir: movieDir ?? this.movieDir,
     tvDir: tvDir ?? this.tvDir,
   );
+
+  @override
+  bool operator ==(Object other) =>
+      other is NamingProfile &&
+      other.player == player &&
+      other.movie == movie &&
+      other.tv == tv &&
+      other.movieDir == movieDir &&
+      other.tvDir == tvDir;
+
+  @override
+  int get hashCode => Object.hash(player, movie, tv, movieDir, tvDir);
 }
