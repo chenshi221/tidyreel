@@ -87,4 +87,96 @@ void main() {
     expect(show.kind, MediaKind.episode);
     expect(show.files, files);
   });
+
+  test(
+    'shiftFrom preserves missing-episode gaps and rolls gaps across seasons',
+    () {
+      const gapped = [10, 11, 13];
+      final gapFiles = [
+        for (final n in gapped)
+          ScanFile(
+            path: '/s/$n.mkv',
+            name: '$n.mkv',
+            size: 1,
+            role: FileRole.video,
+            parsed: parser.parse('$n.mkv', parentDirs: const ['老友记']),
+          ),
+      ];
+      final gapRows = [
+        for (final f in gapFiles) ReviewRow(f, null, null, 1, false),
+      ];
+      final set = shiftFrom(
+        g,
+        null,
+        gapRows,
+        gapRows[0],
+        const EpisodeRef(1, 10),
+      );
+      expect(
+        {
+          for (final e in set.entries)
+            e.key: EpisodeRef(e.value.season!, e.value.episode!),
+        },
+        {
+          '/s/10.mkv': const EpisodeRef(1, 10),
+          '/s/11.mkv': const EpisodeRef(1, 11),
+          '/s/13.mkv': const EpisodeRef(2, 2),
+        },
+      );
+    },
+  );
+
+  test('shiftFrom keeps duplicate representations together and skips parsed specials', () {
+    final dupFiles = [
+      ScanFile(
+        path: '/s/12.mkv',
+        name: '12.mkv',
+        size: 1,
+        role: FileRole.video,
+        parsed: parser.parse('12.mkv', parentDirs: const ['老友记']),
+      ),
+      const ScanFile(
+        path: '/s/14.v1.mkv',
+        name: '14.v1.mkv',
+        size: 1,
+        role: FileRole.video,
+        parsed: ParsedName(season: 1, episodes: [14], confidence: 0.9),
+      ),
+      const ScanFile(
+        path: '/s/14.v2.mkv',
+        name: '14.v2.mkv',
+        size: 1,
+        role: FileRole.video,
+        parsed: ParsedName(season: 1, episodes: [14], confidence: 0.9),
+      ),
+      const ScanFile(
+        path: '/s/SP13.mkv',
+        name: 'SP13.mkv',
+        size: 1,
+        role: FileRole.video,
+        parsed: ParsedName(
+          kind: MediaKind.special,
+          season: 0,
+          episodes: [13],
+          confidence: 0.9,
+        ),
+      ),
+    ];
+    final dupRows = [
+      for (final f in dupFiles)
+        ReviewRow(f, null, null, f.parsed?.season ?? 1, false),
+    ];
+    final set = shiftFrom(g, null, dupRows, dupRows[0], const EpisodeRef(2, 1));
+    expect(
+      {
+        for (final e in set.entries)
+          e.key: EpisodeRef(e.value.season!, e.value.episode!),
+      },
+      {
+        '/s/12.mkv': const EpisodeRef(2, 1),
+        '/s/14.v1.mkv': const EpisodeRef(2, 3),
+        '/s/14.v2.mkv': const EpisodeRef(2, 3),
+      },
+    );
+  });
 }

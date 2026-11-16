@@ -22,6 +22,10 @@ bool canRetry(TaskSummary t) =>
     t.stage == TaskStage.undone ||
     (t.stage == TaskStage.cancelled && t.batch == null);
 
+/// Whether [TaskManager.undo] applies to [t]: stopped or finished with a batch.
+bool canUndo(TaskSummary t) =>
+    t.batch != null && !t.stage.isActive && t.stage != TaskStage.undone;
+
 /// A card in the 任务中心.
 class TaskSummary {
   final TaskId id;

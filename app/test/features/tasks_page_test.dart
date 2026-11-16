@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tidyreel/features/tasks/task_detail_page.dart';
 import 'package:tidyreel/features/tasks/tasks_page.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
@@ -121,4 +124,53 @@ void main() {
     // Progress messages stay off the card.
     expect(find.text('正在重命名文件'), findsNothing);
   });
+
+  testWidgets(
+    'issue 14: cancelled task with executed batch exposes undo in card and detail',
+    (tester) async {
+      final withBatch = TaskSummary(
+        id: const TaskId('cancelled-b'),
+        connection: const ConnectionId('demo-alist'),
+        paths: const ['/d'],
+        mode: OrganizeMode.inPlace,
+        stage: TaskStage.cancelled,
+        batch: const BatchId('b1'),
+        createdAt: DateTime(2026),
+      );
+      await pumpPage(tester, TaskCard(task: withBatch));
+      expect(find.text('撤销'), findsOneWidget);
+      await tester.tap(
+        find.byKey(const ValueKey('task cancelled-b')),
+        buttons: kSecondaryButton,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('撤销'), findsWidgets);
+
+      final withoutBatch = TaskSummary(
+        id: const TaskId('cancelled-no-b'),
+        connection: const ConnectionId('demo-alist'),
+        paths: const ['/d'],
+        mode: OrganizeMode.inPlace,
+        stage: TaskStage.cancelled,
+        createdAt: DateTime(2026),
+      );
+      await pumpPage(tester, TaskCard(task: withoutBatch));
+      expect(find.text('撤销'), findsNothing);
+
+      final (tm, _) = await pumpPage(tester, const SizedBox());
+      final id = await submitAndWait(tester, tm);
+      unawaited(tm.run(id));
+      await waitForStage(tester, tm, id, TaskStage.done);
+      // TaskDetailPage also respects canUndo() (header action + embedded TaskCard).
+      await pumpPage(tester, TaskDetailPage(taskId: id.value), tm: tm);
+      expect(
+        find.descendant(
+          of: find.byType(OutlinedButton),
+          matching: find.text('撤销'),
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('撤销'), findsNWidgets(2));
+    },
+  );
 }

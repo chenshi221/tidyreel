@@ -65,6 +65,27 @@ class _Item {
   _Item(this.file);
 }
 
+/// A subtitle or sidecar planned alongside [_Item] or independently via override.
+class _Companion {
+  final ScanFile file;
+  final FileOverride? override;
+  final _Item? followed;
+  final String remainder;
+  final ScanFile? fallbackVideo;
+  bool extra = false;
+  EpisodeRef? ref;
+  final warnings = <String>[];
+  bool selected = false;
+
+  _Companion(
+    this.file,
+    this.override,
+    this.followed,
+    this.remainder, {
+    this.fallbackVideo,
+  });
+}
+
 class _PlanBuilder {
   final MetadataProvider metadata;
   final ScanResult scan;
@@ -182,10 +203,13 @@ class _PlanBuilder {
       isTv ? MediaKind.episode : MediaKind.movie,
     );
     final lowMatch = d.match == null && g.matchScore < opts.confidenceThreshold;
-    final videos = [
+    final allVideos = [
       for (final f in g.files)
-        if (f.role == FileRole.video && !(d.overrides[f.path]?.ignore ?? false))
-          f,
+        if (f.role == FileRole.video) f,
+    ];
+    final videos = [
+      for (final f in allVideos)
+        if (!(d.overrides[f.path]?.ignore ?? false)) f,
     ];
 
     // --- season layout (TV)
@@ -298,12 +322,17 @@ class _PlanBuilder {
               s.episodes[i]: EpisodeRef(s.order, i + 1),
       };
       for (var i = 0; i < pending.length; i++) {
-        final r = inverse[refs[i]] ?? refs[i];
-        pending[i].ref = r;
+        pending[i].ref = inverse[refs[i]] ?? refs[i];
+      }
+      // Validate all resolved TV refs, including manual overrides and specials.
+      for (final it in items) {
+        final r = it.ref;
+        if (it.extra || r == null) continue;
+        if (r.season < 0) it.warnings.add('季号无效');
         if (r.episode < 1) {
-          pending[i].warnings.add('集号无效');
-        } else if (_overflow(d.strategy, r, tmdbCounts)) {
-          pending[i].warnings.add(_overflowWarning);
+          it.warnings.add('集号无效');
+        } else if (r.season >= 0 && _overflow(d.strategy, r, tmdbCounts)) {
+          it.warnings.add(_overflowWarning);
         }
       }
     }
@@ -318,17 +347,120 @@ class _PlanBuilder {
       if (lowMatch) it.warnings.add('片名匹配置信度较低');
     }
 
+    // --- resolve subtitles and sidecars (either following a video or explicit)
+    final byPath = {for (final it in items) it.file.path: it};
+    final companions = <_Companion>[];
+    for (final f in g.files) {
+      if (f.role != FileRole.subtitle && f.role != FileRole.sidecar) continue;
+      final ov = d.overrides[f.path];
+      if (ov?.ignore ?? false) continue;
+      final hasExplicit =
+          ov != null &&
+          (ov.season != null ||
+              ov.episode != null ||
+              ov.kind == MediaKind.extra ||
+              ov.kind == MediaKind.special);
+      var mItem = matchVideo(f, [for (final it in items) it.file]);
+      if (mItem == null && items.length == 1 && f.role == FileRole.subtitle) {
+        mItem = FollowMatch(items.first.file, '');
+      }
+      var mAll = mItem ?? matchVideo(f, allVideos);
+      if (mAll == null &&
+          allVideos.length == 1 &&
+          f.role == FileRole.subtitle) {
+        mAll = FollowMatch(allVideos.first, '');
+      }
+      final it = mItem == null ? null : byPath[mItem.video.path];
+      if (!hasExplicit && it != null) {
+        final c = _Companion(f, ov, it, mItem!.remainder);
+        c.selected =
+            it.selected ||
+            (ov != null &&
+                it.warnings.every(
+                  (w) =>
+                      w == _overflowWarning ||
+                      w == '识别置信度较低' ||
+                      w == '片名匹配置信度较低',
+                ));
+        companions.add(c);
+        continue;
+      }
+      if (!hasExplicit && ov == null) continue;
+      final c = _Companion(
+        f,
+        ov,
+        null,
+        mAll?.remainder ?? '',
+        fallbackVideo: mAll?.video,
+      );
+      final kind =
+          ov.kind ??
+          (mAll?.video.parsed?.kind == MediaKind.extra
+              ? MediaKind.extra
+              : MediaKind.unknown);
+      if (kind == MediaKind.extra) {
+        c.extra = true;
+        c.selected = true;
+        companions.add(c);
+        continue;
+      }
+      if (!isTv) {
+        c.selected = true;
+        if (lowMatch) c.warnings.add('片名匹配置信度较低');
+        companions.add(c);
+        continue;
+      }
+      final pf = f.parsed;
+      final pv = mAll?.video.parsed;
+      final n =
+          pf?.episodes.firstOrNull ??
+          pf?.absolute ??
+          pv?.episodes.firstOrNull ??
+          pv?.absolute;
+      final ep = ov.episode ?? n;
+      if (ep == null) continue;
+      final isSpecial =
+          kind == MediaKind.special ||
+          ov.season == 0 ||
+          (ov.season == null && pf?.season == 0);
+      final season =
+          ov.season ?? (isSpecial ? 0 : pf?.season ?? pv?.season ?? 1);
+      final r = EpisodeRef(season, ep);
+      c.ref = r;
+      if (r.season < 0) c.warnings.add('季号无效');
+      if (r.episode < 1) {
+        c.warnings.add('集号无效');
+      } else if (r.season >= 0 && _overflow(d.strategy, r, tmdbCounts)) {
+        c.warnings.add(_overflowWarning);
+      }
+      c.selected = c.warnings.every(
+        (w) => w == _overflowWarning || w == '识别置信度较低',
+      );
+      if (lowMatch) c.warnings.add('片名匹配置信度较低');
+      companions.add(c);
+    }
+
     // --- episode titles
     final wantTitles =
         isTv &&
         (naming.episodeTitle ||
             (naming.customTemplate?.contains('episode_title') ?? false));
     final titles = wantTitles
-        ? await _episodeTitles(match.tmdbId, epGroup, d.strategy, items)
+        ? await _episodeTitles(match.tmdbId, epGroup, d.strategy, [
+            for (final it in items) ?it.ref,
+            for (final c in companions) ?c.ref,
+          ])
         : const <EpisodeRef, String>{};
 
     // --- folders
-    final groupSelected = items.any((it) => it.selected);
+    final groupSelected =
+        items.any((it) => it.selected) || companions.any((c) => c.selected);
+    final plannedRefs = <EpisodeRef>[
+      for (final it in items)
+        if (!it.extra && it.ref != null) it.ref!,
+      for (final c in companions)
+        if (c.followed == null && !c.extra && c.ref != null) c.ref!,
+    ];
     // A movie without a zh-CN title: movie() may find a Chinese one.
     Candidate? movieInfo;
     if (!isTv && !_han.hasMatch(match.title)) {
@@ -374,7 +506,7 @@ class _PlanBuilder {
           // straight into the existing folder; this root keeps its name.
           curBase = claimed?.base ?? finalBase;
           mergeInto = finalBase;
-          _noteMerge(g, finalBase, claimed?.group, onDisk, items);
+          _noteMerge(g, finalBase, claimed?.group, onDisk, plannedRefs);
         } else if (claimed != null || onDisk) {
           // 分开保留: keep this folder's own name, rename files inside.
         } else {
@@ -424,7 +556,7 @@ class _PlanBuilder {
         curBase = '$base/$folderName ($n)';
       } else if (claimed != null || onDisk) {
         mergeInto = curBase;
-        _noteMerge(g, curBase, claimed?.group, onDisk, items);
+        _noteMerge(g, curBase, claimed?.group, onDisk, plannedRefs);
       }
       showFolders.putIfAbsent(curBase, () => (group: g.id, base: curBase));
       _mkdir(curBase, g.id, selected: groupSelected);
@@ -440,16 +572,17 @@ class _PlanBuilder {
         isTv &&
         !naming.singleSeasonFolder &&
         tmdbCounts.where((c) => c > 0).length <= 1 &&
-        items.every((it) => it.extra || it.ref!.season == 1);
-    for (final it in items) {
-      final v = it.file;
-      final ext = extOf(v.name);
-      if (it.extra) {
-        it.dstDir = joinPath(curBase, 'Extras');
-        it.newBase = stem(v.name);
-        continue;
-      }
-      final p = v.parsed;
+        plannedRefs.every((r) => r.season == 1);
+
+    ({String dstDir, String newBase}) renderName({
+      required ScanFile file,
+      required EpisodeRef? ref,
+      required bool manual,
+      ScanFile? metaSource,
+    }) {
+      final srcFile = metaSource ?? file;
+      final p = srcFile.parsed;
+      final ext = extOf(file.name);
       final extraInfo = p?.extraInfo?.replaceAll(
         RegExp(r'[._ ]+'),
         naming.separator,
@@ -461,13 +594,14 @@ class _PlanBuilder {
         'group': p?.group,
         'extra_info': extraInfo,
         'version': extraInfo,
-        'lang': _parsedLang(v),
+        'lang': _parsedLang(srcFile),
         'ext': ext,
       };
+      late final String dstDir;
       if (isTv) {
-        final r = it.ref!;
+        final r = ref!;
         final span =
-            !it.manual &&
+            !manual &&
                 p != null &&
                 p.episodes.length > 1 &&
                 p.episodes.last > p.episodes.first
@@ -486,7 +620,7 @@ class _PlanBuilder {
                   ?.year ??
               match.year;
         }
-        it.dstDir = flat
+        dstDir = flat
             ? curBase
             : joinPath(
                 curBase,
@@ -500,11 +634,24 @@ class _PlanBuilder {
                 ),
               );
       } else {
-        it.dstDir = curBase;
+        dstDir = curBase;
       }
-      it.newBase = sanitizeName(
+      final newBase = sanitizeName(
         applyRewrites(renderTemplate(template, vars), naming.rewrites),
       );
+      return (dstDir: dstDir, newBase: newBase);
+    }
+
+    for (final it in items) {
+      final v = it.file;
+      if (it.extra) {
+        it.dstDir = joinPath(curBase, 'Extras');
+        it.newBase = stem(v.name);
+        continue;
+      }
+      final rendered = renderName(file: v, ref: it.ref, manual: it.manual);
+      it.dstDir = rendered.dstDir;
+      it.newBase = rendered.newBase;
     }
     if (isTv && opts.mode == OrganizeMode.inPlace) {
       _reuseSeasonFolders(g, items, curBase);
@@ -523,42 +670,72 @@ class _PlanBuilder {
       _emit(it, it.outName, g.id);
     }
 
-    // --- subtitles and sidecars follow their video
-    final byPath = {for (final it in items) it.file.path: it};
+    // --- emit subtitles and sidecars
     final subTargets = <String, int>{};
-    for (final f in g.files) {
-      if (f.role != FileRole.subtitle && f.role != FileRole.sidecar) continue;
-      final override = d.overrides[f.path];
-      if (override?.ignore ?? false) continue;
-      var m = matchVideo(f, [for (final it in items) it.file]);
-      if (m == null && items.length == 1 && f.role == FileRole.subtitle) {
-        m = FollowMatch(items.first.file, '');
-      }
-      final it = m == null ? null : byPath[m.video.path];
-      if (m == null || it == null) continue;
+    for (final c in companions) {
+      final f = c.file;
       final ext = extOf(f.name);
-      String name;
-      if (it.extra) {
-        name = f.name;
-      } else if (f.role == FileRole.subtitle) {
-        final lang = langFromRemainder(m.remainder) ?? _parsedLang(f);
-        final prefix = '${it.newBase}${lang == null ? '' : '.$lang'}';
-        final key = '${it.dstDir}/$prefix.$ext'.toLowerCase();
-        final n = (subTargets[key] ?? 0) + 1;
-        subTargets[key] = n;
-        name = n == 1 ? '$prefix.$ext' : '$prefix.$n.$ext';
-      } else {
-        name = '${it.newBase}${m.remainder}.$ext';
+      final followed = c.followed;
+      if (followed != null) {
+        String name;
+        if (followed.extra) {
+          name = f.name;
+        } else if (f.role == FileRole.subtitle) {
+          final lang = langFromRemainder(c.remainder) ?? _parsedLang(f);
+          final prefix = '${followed.newBase}${lang == null ? '' : '.$lang'}';
+          final key = '${followed.dstDir}/$prefix.$ext'.toLowerCase();
+          final n = (subTargets[key] ?? 0) + 1;
+          subTargets[key] = n;
+          name = n == 1 ? '$prefix.$ext' : '$prefix.$n.$ext';
+        } else {
+          name = '${followed.newBase}${c.remainder}.$ext';
+        }
+        _mkdir(followed.dstDir, g.id, selected: c.selected);
+        _emit(followed, name, g.id, source: f, selected: c.selected);
+        continue;
       }
-      final selected =
-          it.selected ||
-          (override != null &&
-              it.warnings.every(
-                (w) =>
-                    w == _overflowWarning || w == '识别置信度较低' || w == '片名匹配置信度较低',
-              ));
-      _mkdir(it.dstDir, g.id, selected: selected);
-      _emit(it, name, g.id, source: f, selected: selected);
+
+      late final String dstDir;
+      late final String name;
+      if (c.extra) {
+        dstDir = joinPath(curBase, 'Extras');
+        name = f.name;
+      } else {
+        final rendered = renderName(
+          file: f,
+          ref: c.ref,
+          manual: true,
+          metaSource: c.fallbackVideo,
+        );
+        final reusedSrc = renamedSeasons.entries
+            .where((e) => e.value == rendered.dstDir)
+            .firstOrNull
+            ?.key;
+        dstDir = reusedSrc ?? rendered.dstDir;
+        if (f.role == FileRole.subtitle) {
+          final lang = langFromRemainder(c.remainder) ?? _parsedLang(f);
+          final prefix = '${rendered.newBase}${lang == null ? '' : '.$lang'}';
+          final key = '$dstDir/$prefix.$ext'.toLowerCase();
+          final n = (subTargets[key] ?? 0) + 1;
+          subTargets[key] = n;
+          name = n == 1 ? '$prefix.$ext' : '$prefix.$n.$ext';
+        } else {
+          name = '${rendered.newBase}${c.remainder}.$ext';
+        }
+      }
+      _mkdir(dstDir, g.id, selected: c.selected);
+      fileOps.add(
+        RenameOp(
+          id: OpId('r-${stableHash(f.path)}'),
+          kind: OpKind.relocate,
+          phase: ExecPhase.files,
+          src: f.path,
+          dst: joinPath(dstDir, name),
+          group: g.id,
+          selected: c.selected,
+          warning: c.warnings.isNotEmpty ? c.warnings.join('；') : null,
+        ),
+      );
     }
 
     if (opts.scrape) {
@@ -754,17 +931,14 @@ class _PlanBuilder {
     String into,
     GroupId? withGroup,
     bool exists,
-    List<_Item> items,
+    List<EpisodeRef> refs,
   ) => merges.add(
     PlanMerge(
       group: g.id,
       into: into,
       exists: exists,
       withGroup: withGroup,
-      seasons: {
-        for (final it in items)
-          if (!it.extra && it.ref != null) it.ref!.season,
-      }.toList()..sort(),
+      seasons: {for (final r in refs) r.season}.toList()..sort(),
     ),
   );
 
@@ -981,7 +1155,7 @@ class _PlanBuilder {
     int id,
     EpisodeGroup? epGroup,
     SeasonStrategy strategy,
-    List<_Item> items,
+    List<EpisodeRef> targetRefs,
   ) async {
     final seasonCache = <int, Map<int, String?>>{};
     Future<String?> titleOf(int season, int ep) async {
@@ -999,7 +1173,7 @@ class _PlanBuilder {
     }
 
     final out = <EpisodeRef, String>{};
-    for (final r in {for (final it in items) ?it.ref}) {
+    for (final r in targetRefs.toSet()) {
       var orig = r;
       if (epGroup != null) {
         final s = epGroup.seasons.where((s) => s.order == r.season).firstOrNull;

@@ -66,11 +66,7 @@ class TaskDetailPage extends ConsumerWidget {
         }
       },
     );
-    final canUndo =
-        task != null &&
-        task.batch != null &&
-        (task.stage == TaskStage.done ||
-            task.stage == TaskStage.partiallyFailed);
+    final undoable = task != null && canUndo(task);
     return PageScaffold(
       title: '任务详情',
       subtitle: [
@@ -115,7 +111,7 @@ class TaskDetailPage extends ConsumerWidget {
             icon: const Icon(CupertinoIcons.arrow_clockwise, size: 13),
             label: const Text('重新识别'),
           ),
-        if (canUndo)
+        if (undoable)
           OutlinedButton.icon(
             onPressed: () => undoTask(context, ref, id),
             icon: const Icon(CupertinoIcons.arrow_uturn_left, size: 13),

@@ -1338,4 +1338,129 @@ void main() {
       expect(dst, isNot(contains('S01E01')));
     });
   });
+
+  group('manual companion overrides, validation, and merges', () {
+    test(
+      'issue 7: manually edited subtitle uses its selected season/episode',
+      () async {
+        final p = await plan(
+          scanOf([
+            tvGroup([
+              video('$root/a.mkv', season: 1, episode: 1),
+              other('$root/a.srt', FileRole.subtitle),
+            ]),
+          ]),
+          decisions: const {
+            GroupId('g1'): GroupDecision(
+              overrides: {'$root/a.srt': FileOverride(season: 2, episode: 3)},
+            ),
+          },
+        );
+        final sub = fileOps(p).singleWhere((o) => o.src == '$root/a.srt');
+        expect(
+          sub.dst,
+          '$root/Season 02/$name.S02E03.mkv'.replaceAll('.mkv', '.srt'),
+        );
+        expect(sub.selected, isTrue);
+      },
+    );
+
+    test('issue 8: explicitly edited/selected subtitle still plans when its video is ignored', () async {
+      final p = await plan(
+        scanOf([
+          tvGroup([
+            video('$root/a.mkv', season: 1, episode: 1),
+            other('$root/a.srt', FileRole.subtitle),
+          ]),
+        ]),
+        decisions: const {
+          GroupId('g1'): GroupDecision(
+            overrides: {
+              '$root/a.mkv': FileOverride(ignore: true),
+              '$root/a.srt': FileOverride(season: 1, episode: 1),
+            },
+          ),
+        },
+      );
+      expect(
+        fileOps(p).where((o) => o.src == '$root/a.mkv' && o.selected),
+        isEmpty,
+      );
+      final sub = fileOps(p).singleWhere((o) => o.src == '$root/a.srt');
+      expect(sub.selected, isTrue);
+      expect(sub.dst, '$root/Season 01/$name.S01E01.srt');
+    });
+
+    test('issue 9: manual invalid episode/season is rejected while valid specials remain selected', () async {
+      final zeroEp = await plan(
+        scanOf([
+          tvGroup([video('$root/a.mkv', season: 1, episode: 1)]),
+        ]),
+        decisions: const {
+          GroupId('g1'): GroupDecision(
+            overrides: {'$root/a.mkv': FileOverride(season: 1, episode: 0)},
+          ),
+        },
+      );
+      final zeroOp = opFor(zeroEp, '$root/a.mkv');
+      expect(zeroOp.selected, isFalse);
+      expect(zeroOp.warning, '集号无效');
+
+      final negSeason = await plan(
+        scanOf([
+          tvGroup([video('$root/a.mkv', season: 1, episode: 1)]),
+        ]),
+        decisions: const {
+          GroupId('g1'): GroupDecision(
+            overrides: {'$root/a.mkv': FileOverride(season: -1, episode: 1)},
+          ),
+        },
+      );
+      final negOp = opFor(negSeason, '$root/a.mkv');
+      expect(negOp.selected, isFalse);
+      expect(negOp.warning, '季号无效');
+
+      final special = await plan(
+        scanOf([
+          tvGroup([video('$root/sp.mkv', season: 1, episode: 1)]),
+        ]),
+        decisions: const {
+          GroupId('g1'): GroupDecision(
+            overrides: {
+              '$root/sp.mkv': FileOverride(
+                season: 0,
+                episode: 1,
+                kind: MediaKind.special,
+              ),
+            },
+          ),
+        },
+      );
+      final spOp = opFor(special, '$root/sp.mkv');
+      expect(spOp.selected, isTrue);
+      expect(spOp.dst, '$root/Season 00/$name.S00E01.mkv');
+    });
+
+    test('issue 10 backend: duplicate downloads conflict via merge and separate clears conflict', () async {
+      final scan = scanOf([
+        tvGroup([
+          video('/d/one/a.mkv', season: 1, episode: 1),
+        ], rootDir: '/d/one'),
+        tvGroup(
+          [video('/d/two/a.mkv', season: 1, episode: 1)],
+          rootDir: '/d/two',
+          id: 'g2',
+        ),
+      ]);
+      final merged = await plan(scan);
+      expect(merged.merges, isNotEmpty);
+      expect(merged.conflicts, isNotEmpty);
+
+      final separated = await plan(
+        scan,
+        decisions: const {GroupId('g2'): GroupDecision(separate: true)},
+      );
+      expect(separated.conflicts, isEmpty);
+    });
+  });
 }

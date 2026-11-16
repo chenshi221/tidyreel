@@ -22,7 +22,7 @@ export 'src/storage/direct_lan.dart' show isPrivateHost;
 export 'src/plan/recognizer.dart';
 export 'src/plan/strategy.dart';
 export 'src/plan/template.dart';
-export 'src/plan/text.dart' show relaxedQueries;
+export 'src/plan/text.dart' show relaxedQueries, stableHash;
 export 'src/plan/planner.dart';
 export 'src/exec/executor.dart';
 export 'src/task/task_manager.dart';

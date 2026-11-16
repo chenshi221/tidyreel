@@ -1,6 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
+import 'package:tidyreel/data/providers.dart';
 import 'package:tidyreel/features/review/review_page.dart';
 import 'package:tidyreel/ui/widgets.dart';
 import 'package:tidyreel_core/testing.dart';
@@ -11,21 +16,27 @@ import 'helpers.dart';
 const _g1 = GroupId('g1');
 const _file = '/下载/完成/异兽魔都 2020 1080p/[Sub] Dorohedoro S01E01 [1080p].mkv';
 
-/// Uses the real planner so checkbox changes must affect executable operations.
+/// Uses the real planner so checkbox/override changes must affect executable operations.
 class _PlanningTaskManager extends FakeTaskManager {
   final ScanResult scan;
+  final PlanOptions planOptions;
+  Completer<void>? updateGate;
+  Completer<void>? reviewGate;
+  var runCalls = 0;
 
-  _PlanningTaskManager(this.scan) : super(step: Duration.zero);
+  _PlanningTaskManager(this.scan, {this.planOptions = const PlanOptions()})
+    : super(step: Duration.zero);
 
   @override
   Future<TaskReview> review(TaskId id) async {
+    await reviewGate?.future;
     final r = await super.review(id);
     return TaskReview(
       id: id,
       scan: scan,
       decisions: r.decisions,
       preview: await DefaultPlanner(FakeMetadataProvider())
-          .build(scan, r.decisions, const PlanOptions()),
+          .build(scan, r.decisions, planOptions),
     );
   }
 
@@ -35,8 +46,15 @@ class _PlanningTaskManager extends FakeTaskManager {
     GroupId group,
     GroupDecision decision,
   ) async {
+    await updateGate?.future;
     await super.updateDecision(id, group, decision);
     return review(id);
+  }
+
+  @override
+  Future<void> run(TaskId id, {bool onlyConfident = false}) async {
+    runCalls++;
+    await super.run(id, onlyConfident: onlyConfident);
   }
 }
 
@@ -48,6 +66,41 @@ Future<void> tapKey(WidgetTester tester, String key) async {
 }
 
 void main() {
+  testWidgets(
+    'settings reload disables execution until refreshed preview arrives',
+    (tester) async {
+      final scan = Demo.review(
+        const TaskId('sample'),
+        const ConnectionId('demo-alist'),
+        '/d',
+      ).scan;
+      final tm = _PlanningTaskManager(scan);
+      await pumpPage(tester, const SizedBox(), tm: tm);
+      final id = await submitAndWait(tester, tm);
+      final (_, container) = await pumpPage(
+        tester,
+        ReviewPage(taskId: id.value),
+        tm: tm,
+      );
+      final gate = Completer<void>();
+      tm.reviewGate = gate;
+      final naming = container.read(namingProfileProvider);
+      container
+          .read(namingProfileProvider.notifier)
+          .set(
+            naming.copyWith(
+              tv: naming.tv.copyWith(bilingual: !naming.tv.bilingual),
+            ),
+          );
+      await tester.pump();
+      final execute = find.byKey(const ValueKey('execute-button'));
+      expect(tester.widget<FilledButton>(execute).onPressed, isNull);
+      gate.complete();
+      await tester.pumpAndSettle();
+      expect(tester.widget<FilledButton>(execute).onPressed, isNotNull);
+    },
+  );
+
   Future<(dynamic, TaskId)> open(WidgetTester tester) async {
     final (tm, _) = await pumpPage(tester, const SizedBox());
     final id = await submitAndWait(tester, tm);
@@ -381,5 +434,555 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('toggle-actions')));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('strategy-asParsed')), findsNothing);
+  });
+
+  group('review regressions', () {
+    testWidgets(
+      'issue 6: pending updateDecision disables execute button and blocks shortcut',
+      (tester) async {
+        const root = '/d/异兽魔都 2020';
+        final tm = _PlanningTaskManager(
+          const ScanResult(
+            connection: ConnectionId('demo-alist'),
+            roots: ['/d'],
+            groups: [
+              MediaGroup(
+                id: _g1,
+                kind: MediaKind.episode,
+                anchorTitle: '异兽魔都',
+                rootDir: root,
+                match: Demo.dorohedoro,
+                matchScore: 0.9,
+                files: [
+                  ScanFile(
+                    path: '$root/a.mkv',
+                    name: 'a.mkv',
+                    size: 1,
+                    role: FileRole.video,
+                    parsed: ParsedName(
+                      season: 1,
+                      episodes: [1],
+                      confidence: 0.9,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+        await pumpPage(tester, const SizedBox(), tm: tm);
+        final id = await submitAndWait(tester, tm);
+        await pumpPage(tester, ReviewPage(taskId: id.value), tm: tm);
+
+        final execute = find.byKey(const ValueKey('execute-button'));
+        expect(tester.widget<FilledButton>(execute).onPressed, isNotNull);
+
+        final gate = Completer<void>();
+        addTearDown(() {
+          if (!gate.isCompleted) gate.complete();
+        });
+        tm.updateGate = gate;
+        await tester.tap(find.byKey(const ValueKey('strategy-mergeIntoOne')));
+        await tester.pump();
+
+        expect(tester.widget<FilledButton>(execute).onPressed, isNull);
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+        await tester.pump();
+        expect(tm.runCalls, 0);
+
+        gate.complete();
+        await tester.pumpAndSettle();
+        expect(tester.widget<FilledButton>(execute).onPressed, isNotNull);
+        expect(find.textContaining('S01E01.mkv'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'issue 7: editing a subtitle updates only that subtitle and does not shift videos',
+      (tester) async {
+        const root = '/d/异兽魔都 2020';
+        final tm = _PlanningTaskManager(
+          const ScanResult(
+            connection: ConnectionId('demo-alist'),
+            roots: ['/d'],
+            groups: [
+              MediaGroup(
+                id: _g1,
+                kind: MediaKind.episode,
+                anchorTitle: '异兽魔都',
+                rootDir: root,
+                match: Demo.dorohedoro,
+                matchScore: 0.9,
+                files: [
+                  ScanFile(
+                    path: '$root/ep1.mkv',
+                    name: 'ep1.mkv',
+                    size: 1,
+                    role: FileRole.video,
+                    parsed: ParsedName(
+                      season: 1,
+                      episodes: [1],
+                      confidence: 0.9,
+                    ),
+                  ),
+                  ScanFile(
+                    path: '$root/ep1.srt',
+                    name: 'ep1.srt',
+                    size: 1,
+                    role: FileRole.subtitle,
+                  ),
+                  ScanFile(
+                    path: '$root/ep2.mkv',
+                    name: 'ep2.mkv',
+                    size: 1,
+                    role: FileRole.video,
+                    parsed: ParsedName(
+                      season: 1,
+                      episodes: [2],
+                      confidence: 0.9,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+        await pumpPage(tester, const SizedBox(), tm: tm);
+        final id = await submitAndWait(tester, tm);
+        await pumpPage(tester, ReviewPage(taskId: id.value), tm: tm);
+
+        await tester.tap(find.text('1 个字幕').first);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('ep1.srt'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('pick-ep-1-2')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('pick-confirm')));
+        await tester.pumpAndSettle();
+
+        final d = (await tm.review(id)).decisions[_g1]!;
+        expect(d.overrides.keys, ['$root/ep1.srt']);
+        expect(d.overrides['$root/ep1.srt']!.season, 1);
+        expect(d.overrides['$root/ep1.srt']!.episode, 2);
+        expect(find.textContaining('依次顺延'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'issue 8: ignoring video expands companions and companion warning tag is shown',
+      (tester) async {
+        const root = '/d/异兽魔都 2020';
+        final tm = _PlanningTaskManager(
+          const ScanResult(
+            connection: ConnectionId('demo-alist'),
+            roots: ['/d'],
+            groups: [
+              MediaGroup(
+                id: _g1,
+                kind: MediaKind.episode,
+                anchorTitle: '异兽魔都',
+                rootDir: root,
+                match: Demo.dorohedoro,
+                matchScore: 0.9,
+                files: [
+                  ScanFile(
+                    path: '$root/ep1.mkv',
+                    name: 'ep1.mkv',
+                    size: 1,
+                    role: FileRole.video,
+                    parsed: ParsedName(
+                      season: 1,
+                      episodes: [1],
+                      confidence: 0.9,
+                    ),
+                  ),
+                  ScanFile(
+                    path: '$root/ep1.srt',
+                    name: 'ep1.srt',
+                    size: 1,
+                    role: FileRole.subtitle,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+        await pumpPage(tester, const SizedBox(), tm: tm);
+        final id = await submitAndWait(tester, tm);
+        await pumpPage(tester, ReviewPage(taskId: id.value), tm: tm);
+
+        expect(find.text('ep1.srt'), findsNothing);
+        final row = find.ancestor(
+          of: find.text('ep1.mkv'),
+          matching: find.byType(Hoverable),
+        );
+        await tester.tap(
+          find.descendant(of: row.first, matching: find.byType(Checkbox)).first,
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('ep1.srt'), findsOneWidget);
+
+        // Explicit companion edit to an overflowing episode surfaces its warning tag.
+        await tester.tap(find.text('ep1.srt'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('edit-manual')));
+        await tester.pumpAndSettle();
+        await tester.enterText(find.byKey(const ValueKey('edit-season')), '1');
+        await tester.enterText(
+          find.byKey(const ValueKey('edit-episode')),
+          '99',
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('edit-save')));
+        await tester.pumpAndSettle();
+        expect(find.textContaining('超出 TMDB 总集数'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'issue 9: manual edit validates season/episode and accepts valid specials',
+      (tester) async {
+        const root = '/d/异兽魔都 2020';
+        final tm = _PlanningTaskManager(
+          const ScanResult(
+            connection: ConnectionId('demo-alist'),
+            roots: ['/d'],
+            groups: [
+              MediaGroup(
+                id: _g1,
+                kind: MediaKind.episode,
+                anchorTitle: '异兽魔都',
+                rootDir: root,
+                match: Demo.dorohedoro,
+                matchScore: 0.9,
+                files: [
+                  ScanFile(
+                    path: '$root/ep1.mkv',
+                    name: 'ep1.mkv',
+                    size: 1,
+                    role: FileRole.video,
+                    parsed: ParsedName(
+                      season: 1,
+                      episodes: [1],
+                      confidence: 0.9,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+        await pumpPage(tester, const SizedBox(), tm: tm);
+        final id = await submitAndWait(tester, tm);
+        await pumpPage(tester, ReviewPage(taskId: id.value), tm: tm);
+
+        await tester.tap(find.text('ep1.mkv'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('edit-manual')));
+        await tester.pumpAndSettle();
+
+        final save = find.byKey(const ValueKey('edit-save'));
+        await tester.enterText(find.byKey(const ValueKey('edit-episode')), '0');
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('edit-validation-error')),
+          findsOneWidget,
+        );
+        expect(tester.widget<FilledButton>(save).onPressed, isNull);
+
+        await tester.enterText(find.byKey(const ValueKey('edit-episode')), '1');
+        await tester.enterText(find.byKey(const ValueKey('edit-season')), '-1');
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('edit-validation-error')),
+          findsOneWidget,
+        );
+        expect(tester.widget<FilledButton>(save).onPressed, isNull);
+
+        await tester.tap(find.text('特别篇'));
+        await tester.pumpAndSettle();
+        await tester.enterText(find.byKey(const ValueKey('edit-season')), '0');
+        await tester.enterText(find.byKey(const ValueKey('edit-episode')), '1');
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('edit-validation-error')),
+          findsNothing,
+        );
+        expect(tester.widget<FilledButton>(save).onPressed, isNotNull);
+        await tester.tap(save);
+        await tester.pumpAndSettle();
+
+        final d = (await tm.review(id)).decisions[_g1]!;
+        expect(d.overrides['$root/ep1.mkv']!.kind, MediaKind.special);
+        expect(d.overrides['$root/ep1.mkv']!.season, 0);
+        expect(d.overrides['$root/ep1.mkv']!.episode, 1);
+      },
+    );
+
+    testWidgets(
+      'issue 10: merge conflict opens dialog, warns if kept merged, and executes when separated',
+      (tester) async {
+        final tm = _PlanningTaskManager(
+          const ScanResult(
+            connection: ConnectionId('demo-alist'),
+            roots: ['/d/one', '/d/two'],
+            groups: [
+              MediaGroup(
+                id: _g1,
+                kind: MediaKind.episode,
+                anchorTitle: '异兽魔都',
+                rootDir: '/d/one',
+                match: Demo.dorohedoro,
+                matchScore: 0.9,
+                files: [
+                  ScanFile(
+                    path: '/d/one/a.mkv',
+                    name: 'a.mkv',
+                    size: 1,
+                    role: FileRole.video,
+                    parsed: ParsedName(
+                      season: 1,
+                      episodes: [1],
+                      confidence: 0.9,
+                    ),
+                  ),
+                ],
+              ),
+              MediaGroup(
+                id: GroupId('g2'),
+                kind: MediaKind.episode,
+                anchorTitle: '异兽魔都',
+                rootDir: '/d/two',
+                match: Demo.dorohedoro,
+                matchScore: 0.9,
+                files: [
+                  ScanFile(
+                    path: '/d/two/a.mkv',
+                    name: 'a.mkv',
+                    size: 1,
+                    role: FileRole.video,
+                    parsed: ParsedName(
+                      season: 1,
+                      episodes: [1],
+                      confidence: 0.9,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+        await pumpPage(tester, const SizedBox(), tm: tm);
+        final id = await submitAndWait(tester, tm);
+        await pumpPage(tester, ReviewPage(taskId: id.value), tm: tm);
+
+        final execute = find.byKey(const ValueKey('execute-button'));
+        expect(tester.widget<FilledButton>(execute).onPressed, isNotNull);
+        expect(find.textContaining('点「开始整理」可分开保留'), findsOneWidget);
+
+        // Keeping merged still leaves conflict, so snackbar warns and refuses run.
+        await tester.tap(execute);
+        await tester.pumpAndSettle();
+        expect(find.text('合并到已有剧集文件夹？'), findsOneWidget);
+        await tester.tap(find.byKey(const ValueKey('merge-continue')));
+        await tester.pumpAndSettle();
+        expect(find.textContaining('仍有'), findsOneWidget);
+        expect(tm.runCalls, 0);
+
+        // Selecting 分开保留 clears conflict and executes.
+        await tester.tap(execute);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('分开保留').first);
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('merge-continue')));
+        await tester.pumpAndSettle();
+        expect(tm.runCalls, 1);
+        expect(find.text('ROUTE detail ${id.value}'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'issue 13: changing namingProfileProvider reloads awaiting ReviewPage preview',
+      (tester) async {
+        tester.view.physicalSize = const Size(1280, 800);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+
+        const root = '/d/异兽魔都 2020';
+        const tid = TaskId('T-naming');
+        final store = MemoryTaskStore();
+        final fs = MemoryStorageBackend({'$root/a.mkv': 1});
+        await store.saveSummary(
+          TaskSummary(
+            id: tid,
+            connection: const ConnectionId('demo-alist'),
+            paths: const ['/d'],
+            mode: OrganizeMode.inPlace,
+            stage: TaskStage.awaitingReview,
+            createdAt: DateTime(2026),
+          ),
+        );
+        await store.saveReview(
+          tid,
+          const ScanResult(
+            connection: ConnectionId('demo-alist'),
+            roots: ['/d'],
+            groups: [
+              MediaGroup(
+                id: _g1,
+                kind: MediaKind.episode,
+                anchorTitle: '异兽魔都',
+                rootDir: root,
+                match: Demo.dorohedoro,
+                matchScore: 0.9,
+                files: [
+                  ScanFile(
+                    path: '$root/a.mkv',
+                    name: 'a.mkv',
+                    size: 1,
+                    role: FileRole.video,
+                    parsed: ParsedName(
+                      season: 1,
+                      episodes: [1],
+                      confidence: 0.9,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const {_g1: GroupDecision()},
+        );
+
+        final router = GoRouter(
+          initialLocation: '/',
+          routes: [
+            GoRoute(
+              path: '/',
+              builder: (_, _) =>
+                  const Scaffold(body: ReviewPage(taskId: 'T-naming')),
+            ),
+          ],
+        );
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              taskManagerProvider.overrideWith((ref) {
+                final h = MemoryHistoryStore();
+                final tm = DefaultTaskManager(
+                  backendFor: (_) => fs,
+                  recognizer: AnchorRecognizer(
+                    const RuleBasedParser(),
+                    FakeMetadataProvider(),
+                  ),
+                  planner: DefaultPlanner(FakeMetadataProvider()),
+                  executor: DefaultExecutor(h, minInterval: Duration.zero),
+                  history: h,
+                  store: store,
+                  options: (_, mode) => PlanOptions(
+                    mode: mode,
+                    naming: ref.read(namingProfileProvider),
+                  ),
+                );
+                addTearDown(tm.dispose);
+                return tm;
+              }),
+            ],
+            child: MaterialApp.router(routerConfig: router),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('异兽魔都.Dorohedoro.2020.S01E01.mkv'), findsOneWidget);
+
+        final container = ProviderScope.containerOf(
+          tester.element(find.byType(ReviewPage)),
+        );
+        container
+            .read(namingProfileProvider.notifier)
+            .set(
+              NamingProfile.vidhub.copyWith(
+                tv: NamingProfile.vidhub.tv.copyWith(
+                  customTemplate: () => 'CUSTOM.S{season:02}E{episode:02}',
+                ),
+              ),
+            );
+        await tester.pumpAndSettle();
+        expect(find.text('CUSTOM.S01E01.mkv'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'issue 15: UnassignedPane and sidebar distinguish kept vs deleted junk files',
+      (tester) async {
+        const root = '/d/异兽魔都 2020';
+        const scan = ScanResult(
+          connection: ConnectionId('demo-alist'),
+          roots: ['/d'],
+          groups: [
+            MediaGroup(
+              id: _g1,
+              kind: MediaKind.episode,
+              anchorTitle: '异兽魔都',
+              rootDir: root,
+              match: Demo.dorohedoro,
+              matchScore: 0.9,
+              files: [
+                ScanFile(
+                  path: '$root/a.mkv',
+                  name: 'a.mkv',
+                  size: 1,
+                  role: FileRole.video,
+                  parsed: ParsedName(season: 1, episodes: [1], confidence: 0.9),
+                ),
+              ],
+            ),
+          ],
+          unassigned: [
+            ScanFile(
+              path: '$root/ad.txt',
+              name: 'ad.txt',
+              size: 1,
+              role: FileRole.junk,
+            ),
+            ScanFile(
+              path: '/d/notes.pdf',
+              name: 'notes.pdf',
+              size: 1,
+              role: FileRole.other,
+            ),
+          ],
+        );
+
+        final tmKeep = _PlanningTaskManager(
+          scan,
+          planOptions: const PlanOptions(deleteJunk: false),
+        );
+        await pumpPage(tester, const SizedBox(), tm: tmKeep);
+        final id1 = await submitAndWait(tester, tmKeep);
+        await pumpPage(tester, ReviewPage(taskId: id1.value), tm: tmKeep);
+        expect(find.text('没归进任何作品，不会被整理'), findsOneWidget);
+        await tapKey(tester, 'unassigned-link');
+        expect(find.textContaining('整理时原样保留'), findsOneWidget);
+        expect(find.text('将永久删除'), findsNothing);
+
+        final tmDel = _PlanningTaskManager(
+          scan,
+          planOptions: const PlanOptions(deleteJunk: true),
+        );
+        await pumpPage(tester, const SizedBox(), tm: tmDel);
+        final id2 = await submitAndWait(tester, tmDel);
+        await pumpPage(tester, ReviewPage(taskId: id2.value), tm: tmDel);
+        expect(find.text('其中 1 个垃圾文件将被永久删除'), findsOneWidget);
+        await tapKey(tester, 'unassigned-link');
+        expect(
+          find.text('共 2 个未归类文件：其中 1 个已计划在整理时永久删除，其余原样保留。'),
+          findsOneWidget,
+        );
+        expect(find.text('将永久删除'), findsOneWidget);
+      },
+    );
   });
 }
