@@ -211,15 +211,19 @@ Map<int, int> seasonSizes(MediaGroup g, GroupDecision? d) {
 int? _localEpisode(ScanFile f) =>
     f.parsed?.episodes.firstOrNull ?? f.parsed?.absolute;
 
-bool _isMainVideo(ReviewRow r) =>
-    r.file.role == FileRole.video &&
-    !r.ignored &&
-    r.override?.kind != MediaKind.special &&
-    r.override?.kind != MediaKind.extra;
+bool _isMainVideo(ReviewRow r) {
+  if (r.file.role != FileRole.video || r.ignored) return false;
+  final kind = r.override?.kind ?? r.file.parsed?.kind;
+  if (kind == MediaKind.special || kind == MediaKind.extra) return false;
+  if ((r.override?.season ?? r.file.parsed?.season) == 0) return false;
+  return true;
+}
 
-/// Puts [from] at [to] and numbers every later file of the same local season
-/// after it (by the files' own numbers), moving into the next season when
-/// TMDB says one is full. Returns the overrides to set, [from]'s included.
+/// Puts [from] at [to] and shifts every later file of the same local season
+/// after it by its local-episode delta (preserving missing-episode gaps and
+/// keeping duplicate representations of the same episode together), moving into
+/// the next season when TMDB says one is full. Returns the overrides to set,
+/// [from]'s included.
 Map<String, FileOverride> shiftFrom(
   MediaGroup g,
   GroupDecision? d,
@@ -247,14 +251,20 @@ Map<String, FileOverride> shiftFrom(
         r,
   ]..sort((a, b) => _localEpisode(a.file)!.compareTo(_localEpisode(b.file)!));
   final sizes = seasonSizes(g, d);
+  var prevLocal = start;
   var s = to.season, e = to.episode;
   for (final r in later) {
-    e++;
-    final size = sizes[s];
-    if (size != null && e > size && sizes.containsKey(s + 1)) {
-      s++;
-      e = 1;
+    final curLocal = _localEpisode(r.file)!;
+    final delta = curLocal - prevLocal;
+    for (var step = 0; step < delta; step++) {
+      e++;
+      final size = sizes[s];
+      if (size != null && e > size && sizes.containsKey(s + 1)) {
+        s++;
+        e = 1;
+      }
     }
+    prevLocal = curLocal;
     out[r.file.path] = FileOverride(
       season: s,
       episode: e,

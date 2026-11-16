@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
 import '../../data/providers.dart';
+import '../../data/settings.dart';
 import '../../ui/tokens.dart';
 import '../../ui/widgets.dart';
 import '../../widgets/common.dart';
@@ -41,6 +42,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
   int _detailTab =
       folderTab - 1; // "unset": DetailPane falls back to first season
   var _updateSeq = 0;
+  var _pendingUpdates = 0;
   var _executing = false;
 
   TaskId get _id => TaskId(widget.taskId);
@@ -65,6 +67,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
       _selected = null;
       _showUnassigned = false;
       _detailTab = folderTab - 1;
+      _pendingUpdates = 0;
       _executing = false;
       _load();
     }
@@ -87,6 +90,20 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
       });
     } catch (e) {
       if (mounted) setState(() => _error = e);
+    }
+  }
+
+  void _reloadIfReviewing() {
+    if (!mounted) return;
+    final stage = ref
+        .read(tasksProvider)
+        .asData
+        ?.value
+        .where((t) => t.id == _id)
+        .firstOrNull
+        ?.stage;
+    if (stage == null || stage == TaskStage.awaitingReview) {
+      _load();
     }
   }
 
@@ -155,8 +172,9 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
   Future<void> _update(GroupId id, GroupDecision d) async {
     final seq = ++_updateSeq;
     final cur = _review;
-    if (cur != null) {
-      setState(() {
+    setState(() {
+      _pendingUpdates++;
+      if (cur != null) {
         _review = TaskReview(
           id: cur.id,
           scan: cur.scan,
@@ -167,17 +185,21 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
         // what's next is organizing it.
         if (_tab == 1 && _groups(matched: false).isEmpty) _tab = 0;
         _selectFirstVisible();
-      });
-    }
-    final r = await _tm.updateDecision(_id, id, d);
-    if (!mounted) return;
-    ref.invalidate(taskWorksProvider(_id));
-    ref.invalidate(taskDetailProvider(_id));
-    if (seq != _updateSeq) return;
-    setState(() {
-      _review = r;
-      _selectFirstVisible();
+      }
     });
+    try {
+      final r = await _tm.updateDecision(_id, id, d);
+      if (!mounted) return;
+      ref.invalidate(taskWorksProvider(_id));
+      ref.invalidate(taskDetailProvider(_id));
+      if (seq != _updateSeq) return;
+      setState(() {
+        _review = r;
+        _selectFirstVisible();
+      });
+    } finally {
+      if (mounted) setState(() => _pendingUpdates--);
+    }
   }
 
   GroupDecision _decisionOf(GroupId id) =>
@@ -192,7 +214,10 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
         ? EpisodeRef(o.season!, o.episode!)
         : null;
     final main =
-        !o.ignore && o.kind != MediaKind.special && o.kind != MediaKind.extra;
+        row.file.role == FileRole.video &&
+        !o.ignore &&
+        o.kind != MediaKind.special &&
+        o.kind != MediaKind.extra;
     // Moving one episode moves the ones after it too (12 -> S02E01, 13 -> S02E02 …).
     if (g.kind == MediaKind.episode &&
         main &&
@@ -278,15 +303,23 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
   }
 
   Future<void> _execute() async {
-    if (_executing) return;
+    if (_executing || _pendingUpdates > 0) return;
     var r = _review;
-    if (r == null || r.preview.conflicts.isNotEmpty) return;
+    if (r == null) return;
     // Shows landing in a folder that's already there (or filled twice by
     // this task): ask every time, and say where.
     final merges = [
       for (final m in r.preview.merges)
         if (r.decisions[m.group]?.selected ?? true) m,
     ];
+    if (r.preview.conflicts.isNotEmpty && merges.isEmpty) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(content: Text('仍有 ${r.preview.conflicts.length} 处冲突，请先处理')),
+        );
+      return;
+    }
     if (merges.isNotEmpty) {
       final separate = await showMergeDialog(
         context,
@@ -300,7 +333,19 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
       }
       if (!mounted) return;
       r = _review;
-      if (r == null || r.preview.conflicts.isNotEmpty) return;
+      if (r == null) return;
+      if (r.preview.conflicts.isNotEmpty) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(
+              content: Text(
+                '仍有 ${r.preview.conflicts.length} 处冲突，可在弹窗中选择「分开保留」或先修改集号',
+              ),
+            ),
+          );
+        return;
+      }
     }
     final ops = r.preview.ops.where((o) => o.selected).toList();
     if (ops.isEmpty) return;
@@ -405,6 +450,12 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
         }
       },
     );
+    ref.listen(namingProfileProvider, (_, _) => _reloadIfReviewing());
+    ref.listen(
+      settingsProvider.select((s) => (s.autoDeleteJunk, s.confidenceThreshold)),
+      (_, _) => _reloadIfReviewing(),
+    );
+    ref.listen(connectionsProvider, (_, _) => _reloadIfReviewing());
     final paths = ref
         .watch(tasksProvider)
         .asData
@@ -478,6 +529,10 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
     final g = _selectedGroup;
     final p = Palette.of(context);
     final hairlineSide = BorderSide(color: p.line, width: hairline);
+    final unassignedDeletes = plannedUnassignedDeletes(
+      r.scan.unassigned,
+      r.preview,
+    ).length;
     return DecoratedBox(
       decoration: BoxDecoration(border: Border(top: hairlineSide)),
       child: Row(
@@ -547,7 +602,11 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                       selected: _showUnassigned,
                       leading: const Icon(CupertinoIcons.tray, size: 16),
                       title: Text('未归类 ${r.scan.unassigned.length} 个文件'),
-                      subtitle: const Text('没归进任何作品，不会被整理'),
+                      subtitle: Text(
+                        unassignedDeletes > 0
+                            ? '其中 $unassignedDeletes 个垃圾文件将被永久删除'
+                            : '没归进任何作品，不会被整理',
+                      ),
                       trailing: const Icon(
                         CupertinoIcons.chevron_right,
                         size: 12,
@@ -563,7 +622,10 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
             child: _showUnassigned
                 ? Padding(
                     padding: const EdgeInsets.only(top: 12, bottom: 64),
-                    child: UnassignedPane(files: r.scan.unassigned),
+                    child: UnassignedPane(
+                      files: r.scan.unassigned,
+                      plan: r.preview,
+                    ),
                   )
                 : g == null
                 ? const EmptyState(
@@ -610,6 +672,10 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
   Widget _bottomBar(TaskReview r) {
     final p = Palette.of(context);
     final conflicts = r.preview.conflicts.length;
+    final merges = [
+      for (final m in r.preview.merges)
+        if (r.decisions[m.group]?.selected ?? true) m,
+    ];
     final mode = ref
         .watch(tasksProvider)
         .asData
@@ -618,6 +684,11 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
         .map((t) => t.mode)
         .firstOrNull;
     final ops = r.preview.ops.where((o) => o.selected).length;
+    final canStart =
+        !_executing &&
+        _pendingUpdates == 0 &&
+        ops > 0 &&
+        (conflicts == 0 || merges.isNotEmpty);
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
       decoration: BoxDecoration(
@@ -636,6 +707,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
             },
             value: mode ?? OrganizeMode.inPlace,
             onChanged: (v) async {
+              setState(() => _pendingUpdates++);
               try {
                 final nr = await _tm.setMode(_id, v);
                 if (mounted) setState(() => _review = nr);
@@ -647,6 +719,8 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                 ScaffoldMessenger.of(context)
                   ..hideCurrentSnackBar()
                   ..showSnackBar(SnackBar(content: Text(msg)));
+              } finally {
+                if (mounted) setState(() => _pendingUpdates--);
               }
             },
           ),
@@ -660,7 +734,11 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
           ),
           const SizedBox(width: 6),
           Text(
-            conflicts == 0 ? '没有冲突' : '$conflicts 处冲突，处理后才能整理',
+            conflicts == 0
+                ? '没有冲突'
+                : merges.isNotEmpty
+                ? '$conflicts 处冲突，点「开始整理」可分开保留'
+                : '$conflicts 处冲突，处理后才能整理',
             key: const ValueKey('conflict-count'),
             style: TextStyle(
               fontSize: TypeScale.small,
@@ -678,7 +756,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
             message: '⌘↩',
             child: FilledButton(
               key: const ValueKey('execute-button'),
-              onPressed: conflicts == 0 && ops > 0 ? _execute : null,
+              onPressed: canStart ? _execute : null,
               child: const Text('开始整理'),
             ),
           ),

@@ -718,6 +718,15 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
     _RowKind.ignore => row.override?.kind,
   };
 
+  String? _validationError(bool fields) {
+    if (!fields) return null;
+    final s = int.tryParse(seasonC.text.trim());
+    if (s == null || s < 0) return '季号需为不小于 0 的整数';
+    final e = int.tryParse(epC.text.trim());
+    if (e == null || e < 1) return '集号需为大于 0 的整数';
+    return null;
+  }
+
   void _confirm(EpisodeRef e) => Navigator.pop(
     context,
     FileOverride(season: e.season, episode: e.episode, kind: _kind),
@@ -726,8 +735,8 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
   void _save() => Navigator.pop(
     context,
     FileOverride(
-      season: isTv ? int.tryParse(seasonC.text) : null,
-      episode: isTv ? int.tryParse(epC.text) : null,
+      season: isTv ? int.tryParse(seasonC.text.trim()) : null,
+      episode: isTv ? int.tryParse(epC.text.trim()) : null,
       kind: _kind,
       ignore: kind == _RowKind.ignore,
     ),
@@ -776,6 +785,7 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
         !waiting &&
         kind != _RowKind.ignore &&
         kind != _RowKind.extra;
+    final error = _validationError(fields);
     return MacSheet(
       child: SizedBox(
         width: picking ? 620 : 460,
@@ -847,6 +857,7 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
                     key: const ValueKey('edit-season'),
                     controller: seasonC,
                     keyboardType: TextInputType.number,
+                    onChanged: (_) => setState(() {}),
                   ),
                 ),
                 FormRow(
@@ -856,8 +867,20 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
                     key: const ValueKey('edit-episode'),
                     controller: epC,
                     keyboardType: TextInputType.number,
+                    onChanged: (_) => setState(() {}),
                   ),
                 ),
+                if (error != null) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    error,
+                    key: const ValueKey('edit-validation-error'),
+                    style: TextStyle(
+                      fontSize: TypeScale.small,
+                      color: Palette.of(context).danger,
+                    ),
+                  ),
+                ],
               ],
               const SizedBox(height: 14),
               Row(
@@ -890,7 +913,7 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
                     const SizedBox(width: 8),
                     FilledButton(
                       key: const ValueKey('edit-save'),
-                      onPressed: _save,
+                      onPressed: error != null ? null : _save,
                       child: const Text('保存'),
                     ),
                   ],
@@ -1504,9 +1527,15 @@ class DetailPane extends StatelessWidget {
                           _withMenu(_Entry.sidecar(c), current),
                       ],
                       summary: _companionSummary(e.companions),
-                      startOpen: e.companions.any(
-                        (c) => c.conflict || c.ignored,
-                      ),
+                      startOpen:
+                          e.row!.ignored ||
+                          e.companions.any(
+                            (c) =>
+                                c.conflict ||
+                                c.ignored ||
+                                c.override != null ||
+                                c.op?.warning != null,
+                          ),
                     )
                   else
                     _withMenu(e, current),
@@ -1625,6 +1654,14 @@ class _VideoBlock extends StatefulWidget {
 
 class _VideoBlockState extends State<_VideoBlock> {
   late var _open = widget.startOpen;
+
+  @override
+  void didUpdateWidget(_VideoBlock oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!oldWidget.startOpen && widget.startOpen) {
+      _open = true;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2045,7 +2082,10 @@ class _SidecarRow extends StatelessWidget {
                 ],
               ),
             ),
-            if (r.conflict) Tag('冲突', color: p.danger),
+            if (r.conflict)
+              Tag('冲突', color: p.danger)
+            else if (r.op?.warning != null)
+              Tag(r.op!.warning!, color: p.warning),
           ],
         ),
       ),
@@ -2469,21 +2509,49 @@ String unassignedReason(ScanFile f) => switch (f.role) {
   FileRole.other => '不认识的文件类型',
 };
 
-/// Files no work claimed, by folder. Read-only: they are never touched.
+/// Paths among [files] that [plan] schedules for permanent deletion.
+Set<String> plannedUnassignedDeletes(List<ScanFile> files, RenamePlan? plan) {
+  if (plan == null) return const {};
+  final deleteIds = <OpId>{};
+  final deleteSrcs = <String>{};
+  for (final o in plan.ops) {
+    if (o.kind == OpKind.delete && o.selected) {
+      deleteIds.add(o.id);
+      deleteSrcs.add(o.src);
+    }
+  }
+  return {
+    for (final f in files)
+      if (deleteIds.contains(OpId('d-${stableHash(f.path)}')) ||
+          deleteSrcs.contains(f.path))
+        f.path,
+  };
+}
+
+/// Files no work claimed, by folder, showing whether any junk files are
+/// planned for deletion under current settings.
 class UnassignedPane extends StatelessWidget {
   final List<ScanFile> files;
+  final RenamePlan? plan;
 
-  const UnassignedPane({super.key, required this.files});
+  const UnassignedPane({super.key, required this.files, this.plan});
 
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
+    final deletedPaths = plannedUnassignedDeletes(files, plan);
+    final deletedCount = deletedPaths.length;
     final byDir = <String, List<ScanFile>>{};
     for (final f in files) {
       final i = f.path.lastIndexOf('/');
       (byDir[i <= 0 ? '/' : f.path.substring(0, i)] ??= []).add(f);
     }
     final dirs = byDir.keys.toList()..sort();
+    final summary = deletedCount == 0
+        ? '这些文件没归进任何作品，整理时原样保留。'
+        : deletedCount == files.length
+        ? '这些文件没归进任何作品，且已开启「自动清理垃圾文件」，确认整理后将被永久删除。'
+        : '共 ${files.length} 个未归类文件：其中 $deletedCount 个已计划在整理时永久删除，其余原样保留。';
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
       children: [
@@ -2496,8 +2564,11 @@ class UnassignedPane extends StatelessWidget {
         ),
         const SizedBox(height: 4),
         Text(
-          '这些文件没归进任何作品，整理时原样保留。',
-          style: TextStyle(fontSize: TypeScale.small, color: p.textMuted),
+          summary,
+          style: TextStyle(
+            fontSize: TypeScale.small,
+            color: deletedCount > 0 ? p.danger : p.textMuted,
+          ),
         ),
         for (final d in dirs) ...[
           const SizedBox(height: 14),
@@ -2510,30 +2581,43 @@ class UnassignedPane extends StatelessWidget {
           Panel(
             child: Rows(
               children: [
-                for (final f in byDir[d]!)
-                  Padding(
-                    key: ValueKey('unassigned ${f.path}'),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
-                    ),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            f.name,
-                            style: const TextStyle(fontSize: 13),
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                for (final f in byDir[d]!) ...[
+                  Builder(
+                    builder: (context) {
+                      final willDelete = deletedPaths.contains(f.path);
+                      return Padding(
+                        key: ValueKey('unassigned ${f.path}'),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
                         ),
-                        const SizedBox(width: 12),
-                        Text(
-                          '${fmtSize(f.size)} · ${unassignedReason(f)}',
-                          style: TextStyle(fontSize: 12, color: p.textFaint),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                f.name,
+                                style: const TextStyle(fontSize: 13),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            if (willDelete) ...[
+                              Tag('将永久删除', color: p.danger),
+                              const SizedBox(width: 8),
+                            ],
+                            Text(
+                              '${fmtSize(f.size)} · ${unassignedReason(f)}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: p.textFaint,
+                              ),
+                            ),
+                          ],
                         ),
-                      ],
-                    ),
+                      );
+                    },
                   ),
+                ],
               ],
             ),
           ),

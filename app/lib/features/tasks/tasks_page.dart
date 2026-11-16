@@ -273,7 +273,7 @@ class TaskCard extends ConsumerWidget {
             }
           }
         }, icon: CupertinoIcons.arrow_clockwise),
-      if (t.stage == TaskStage.done || t.stage == TaskStage.partiallyFailed)
+      if (canUndo(t))
         MenuAction('撤销', undo, icon: CupertinoIcons.arrow_uturn_left),
       if (canRetry(t))
         MenuAction(
@@ -314,7 +314,8 @@ class TaskCard extends ConsumerWidget {
     final problem =
         t.message.isNotEmpty &&
             (t.stage == TaskStage.cancelled ||
-                t.stage == TaskStage.partiallyFailed)
+                t.stage == TaskStage.partiallyFailed ||
+                t.message.startsWith('已撤销部分操作'))
         ? t.message
         : null;
 
@@ -420,8 +421,7 @@ class TaskCard extends ConsumerWidget {
                   onPressed: () => tm.cancel(t.id),
                   child: const Text('取消'),
                 ),
-              if (t.stage == TaskStage.done ||
-                  t.stage == TaskStage.partiallyFailed)
+              if (canUndo(t))
                 TextButton(onPressed: undo, child: const Text('撤销')),
               // A failed recognition is the common case; undone ones keep it
               // in the menu.
@@ -539,9 +539,7 @@ Future<bool> confirmDeleteTask(
   WidgetRef ref,
   List<TaskSummary> tasks,
 ) async {
-  final undoable = tasks.any(
-    (t) => t.stage == TaskStage.done || t.stage == TaskStage.partiallyFailed,
-  );
+  final undoable = tasks.any(canUndo);
   final ok = await confirmDialog(
     context,
     title: tasks.length == 1 ? '删除任务记录' : '清空 ${tasks.length} 条任务记录',
