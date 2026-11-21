@@ -12,7 +12,9 @@ import '../tasks/tasks_page.dart' show confirmDeleteTask;
 import '../../ui/tokens.dart';
 import '../../ui/widgets.dart';
 import '../../widgets/common.dart';
-import 'settings_providers.dart';
+import '../../data/settings.dart';
+
+const _defaultTmdbBaseUrl = 'https://api.themoviedb.org/3';
 
 /// 设置页（PLAN §5）.
 class SettingsPage extends ConsumerStatefulWidget {
@@ -29,7 +31,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   late final _url = TextEditingController(
     text: ref.read(settingsProvider).tmdbBaseUrl,
   );
+  late final _initialConcurrency = ref.read(settingsProvider).concurrency;
+  late final _initialRps = ref.read(settingsProvider).requestsPerSecond;
   var _showKey = false;
+  var _testing = false;
+  String? _testMessage;
+  bool? _testOk;
 
   @override
   void dispose() {
@@ -42,20 +49,58 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       ref.read(settingsProvider.notifier).update(f);
 
   Future<void> _testConnection() async {
-    final messenger = ScaffoldMessenger.of(context);
-    String msg;
-    if (_key.text.trim().isEmpty &&
-        ref.read(builtInTmdbTokenProvider).isEmpty) {
-      msg = '请先填写 TMDB API Key';
-    } else {
-      try {
-        final hits = await ref.read(metadataProvider).search('Inception');
-        msg = hits.isEmpty ? '已连接，但没有搜到结果' : '连接成功：找到「${hits.first.title}」';
-      } catch (e) {
-        msg = '连接失败：$e';
-      }
+    if (_testing) return;
+    final customKey = _key.text.trim();
+    final builtInKey = ref.read(builtInTmdbTokenProvider).trim();
+    final effectiveKey = customKey.isNotEmpty ? customKey : builtInKey;
+    if (effectiveKey.isEmpty) {
+      setState(() {
+        _testOk = false;
+        _testMessage = '请先填写 TMDB API Key';
+      });
+      return;
     }
-    messenger.showSnackBar(SnackBar(content: Text(msg)));
+    final keySource = customKey.isNotEmpty ? '自定义 key' : '内置 key';
+    setState(() {
+      _testing = true;
+      _testMessage = null;
+      _testOk = null;
+    });
+    try {
+      final demo = ref.read(bootstrapProvider).demo;
+      final baseUrl = _url.text.trim().isEmpty
+          ? _defaultTmdbBaseUrl
+          : _url.text.trim();
+      final language = ref.read(settingsProvider).tmdbLanguage;
+      // Bypass FileTmdbCache so broken keys or proxies never get a false green
+      // from cached responses.
+      final MetadataProvider provider = demo
+          ? ref.read(metadataProvider)
+          : TmdbProvider(
+              TmdbConfig(
+                apiKey: effectiveKey,
+                baseUrl: baseUrl,
+                language: language,
+                fallbackLanguage: language == 'en-US' ? 'zh-CN' : 'en-US',
+              ),
+            );
+      final hits = await provider.search('Inception');
+      if (!mounted) return;
+      setState(() {
+        _testOk = hits.isNotEmpty;
+        _testMessage = hits.isEmpty
+            ? '已连接（$keySource），但没有搜到结果'
+            : '连接成功：找到「${hits.first.title}」（使用$keySource）';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _testOk = false;
+        _testMessage = '连接失败（使用$keySource）：$e';
+      });
+    } finally {
+      if (mounted) setState(() => _testing = false);
+    }
   }
 
   Future<void> _openDataDir() async {
@@ -66,7 +111,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   @override
   Widget build(BuildContext context) {
     final s = ref.watch(settingsProvider);
-    final naming = ref.watch(namingProfileProvider);
     final finished = [
       for (final t in ref.watch(tasksProvider).value ?? const <TaskSummary>[])
         if (!t.stage.isActive) t,
@@ -79,8 +123,14 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         );
     final p = Palette.of(context);
     final builtIn = ref.watch(builtInTmdbTokenProvider).isNotEmpty;
+    final urlNonDefault =
+        _url.text.trim().isNotEmpty && _url.text.trim() != _defaultTmdbBaseUrl;
+    final concurrencyChanged = s.concurrency != _initialConcurrency;
+    final rpsChanged = s.requestsPerSecond != _initialRps;
+
     return PageScaffold(
       title: '设置',
+      maxWidth: 820,
       child: ListView(
         padding: const EdgeInsets.fromLTRB(48, 0, 40, 28),
         children: [
@@ -93,9 +143,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 FormRow(
                   label: 'API Key',
                   labelWidth: 110,
-                  help: builtIn
-                      ? '已内置默认 key，可以留空；填了就优先用你的'
-                      : '支持 v3 key 和 v4 Read Access Token',
+                  help: builtIn ? '已内置默认 key，可以留空；填了就优先用你的' : '支持 v3 key 和 v4 Read Access Token；可在 themoviedb.org → 设置 → API 免费申请',
                   child: TextField(
                     key: const ValueKey('tmdb-key'),
                     controller: _key,
@@ -116,33 +164,90 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                         onPressed: () => setState(() => _showKey = !_showKey),
                       ),
                     ),
-                    onChanged: (v) => _set((o) => o.copyWith(tmdbApiKey: v)),
+                    onChanged: (v) {
+                      if (_testMessage != null) {
+                        setState(() {
+                          _testMessage = null;
+                          _testOk = null;
+                        });
+                      }
+                      _set((o) => o.copyWith(tmdbApiKey: v));
+                    },
                   ),
                 ),
                 FormRow(
                   label: 'Base URL',
                   labelWidth: 110,
                   help: '访问不了 TMDB 时，填一个反向代理地址',
-                  child: TextField(
-                    key: const ValueKey('tmdb-url'),
-                    controller: _url,
-                    style: const TextStyle(fontSize: 13),
-                    onChanged: (v) => _set((o) => o.copyWith(tmdbBaseUrl: v)),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          key: const ValueKey('tmdb-url'),
+                          controller: _url,
+                          style: const TextStyle(fontSize: 13),
+                          decoration: const InputDecoration(
+                            hintText: _defaultTmdbBaseUrl,
+                          ),
+                          onChanged: (v) {
+                            setState(() {
+                              _testMessage = null;
+                              _testOk = null;
+                            });
+                            _set((o) => o.copyWith(tmdbBaseUrl: v));
+                          },
+                        ),
+                      ),
+                      if (urlNonDefault) ...[
+                        const SizedBox(width: 8),
+                        TextButton(
+                          key: const ValueKey('tmdb-url-reset'),
+                          onPressed: () {
+                            _url.text = _defaultTmdbBaseUrl;
+                            setState(() {
+                              _testMessage = null;
+                              _testOk = null;
+                            });
+                            _set(
+                              (o) =>
+                                  o.copyWith(tmdbBaseUrl: _defaultTmdbBaseUrl),
+                            );
+                          },
+                          child: const Text('恢复默认'),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
                 FormRow(
                   label: '',
                   labelWidth: 110,
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: OutlinedButton.icon(
-                      onPressed: _testConnection,
-                      icon: const Icon(
-                        CupertinoIcons.bolt_horizontal,
-                        size: 14,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      OutlinedButton.icon(
+                        key: const ValueKey('tmdb-test'),
+                        onPressed: _testing ? null : _testConnection,
+                        icon: _testing
+                            ? const Spinner(size: 14)
+                            : const Icon(
+                                CupertinoIcons.bolt_horizontal,
+                                size: 14,
+                              ),
+                        label: Text(_testing ? '测试中…' : '测试连接'),
                       ),
-                      label: const Text('测试连接'),
-                    ),
+                      if (_testMessage != null) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          _testMessage!,
+                          key: const ValueKey('tmdb-test-result'),
+                          style: TextStyle(
+                            fontSize: TypeScale.small,
+                            color: _testOk == true ? p.success : p.danger,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
               ],
@@ -167,11 +272,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 SettingRow(
                   title: '自动删除垃圾文件',
                   caption: '广告等垃圾文件默认勾选删除，删除前会再问一次',
-                  control: MacSwitch(
-                    key: const ValueKey('auto-junk'),
-                    value: s.autoDeleteJunk,
-                    onChanged: (v) =>
-                        _set((o) => o.copyWith(autoDeleteJunk: v)),
+                  control: toggle(
+                    'auto-junk',
+                    s.autoDeleteJunk,
+                    (v) => s.copyWith(autoDeleteJunk: v),
                   ),
                 ),
                 SettingRow(
@@ -184,37 +288,49 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   ),
                 ),
                 SettingRow(
-                  title: '单季剧也建 Season 文件夹',
-                  caption: '关闭后只有一季的剧集直接放在剧集文件夹里；多季剧总会建',
-                  control: MacSwitch(
-                    key: const ValueKey('settings-single-season'),
-                    value: naming.tv.singleSeasonFolder,
-                    onChanged: (v) => ref
-                        .read(namingProfileProvider.notifier)
-                        .set(
-                          naming.copyWith(
-                            tv: naming.tv.copyWith(singleSeasonFolder: v),
-                          ),
-                        ),
-                  ),
-                ),
-                SettingRow(
                   title: '同时处理的文件数',
                   caption: '越大越快，但网盘更容易限流。重启理片后生效',
-                  control: Segmented<int>(
-                    options: const {1: '1', 2: '2', 4: '4', 8: '8'},
-                    value: s.concurrency,
-                    onChanged: (v) => _set((o) => o.copyWith(concurrency: v)),
+                  control: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (concurrencyChanged) ...[
+                        Tag(
+                          '需重启生效',
+                          key: const ValueKey('restart-concurrency'),
+                          color: p.warning,
+                        ),
+                        const SizedBox(width: 8),
+                      ],
+                      Segmented<int>(
+                        options: const {1: '1', 2: '2', 4: '4', 8: '8'},
+                        value: s.concurrency,
+                        onChanged: (v) =>
+                            _set((o) => o.copyWith(concurrency: v)),
+                      ),
+                    ],
                   ),
                 ),
                 SettingRow(
                   title: '每秒请求上限',
-                  caption: 'Alist 默认会限流，频繁报错时调小。重启理片后生效',
-                  control: Segmented<int>(
-                    options: const {2: '2', 5: '5', 10: '10'},
-                    value: s.requestsPerSecond,
-                    onChanged: (v) =>
-                        _set((o) => o.copyWith(requestsPerSecond: v)),
+                  caption: '仅影响网盘/远程连接。Alist 默认会限流，频繁报错时调小。重启理片后生效',
+                  control: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (rpsChanged) ...[
+                        Tag(
+                          '需重启生效',
+                          key: const ValueKey('restart-rps'),
+                          color: p.warning,
+                        ),
+                        const SizedBox(width: 8),
+                      ],
+                      Segmented<int>(
+                        options: const {2: '2', 5: '5', 10: '10'},
+                        value: s.requestsPerSecond,
+                        onChanged: (v) =>
+                            _set((o) => o.copyWith(requestsPerSecond: v)),
+                      ),
+                    ],
                   ),
                 ),
               ],
@@ -248,7 +364,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 ),
                 SettingRow(
                   title: '「有把握」的标准',
-                  caption: '「只整理有把握的」按这个标准挑选作品',
+                  caption: '任务页「只整理有把握的」按这个标准挑选作品',
                   control: Segmented<double>(
                     options: {0.6: '宽松', 0.7: '标准', 0.85: '严格'},
                     value:
@@ -261,11 +377,13 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 ),
                 SettingRow(
                   title: '清除 TMDB 缓存',
-                  caption: 'TMDB 上刚更新的信息没显示出来时用',
+                  caption: '清除元数据和海报缓存，TMDB 上刚更新的信息没显示出来时用',
                   control: OutlinedButton(
-                    onPressed: () {
+                    onPressed: () async {
                       ref.read(bootstrapProvider).tmdbCache?.clear();
+                      await CachedImage.clearDiskCache();
                       ref.invalidate(metadataProvider);
+                      if (!context.mounted) return;
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(content: Text('已清除 TMDB 缓存')),
                       );
@@ -303,32 +421,37 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                           child: Hoverable(
                             key: ValueKey('accent-${a.name}'),
                             onTap: () => _set((o) => o.copyWith(accent: a)),
-                            builder: (context, hover) => Container(
-                              width: 22,
-                              height: 22,
-                              margin: const EdgeInsets.only(left: 8),
-                              decoration: BoxDecoration(
-                                color:
-                                    Theme.of(context).brightness ==
-                                        Brightness.dark
-                                    ? a.dark
-                                    : a.light,
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: s.accent == a
-                                      ? p.text
-                                      : Colors.transparent,
-                                  width: 2,
+                            builder: (context, hover) {
+                              final c =
+                                  Theme.of(context).brightness ==
+                                      Brightness.dark
+                                  ? a.dark
+                                  : a.light;
+                              return Container(
+                                width: 22,
+                                height: 22,
+                                margin: const EdgeInsets.only(left: 8),
+                                decoration: BoxDecoration(
+                                  color: c,
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: s.accent == a
+                                        ? p.text
+                                        : Colors.transparent,
+                                    width: 2,
+                                  ),
                                 ),
-                              ),
-                              child: s.accent == a
-                                  ? const Icon(
-                                      CupertinoIcons.checkmark,
-                                      size: 12,
-                                      color: Colors.white,
-                                    )
-                                  : null,
-                            ),
+                                child: s.accent == a
+                                    ? Icon(
+                                        CupertinoIcons.checkmark,
+                                        size: 12,
+                                        color: c.computeLuminance() > 0.5
+                                            ? Colors.black
+                                            : Colors.white,
+                                      )
+                                    : null,
+                              );
+                            },
                           ),
                         ),
                     ],
@@ -360,6 +483,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               children: [
                 SettingRow(
                   title: '识别完成时提示',
+                  caption: '通过应用内底部提示条提醒',
                   control: toggle(
                     'notify-recognized',
                     s.notifyRecognized,
@@ -368,6 +492,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 ),
                 SettingRow(
                   title: '整理完成时提示',
+                  caption: '通过应用内底部提示条提醒',
                   control: toggle(
                     'notify-finished',
                     s.notifyFinished,
@@ -388,6 +513,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       : '共 ${finished.length} 条。不会动文件，但清空后就不能再撤销',
                   control: OutlinedButton(
                     key: const ValueKey('settings-clear-tasks'),
+                    style: OutlinedButton.styleFrom(foregroundColor: p.danger),
                     onPressed: finished.isEmpty
                         ? null
                         : () => confirmDeleteTask(context, ref, finished),
@@ -396,7 +522,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 ),
                 SettingRow(
                   title: '数据目录',
-                  caption: '设置、连接、任务记录和撤销日志都保存在这里',
+                  caption:
+                      '设置、连接、任务记录和撤销日志都保存在这里（含敏感凭据 secrets.json，备份/分享前请注意）',
                   control: OutlinedButton(
                     onPressed: _openDataDir,
                     child: Text(
@@ -447,23 +574,41 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   control: TextButton(
                     onPressed: () => showDialog<void>(
                       context: context,
-                      builder: (ctx) => AlertDialog(
-                        title: const Text('开源许可'),
-                        content: const SelectableText(
-                          '命名与解析思路参考 mnamer（MIT License）。\n'
-                          '原版权声明见项目 LICENSES/mnamer-MIT.txt。\n\n'
-                          'SMB 连接使用 dart_smb2（BSD-3-Clause）和 libsmb2'
-                          '（GNU LGPL 2.1 或更新版本，动态加载，'
-                          'Copyright (C) Ronnie Sahlberg 及贡献者）。\n'
-                          '源码：https://github.com/sahlberg/libsmb2 ，'
-                          '说明见项目 LICENSES/libsmb2-NOTICE.txt。',
-                        ),
-                        actions: [
-                          OutlinedButton(
-                            onPressed: () => Navigator.pop(ctx),
-                            child: const Text('关闭'),
+                      builder: (ctx) => MacSheet(
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 480),
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(22, 20, 22, 16),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Text(
+                                  '开源许可',
+                                  style: Theme.of(ctx).textTheme.titleMedium,
+                                ),
+                                const SizedBox(height: 12),
+                                const SelectableText(
+                                  '命名与解析思路参考 mnamer（MIT License）。\n'
+                                  '原版权声明见项目 LICENSES/mnamer-MIT.txt。\n\n'
+                                  'SMB 连接使用 dart_smb2（BSD-3-Clause）和 libsmb2'
+                                  '（GNU LGPL 2.1 或更新版本，动态加载，'
+                                  'Copyright (C) Ronnie Sahlberg 及贡献者）。\n'
+                                  '源码：https://github.com/sahlberg/libsmb2 ，'
+                                  '说明见项目 LICENSES/libsmb2-NOTICE.txt。',
+                                ),
+                                const SizedBox(height: 16),
+                                Align(
+                                  alignment: Alignment.centerRight,
+                                  child: OutlinedButton(
+                                    onPressed: () => Navigator.pop(ctx),
+                                    child: const Text('关闭'),
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
-                        ],
+                        ),
                       ),
                     ),
                     child: const Text('查看许可'),

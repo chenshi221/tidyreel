@@ -225,6 +225,193 @@ void main() {
     expect(find.textContaining('广告或垃圾文件'), findsNothing);
   });
 
+  testWidgets('returning from unassigned restores the work and detail tab', (
+    tester,
+  ) async {
+    await open(tester);
+    await tapKey(tester, 'folder-tab');
+    expect(find.text('→ /下载/完成/异兽魔都 (2020)'), findsOneWidget);
+    await tapKey(tester, 'unassigned-link');
+    expect(find.textContaining('整理时原样保留'), findsOneWidget);
+    await tapKey(tester, 'return-to-works');
+    expect(find.textContaining('整理时原样保留'), findsNothing);
+    expect(find.text('→ /下载/完成/异兽魔都 (2020)'), findsOneWidget);
+  });
+
+  testWidgets(
+    'switching tabs exits unassigned and an empty tab offers a way back',
+    (tester) async {
+      final (tm, id) = await open(tester);
+      await tm.updateDecision(
+        id,
+        const GroupId('g3'),
+        const GroupDecision(match: Demo.inception),
+      );
+      await pumpPage(tester, ReviewPage(taskId: id.value), tm: tm);
+      await tapKey(tester, 'unassigned-link');
+      await tester.tap(find.text('需手动匹配 0'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('整理时原样保留'), findsNothing);
+      expect(find.text('没有需要手动匹配的作品'), findsOneWidget);
+      await tester.tap(find.text('查看可整理的 3 个作品'));
+      await tester.pumpAndSettle();
+      expect(find.text('[Sub] Dorohedoro S01E01 [1080p].mkv'), findsOneWidget);
+
+      await tapKey(tester, 'unassigned-link');
+      await tester.tap(find.text('需手动匹配 0'));
+      await tester.pumpAndSettle();
+      await tapKey(tester, 'unassigned-link');
+      await tapKey(tester, 'return-to-works');
+      expect(find.text('[Sub] Dorohedoro S01E01 [1080p].mkv'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'a manual movie match selects valid files and runs from unassigned',
+    (tester) async {
+      const path = '/下载/盗梦空间 (2010)/[1080p][简繁字幕].mkv';
+      final tm = _PlanningTaskManager(
+        const ScanResult(
+          connection: ConnectionId('demo-alist'),
+          roots: ['/下载/盗梦空间 (2010)'],
+          groups: [
+            MediaGroup(
+              id: _g1,
+              kind: MediaKind.movie,
+              anchorTitle: '未知视频',
+              rootDir: '/下载/盗梦空间 (2010)',
+              files: [
+                ScanFile(
+                  path: path,
+                  name: '[1080p][简繁字幕].mkv',
+                  size: 1,
+                  role: FileRole.video,
+                  parsed: ParsedName(kind: MediaKind.unknown, confidence: 0.1),
+                ),
+              ],
+            ),
+          ],
+          unassigned: [
+            ScanFile(
+              path: '/下载/pending.mkv.qkdownload',
+              name: 'pending.mkv.qkdownload',
+              size: 1,
+              role: FileRole.other,
+            ),
+          ],
+        ),
+      );
+      await pumpPage(tester, const SizedBox(), tm: tm);
+      final id = await submitAndWait(tester, tm);
+      await pumpPage(tester, ReviewPage(taskId: id.value), tm: tm);
+      expect(find.text('没有可整理的作品，请先手动匹配'), findsOneWidget);
+      await tester.tap(find.text('需手动匹配 1'));
+      await tester.pumpAndSettle();
+      final search = find
+          .descendant(
+            of: find.byKey(const ValueKey('inline-search-g1')),
+            matching: find.byType(TextField),
+          )
+          .first;
+      await tester.enterText(search, '盗梦');
+      await tester.tap(find.byTooltip('搜索'));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.descendant(
+          of: find.byKey(const ValueKey('inline-search-g1')),
+          matching: find.text('盗梦空间'),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final execute = find.byKey(const ValueKey('execute-button'));
+      final row = find
+          .ancestor(
+            of: find.text('[1080p][简繁字幕].mkv'),
+            matching: find.byType(Hoverable),
+          )
+          .first;
+      final checkbox = find.descendant(
+        of: row,
+        matching: find.byType(Checkbox),
+      );
+      expect(tester.widget<Checkbox>(checkbox).value, isTrue);
+      expect(find.textContaining('置信度较低'), findsNothing);
+      expect(find.text('不确定'), findsNothing);
+      expect(tester.widget<FilledButton>(execute).onPressed, isNotNull);
+
+      await tester.tap(checkbox);
+      await tester.pumpAndSettle();
+      expect(tester.widget<FilledButton>(execute).onPressed, isNull);
+      expect(find.text('未选择可整理的文件，请勾选文件'), findsOneWidget);
+      await tester.tap(checkbox);
+      await tester.pumpAndSettle();
+      final before = await tm.review(id);
+      await tapKey(tester, 'unassigned-link');
+      final after = await tm.review(id);
+      expect(after.decisions[_g1]?.match, Demo.inception);
+      expect(
+        after.preview.ops.where((o) => o.selected).map((o) => o.src),
+        before.preview.ops.where((o) => o.selected).map((o) => o.src),
+      );
+      expect(
+        after.preview.ops.any((o) => o.src.endsWith('.qkdownload')),
+        isFalse,
+      );
+      expect(tester.widget<FilledButton>(execute).onPressed, isNotNull);
+      await tester.tap(execute);
+      await tester.pumpAndSettle();
+      expect(tm.runCalls, 1);
+      expect(find.text('ROUTE detail ${id.value}'), findsOneWidget);
+    },
+  );
+
+  testWidgets('a manual show match still requires a missing episode number', (
+    tester,
+  ) async {
+    final tm = _PlanningTaskManager(
+      const ScanResult(
+        connection: ConnectionId('demo-alist'),
+        roots: ['/下载/未知'],
+        groups: [
+          MediaGroup(
+            id: _g1,
+            kind: MediaKind.unknown,
+            anchorTitle: '未知',
+            rootDir: '/下载/未知',
+            files: [
+              ScanFile(
+                path: '/下载/未知/a.mkv',
+                name: 'a.mkv',
+                size: 1,
+                role: FileRole.video,
+                parsed: ParsedName(confidence: 0.1),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+    await pumpPage(tester, const SizedBox(), tm: tm);
+    final id = await submitAndWait(tester, tm);
+    await tm.updateDecision(
+      id,
+      _g1,
+      const GroupDecision(match: Demo.dorohedoro),
+    );
+    await pumpPage(tester, ReviewPage(taskId: id.value), tm: tm);
+    expect(find.textContaining('置信度较低'), findsNothing);
+    expect(find.text('不确定'), findsNothing);
+    expect(find.text('未识别到集号'), findsOneWidget);
+    expect(find.text('没有可执行的改动，请检查文件对应关系'), findsOneWidget);
+    expect(
+      tester
+          .widget<FilledButton>(find.byKey(const ValueKey('execute-button')))
+          .onPressed,
+      isNull,
+    );
+  });
+
   testWidgets('editing a row: pick a TMDB episode, later files follow', (
     tester,
   ) async {
@@ -982,6 +1169,190 @@ void main() {
           findsOneWidget,
         );
         expect(find.text('将永久删除'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'unchecking shiftFollowing updates only the edited file and double-click confirms',
+      (tester) async {
+        final (tm, id) = await open(tester);
+        Future<GroupDecision> decision() async =>
+            (await tm.review(id) as TaskReview).decisions[_g1]!;
+
+        await tester.tap(find.text('[Sub] Dorohedoro S01E01 [1080p].mkv'));
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('edit-shift-following')),
+          findsOneWidget,
+        );
+        await tester.tap(find.byKey(const ValueKey('edit-shift-following')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('pick-ep-1-3')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('pick-confirm')));
+        await tester.pumpAndSettle();
+
+        final d = await decision();
+        expect(d.overrides.keys, [_file]);
+        expect(d.overrides[_file]!.episode, 3);
+        expect(find.textContaining('依次顺延'), findsNothing);
+
+        // Double-click confirms immediately.
+        await tester.tap(find.text('[Sub] Dorohedoro S01E01 [1080p].mkv'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('edit-shift-following')));
+        await tester.pumpAndSettle();
+        final ep4 = find.byKey(const ValueKey('pick-ep-1-4'));
+        await tester.tap(ep4);
+        await tester.pump(const Duration(milliseconds: 50));
+        await tester.tap(ep4);
+        await tester.pumpAndSettle();
+        expect((await decision()).overrides[_file]!.episode, 4);
+      },
+    );
+
+    testWidgets(
+      'conflict badge shows on group card and clicking bottom bar jumps to conflict',
+      (tester) async {
+        const root = '/d/异兽魔都 2020';
+        final tm = _PlanningTaskManager(
+          const ScanResult(
+            connection: ConnectionId('demo-alist'),
+            roots: ['/d'],
+            groups: [
+              MediaGroup(
+                id: GroupId('g0'),
+                kind: MediaKind.movie,
+                anchorTitle: '盗梦空间',
+                rootDir: '/d/盗梦空间',
+                match: Demo.inception,
+                matchScore: 0.9,
+                files: [
+                  ScanFile(
+                    path: '/d/盗梦空间/Inception.mkv',
+                    name: 'Inception.mkv',
+                    size: 1,
+                    role: FileRole.video,
+                    parsed: ParsedName(kind: MediaKind.movie, confidence: 0.9),
+                  ),
+                ],
+              ),
+              MediaGroup(
+                id: _g1,
+                kind: MediaKind.episode,
+                anchorTitle: '异兽魔都',
+                rootDir: root,
+                match: Demo.dorohedoro,
+                matchScore: 0.9,
+                files: [
+                  ScanFile(
+                    path: '$root/a.mkv',
+                    name: 'a.mkv',
+                    size: 1,
+                    role: FileRole.video,
+                    parsed: ParsedName(
+                      season: 2,
+                      episodes: [1],
+                      confidence: 0.9,
+                    ),
+                  ),
+                  ScanFile(
+                    path: '$root/b.mkv',
+                    name: 'b.mkv',
+                    size: 1,
+                    role: FileRole.video,
+                    parsed: ParsedName(
+                      season: 2,
+                      episodes: [1],
+                      confidence: 0.9,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+        await pumpPage(tester, const SizedBox(), tm: tm);
+        final id = await submitAndWait(tester, tm);
+        await pumpPage(tester, ReviewPage(taskId: id.value), tm: tm);
+
+        // Initially selected group is g0 (Inception), while g1 has the conflict.
+        expect(find.byKey(const ValueKey('group-conflict-g1')), findsOneWidget);
+        expect(find.text('a.mkv'), findsNothing);
+
+        // Clicking conflict count jumps straight to g1 and its season 2 tab.
+        await tester.tap(find.byKey(const ValueKey('conflict-jump')));
+        await tester.pumpAndSettle();
+        expect(find.text('a.mkv'), findsOneWidget);
+        expect(find.textContaining('会被命名为同一个路径'), findsWidgets);
+      },
+    );
+
+    testWidgets(
+      'collapsed right pane offers header actions, shortcuts sheet, offset reset, fuzzy search clear',
+      (tester) async {
+        final (tm, id) = await open(tester);
+
+        // Shortcuts sheet opens on click.
+        await tester.tap(find.byKey(const ValueKey('shortcuts-button')));
+        await tester.pumpAndSettle();
+        expect(find.text('切换左侧作品'), findsOneWidget);
+        await tester.tap(find.text('关闭'));
+        await tester.pumpAndSettle();
+
+        // Offset reset button appears when non-zero and resets to 0.
+        final actionScroll = find
+            .descendant(
+              of: find.byKey(const ValueKey(_g1)),
+              matching: find.byType(Scrollable),
+            )
+            .first;
+        await tester.scrollUntilVisible(
+          find.byKey(const ValueKey('offset-plus')),
+          150,
+          scrollable: actionScroll,
+        );
+        await tester.pumpAndSettle();
+        await tapKey(tester, 'offset-plus');
+        expect(find.byKey(const ValueKey('offset-reset')), findsOneWidget);
+        expect(find.textContaining('当前：E01 → E02'), findsOneWidget);
+        await tapKey(tester, 'offset-reset');
+        expect(
+          (await tm.review(id) as TaskReview).decisions[_g1]!.episodeOffset,
+          0,
+        );
+
+        // Collapsing right pane surfaces clickable header actions.
+        await tester.tap(find.byKey(const ValueKey('toggle-actions')));
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('header-correct-button')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('expand-actions-button')),
+          findsOneWidget,
+        );
+        await tester.tap(find.byKey(const ValueKey('expand-actions-button')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(const ValueKey('strategy-asParsed')), findsOneWidget);
+
+        // Fuzzy search + clear button.
+        await tester.enterText(
+          find.byKey(const ValueKey('review-search')),
+          '异魔都',
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('异兽魔都'), findsWidgets);
+        await tester.tap(find.byKey(const ValueKey('review-search-clear')));
+        await tester.pumpAndSettle();
+        expect(
+          tester
+              .widget<TextField>(find.byKey(const ValueKey('review-search')))
+              .controller!
+              .text,
+          isEmpty,
+        );
       },
     );
   });

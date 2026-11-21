@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
@@ -54,16 +56,35 @@ final organizedMarksProvider =
 
 /// One size counter per connection; it keeps its listings for the session so
 /// going back up or into a counted folder needs no new requests.
+/// Watches [connectionBackendProvider] so toggling favorites or editing other
+/// connections never disposes this scanner, and refreshes automatically when a
+/// task for this connection finishes or is undone.
 final sizeScannerProvider = Provider.family<SizeScanner, ConnectionId>((
   ref,
   id,
 ) {
   final scanner = SizeScanner(
-    backend: ref.watch(backendForProvider)(id),
+    backend: ref.watch(connectionBackendProvider(id)),
     organizedOf: ref.watch(mapOrganizedOfProvider(id)),
     marks: () => ref.read(organizedMarksProvider(id)),
   );
   ref.listen(organizedMarksProvider(id), (_, _) => scanner.marksChanged());
+  ref.listen(tasksProvider, (prev, next) {
+    final before = {
+      for (final t in prev?.value ?? const <TaskSummary>[]) t.id: t.stage,
+    };
+    for (final t in next.value ?? const <TaskSummary>[]) {
+      if (t.connection != id) continue;
+      final was = before[t.id];
+      if (was == null || was == t.stage) continue;
+      if (t.stage == TaskStage.done ||
+          t.stage == TaskStage.partiallyFailed ||
+          t.stage == TaskStage.undone) {
+        unawaited(scanner.forget('/'));
+        break;
+      }
+    }
+  });
   ref.onDispose(scanner.dispose);
   return scanner;
 });

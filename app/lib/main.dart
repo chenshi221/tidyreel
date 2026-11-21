@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:io' show Platform;
+import 'dart:ui' show AppExitResponse;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -31,9 +33,29 @@ Future<void> main() async {
     },
   );
   final boot = await Bootstrap.open();
+  var closed = false;
+  Future<void> shutdown() async {
+    if (closed) return;
+    closed = true;
+    boot.tmdbCache?.flushSync();
+    await boot.db.close();
+  }
+
+  AppLifecycleListener(
+    onExitRequested: () async {
+      await shutdown();
+      return AppExitResponse.exit;
+    },
+    onDetach: () => unawaited(shutdown()),
+  );
   runApp(
     ProviderScope(
-      overrides: [bootstrapProvider.overrideWithValue(boot)],
+      overrides: [
+        bootstrapProvider.overrideWith((ref) {
+          ref.onDispose(() => unawaited(shutdown()));
+          return boot;
+        }),
+      ],
       child: const TidyreelApp(),
     ),
   );

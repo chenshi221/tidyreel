@@ -281,6 +281,23 @@ void main() {
         (o.season, o.episode, o.kind, o.ignore),
         (2, 5, MediaKind.special, true),
       );
+
+      await store.clearReview(summary.id);
+      final cleared = (await store.loadAll()).single;
+      expect(cleared.summary.id, summary.id);
+      expect(cleared.scan, isNull);
+      expect(cleared.decisions, isEmpty);
+    });
+
+    test('unknown enum values fall back safely instead of throwing', () async {
+      await store.saveSummary(summary);
+      await db.customStatement(
+        "UPDATE tasks SET mode = 'futureMode', stage = 'futureStage' WHERE id = ?",
+        [summary.id.value],
+      );
+      final got = (await store.loadAll()).single;
+      expect(got.summary.mode, OrganizeMode.inPlace);
+      expect(got.summary.stage, TaskStage.failed);
     });
   });
 }

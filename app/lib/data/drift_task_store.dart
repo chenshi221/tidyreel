@@ -48,6 +48,12 @@ class DriftTaskStore implements TaskStore {
   );
 
   @override
+  Future<void> clearReview(TaskId id) =>
+      (db.update(db.tasks)..where((t) => t.id.equals(id.value))).write(
+        const TasksCompanion(scanJson: Value(null), decisionsJson: Value(null)),
+      );
+
+  @override
   Future<void> delete(TaskId id) =>
       (db.delete(db.tasks)..where((t) => t.id.equals(id.value))).go();
 
@@ -59,9 +65,9 @@ class DriftTaskStore implements TaskStore {
           id: TaskId(r.id),
           connection: ConnectionId(r.connectionId),
           paths: (jsonDecode(r.pathsJson) as List).cast<String>(),
-          mode: OrganizeMode.values.byName(r.mode),
+          mode: enumByName(OrganizeMode.values, r.mode, OrganizeMode.inPlace),
           scrape: r.scrape,
-          stage: TaskStage.values.byName(r.stage),
+          stage: enumByName(TaskStage.values, r.stage, TaskStage.failed),
           message: r.message,
           importedCount: r.importedCount,
           videoCount: r.videoCount,

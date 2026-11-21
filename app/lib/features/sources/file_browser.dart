@@ -16,6 +16,7 @@ import '../map/map_providers.dart';
 import '../map/repo_map_view.dart';
 import 'connection_dialog.dart' show connectionTypeLabel;
 import 'scan_preview.dart';
+import 'sources_page.dart' show editConnection;
 import 'sources_providers.dart';
 
 /// In-page file browser for one connection (PLAN §1 步骤 2–3).
@@ -66,55 +67,99 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
     context: context,
     builder: (ctx) => Consumer(
       builder: (ctx, ref, _) {
+        final theme = Theme.of(ctx);
         final sel = ref.watch(browserSelectionProvider).toList()..sort();
         if (sel.isEmpty) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (ctx.mounted) Navigator.of(ctx).pop();
           });
         }
-        return AlertDialog(
-          title: Text('已选 ${sel.length} 项'),
-          content: SizedBox(
+        return MacSheet(
+          child: SizedBox(
             width: 520,
-            height: 360,
-            child: ListView(
-              children: [
-                for (final path in sel)
-                  ListTile(
-                    key: ValueKey('selected $path'),
-                    dense: true,
-                    title: Text(path.substring(path.lastIndexOf('/') + 1)),
-                    subtitle: Text(
-                      path,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    onTap: () {
-                      Navigator.of(ctx).pop();
-                      final i = path.lastIndexOf('/');
-                      _goto(i <= 0 ? '/' : path.substring(0, i));
-                    },
-                    trailing: IconButton(
-                      tooltip: '移出选择',
-                      icon: const Icon(CupertinoIcons.xmark, size: 14),
-                      onPressed: () => ref
-                          .read(browserSelectionProvider.notifier)
-                          .toggle(path),
+            height: 440,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(22, 20, 22, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    '已选 ${sel.length} 项',
+                    style: theme.textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: Panel(
+                      framed: true,
+                      child: Material(
+                        type: MaterialType.transparency,
+                        child: ListView(
+                          children: [
+                            for (final path in sel)
+                              ListTile(
+                                key: ValueKey('selected $path'),
+                                dense: true,
+                                title: Text(
+                                  path.substring(path.lastIndexOf('/') + 1),
+                                ),
+                                subtitle: Text(
+                                  path,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                onTap: () {
+                                  Navigator.of(ctx).pop();
+                                  final i = path.lastIndexOf('/');
+                                  _goto(i <= 0 ? '/' : path.substring(0, i));
+                                },
+                                trailing: IconButton(
+                                  tooltip: '移出选择',
+                                  icon: const Icon(
+                                    CupertinoIcons.xmark,
+                                    size: 14,
+                                  ),
+                                  onPressed: () => ref
+                                      .read(browserSelectionProvider.notifier)
+                                      .toggle(path),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
-              ],
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.of(ctx).pop(),
+                        child: const Text('完成'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('完成'),
-            ),
-          ],
         );
       },
     ),
   );
+
+  void _warnMissingLibrary() {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: const Text('此连接尚未设置媒体库，请先编辑连接设置媒体库路径'),
+          action: SnackBarAction(
+            label: '编辑连接',
+            onPressed: () => editConnection(context, ref, widget.connection),
+          ),
+        ),
+      );
+  }
 
   /// Submits [only] (one row's 整理 button) or the current selection.
   /// [scrape] = 刮削: organize and also write .nfo files and artwork.
@@ -123,16 +168,33 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
     OrganizeMode? mode,
     bool scrape = false,
   ]) async {
+    final OrganizeMode chosenMode = mode ?? ref.read(browserModeProvider);
+    if (chosenMode == OrganizeMode.moveToLibrary &&
+        widget.connection.libraryRoot == null) {
+      _warnMissingLibrary();
+      return;
+    }
     final paths = only != null
         ? [only]
         : (ref.read(browserSelectionProvider).toList()..sort());
+    final listed =
+        ref.read(browserEntriesProvider).asData?.value ?? const <RemoteEntry>[];
+    final fileSizes = {
+      for (final e in listed)
+        if (!e.isDir) e.path: e.size,
+    };
     final history = ref.read(historyProvider);
+    final settings = ref.read(settingsProvider);
     final ok =
-        !ref.read(settingsProvider).scanPreview ||
+        !settings.scanPreview ||
         await showScanPreview(
           context,
-          backend: ref.read(backendForProvider)(widget.connection.id),
+          backend: ref.read(connectionBackendProvider(widget.connection.id)),
           paths: paths,
+          fileSizes: fileSizes,
+          mode: chosenMode,
+          scrape: scrape,
+          mediaHint: settings.mediaHint,
           organizedCount: (dirs) async {
             final organized = await history.areOrganized(
               widget.connection.id,
@@ -144,12 +206,7 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
     if (!ok || !mounted) return;
     final id = await ref
         .read(taskManagerProvider)
-        .submit(
-          widget.connection.id,
-          paths,
-          mode ?? ref.read(browserModeProvider),
-          scrape: scrape,
-        );
+        .submit(widget.connection.id, paths, chosenMode, scrape: scrape);
     if (!mounted) return;
     if (only == null) ref.read(browserSelectionProvider.notifier).clear();
     // The detail page follows the task and opens the review once recognized.
@@ -344,6 +401,12 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
                   value: mapMode,
                   onChanged: ref.read(browserMapModeProvider.notifier).set,
                 ),
+                OutlinedButton.icon(
+                  key: const ValueKey('organize-current-dir'),
+                  onPressed: () => _submit(dir),
+                  icon: const Icon(CupertinoIcons.wand_stars, size: 13),
+                  label: const Text('整理当前文件夹'),
+                ),
                 if (!mapMode) ...[
                   SizedBox(
                     width: 260,
@@ -411,57 +474,99 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
                         items: folderMenu,
                         child: Panel(
                           child: entries.when(
-                            loading: () => const Center(
-                              child: CircularProgressIndicator(),
-                            ),
-                            error: (e, _) => EmptyState(
-                              icon: CupertinoIcons.exclamationmark_triangle,
-                              title: '无法读取文件夹',
-                              message: '$e',
-                              action: OutlinedButton(
-                                onPressed: () =>
-                                    ref.invalidate(browserEntriesProvider),
-                                child: const Text('重试'),
-                              ),
-                            ),
-                            data: (list) => list.isEmpty
-                                ? const EmptyState(
-                                    icon: CupertinoIcons.folder,
-                                    title: '这个文件夹是空的',
-                                  )
-                                : ListView.separated(
-                                    padding: EdgeInsets.fromLTRB(
-                                      6,
-                                      6,
-                                      6,
-                                      selection.isNotEmpty ? 96 : 6,
+                            loading: () =>
+                                const Center(child: Spinner(size: 20)),
+                            error: (e, _) {
+                              final info = describeConnectionError(c, e);
+                              return EmptyState(
+                                icon: CupertinoIcons.exclamationmark_triangle,
+                                title: info.status == ConnStatus.authFailed
+                                    ? '认证失败'
+                                    : '无法读取文件夹',
+                                message: info.detail ?? '$e',
+                                action: Wrap(
+                                  spacing: 8,
+                                  children: [
+                                    OutlinedButton(
+                                      onPressed: () => _refresh(dir),
+                                      child: const Text('重试'),
                                     ),
-                                    itemCount: list.length,
-                                    separatorBuilder: (_, _) => const Divider(
-                                      indent: 16,
-                                      endIndent: 16,
+                                    OutlinedButton(
+                                      onPressed: () =>
+                                          editConnection(context, ref, c),
+                                      child: const Text('编辑连接'),
                                     ),
-                                    itemBuilder: (_, i) {
-                                      final e = list[i];
-                                      return ContextMenuArea(
-                                        key: ValueKey('menu ${e.name}'),
-                                        items: () => entryMenu(e),
-                                        child: _EntryTile(
-                                          entry: e,
-                                          anySelected: selection.isNotEmpty,
-                                          selected: selection.contains(e.path),
-                                          onToggle: () => ref
-                                              .read(
-                                                browserSelectionProvider
-                                                    .notifier,
-                                              )
-                                              .toggle(e.path),
-                                          onOpen: () => _goto(e.path),
-                                          onOrganize: () => _submit(e.path),
+                                  ],
+                                ),
+                              );
+                            },
+                            data: (list) {
+                              final hasFilter =
+                                  ref
+                                      .watch(browserSearchProvider)
+                                      .trim()
+                                      .isNotEmpty ||
+                                  ref.watch(onlyUnorganizedProvider);
+                              if (list.isEmpty) {
+                                return hasFilter
+                                    ? EmptyState(
+                                        icon: CupertinoIcons.search,
+                                        title: '没有符合筛选条件的项目',
+                                        action: OutlinedButton(
+                                          onPressed: () {
+                                            _search.clear();
+                                            ref
+                                                .read(
+                                                  browserSearchProvider
+                                                      .notifier,
+                                                )
+                                                .set('');
+                                            ref
+                                                .read(
+                                                  onlyUnorganizedProvider
+                                                      .notifier,
+                                                )
+                                                .set(false);
+                                          },
+                                          child: const Text('清除筛选'),
                                         ),
+                                      )
+                                    : const EmptyState(
+                                        icon: CupertinoIcons.folder,
+                                        title: '这个文件夹是空的',
                                       );
-                                    },
-                                  ),
+                              }
+                              return ListView.separated(
+                                padding: EdgeInsets.fromLTRB(
+                                  6,
+                                  6,
+                                  6,
+                                  selection.isNotEmpty ? 96 : 6,
+                                ),
+                                itemCount: list.length,
+                                separatorBuilder: (_, _) =>
+                                    const Divider(indent: 16, endIndent: 16),
+                                itemBuilder: (_, i) {
+                                  final e = list[i];
+                                  return ContextMenuArea(
+                                    key: ValueKey('menu ${e.name}'),
+                                    items: () => entryMenu(e),
+                                    child: _EntryTile(
+                                      entry: e,
+                                      anySelected: selection.isNotEmpty,
+                                      selected: selection.contains(e.path),
+                                      onToggle: () => ref
+                                          .read(
+                                            browserSelectionProvider.notifier,
+                                          )
+                                          .toggle(e.path),
+                                      onOpen: () => _goto(e.path),
+                                      onOrganize: () => _submit(e.path),
+                                    ),
+                                  );
+                                },
+                              );
+                            },
                           ),
                         ),
                       ),
@@ -477,7 +582,14 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
                         child: _SelectionBar(
                           count: selection.length,
                           mode: ref.watch(browserModeProvider),
-                          onMode: ref.read(browserModeProvider.notifier).set,
+                          onMode: (m) {
+                            if (m == OrganizeMode.moveToLibrary &&
+                                c.libraryRoot == null) {
+                              _warnMissingLibrary();
+                              return;
+                            }
+                            ref.read(browserModeProvider.notifier).set(m);
+                          },
                           onCancel: ref
                               .read(browserSelectionProvider.notifier)
                               .clear,
@@ -556,7 +668,7 @@ class _SelectionBar extends StatelessWidget {
           const SizedBox(width: 8),
           PopupMenuButton<MediaHint>(
             key: const ValueKey('media-hint'),
-            tooltip: '内容类型（也可在设置里改）',
+            tooltip: '切换后作为识别类型提示',
             initialValue: hint,
             onSelected: onHint,
             itemBuilder: (_) => [
@@ -589,15 +701,18 @@ class _SelectionBar extends StatelessWidget {
           const SizedBox(width: 16),
           TextButton(onPressed: onCancel, child: const Text('取消')),
           const SizedBox(width: 4),
-          OutlinedButton(
-            key: const ValueKey('organize'),
-            onPressed: onOrganize,
-            child: const Text('整理'),
+          Tooltip(
+            message: '重命名并整理文件（不写 NFO 和海报）',
+            child: FilledButton(
+              key: const ValueKey('organize'),
+              onPressed: onOrganize,
+              child: const Text('整理'),
+            ),
           ),
           const SizedBox(width: 8),
           Tooltip(
             message: '整理，并写入 NFO 和海报',
-            child: FilledButton(
+            child: OutlinedButton(
               key: const ValueKey('scrape'),
               onPressed: onScrape,
               child: const Text('刮削'),
@@ -763,7 +878,7 @@ class _EntryTile extends StatelessWidget {
               width: 30,
               child: AnimatedOpacity(
                 duration: const Duration(milliseconds: 100),
-                opacity: selected || hover || anySelected ? 1 : 0,
+                opacity: selected || hover || anySelected ? 1 : 0.35,
                 child: Checkbox(
                   key: ValueKey('check ${e.name}'),
                   value: selected,

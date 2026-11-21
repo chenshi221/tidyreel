@@ -290,4 +290,35 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('完成'), findsWidgets); // the only child of /下载
   });
+
+  testWidgets(
+    'local hides 连接路径, browse without host shows inline hint, test checks missing dirs',
+    (tester) async {
+      await pumpPage(tester, const SourcesPage());
+      await tester.tap(find.text('添加连接'));
+      await tester.pumpAndSettle();
+
+      // Clicking 浏览… before entering host shows inline hint.
+      await tester.tap(find.text('浏览…').first);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('browse-hint')), findsOneWidget);
+
+      // Testing with a missing startDir reports a clear message.
+      await tester.enterText(find.byKey(const ValueKey('field-主机')), 'nas');
+      await tester.enterText(find.byKey(const ValueKey('field-连接路径')), '/不存在');
+      await tester.tap(find.text('测试连接'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('连接路径「/不存在」不存在'), findsOneWidget);
+
+      // Local connections hide 连接路径.
+      await tester.tap(
+        find.descendant(
+          of: find.byKey(const ValueKey('conn-kind')),
+          matching: find.text('本地'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('field-连接路径')), findsNothing);
+    },
+  );
 }

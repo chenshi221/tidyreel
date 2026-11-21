@@ -11,32 +11,44 @@ import '../../ui/widgets.dart';
 import '../../widgets/common.dart';
 import '../sources/sources_providers.dart';
 
+/// Shared review summary (works + unassigned count) so [taskWorksProvider] and
+/// [taskUnassignedProvider] never call `review()` twice for the same task.
+final _taskReviewMetaProvider = FutureProvider.autoDispose
+    .family<({List<Candidate> works, int unassigned}), TaskId>((ref, id) async {
+      ref.watch(
+        tasksProvider.select(
+          (a) => a.value?.where((t) => t.id == id).firstOrNull?.stage,
+        ),
+      );
+      final review = await ref.watch(taskManagerProvider).review(id);
+      final seen = <int>{};
+      final works = [
+        for (final g in review.scan.groups)
+          if ((review.decisions[g.id]?.match ?? g.match) case final m?)
+            if (seen.add(m.tmdbId)) m,
+      ];
+      return (works: works, unassigned: review.scan.unassigned.length);
+    });
+
 /// Works recognized in a task (poster + title), once recognition is done.
-/// Kept alive so 最近整理 doesn't blank and refetch on every visit; it
-/// recomputes when the task changes stage.
-final taskWorksProvider = FutureProvider.family<List<Candidate>, TaskId>((
-  ref,
-  id,
-) async {
-  ref.watch(
-    tasksProvider.select(
-      (a) => a.value?.where((t) => t.id == id).firstOrNull?.stage,
-    ),
-  );
-  final review = await ref.watch(taskManagerProvider).review(id);
-  final seen = <int>{};
-  return [
-    for (final g in review.scan.groups)
-      if ((review.decisions[g.id]?.match ?? g.match) case final m?)
-        if (seen.add(m.tmdbId)) m,
-  ];
-});
+final taskWorksProvider = FutureProvider.autoDispose
+    .family<List<Candidate>, TaskId>(
+      (ref, id) async =>
+          (await ref.watch(_taskReviewMetaProvider(id).future)).works,
+    );
 
 /// Files of a recognized task that joined no work (shown as 未归类).
 final taskUnassignedProvider = FutureProvider.autoDispose.family<int, TaskId>(
   (ref, id) async =>
-      (await ref.watch(taskManagerProvider).review(id)).scan.unassigned.length,
+      (await ref.watch(_taskReviewMetaProvider(id).future)).unassigned,
 );
+
+/// Whether an error message indicates a missing or invalid TMDB API key.
+bool isTmdbKeyError(String message) {
+  final low = message.toLowerCase();
+  return low.contains('tmdb') &&
+      (low.contains('api') || low.contains('key') || low.contains('密钥'));
+}
 
 /// 任务中心（PLAN §5）.
 class TasksPage extends ConsumerStatefulWidget {
@@ -103,7 +115,7 @@ class _TasksPageState extends ConsumerState<TasksPage> {
         ),
       ],
       child: tasks.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
+        loading: () => const Center(child: Spinner(size: 20)),
         error: (e, _) => EmptyState(
           icon: CupertinoIcons.exclamationmark_triangle,
           title: '无法读取任务',
@@ -120,6 +132,12 @@ class _TasksPageState extends ConsumerState<TasksPage> {
                   _Filter.finished => '还没有已完成的任务',
                 },
                 message: _filter == _Filter.finished ? null : '去「来源」选一个文件夹开始整理',
+                action: _filter == _Filter.finished
+                    ? null
+                    : OutlinedButton(
+                        onPressed: () => context.go('/sources'),
+                        child: const Text('去「来源」选择文件夹'),
+                      ),
               )
             : ListView(
                 padding: const EdgeInsets.fromLTRB(48, 0, 40, 28),
@@ -173,11 +191,56 @@ String stageLabel(TaskStage s) => switch (s) {
   TaskStage.partiallyFailed => '部分失败',
   TaskStage.cancelled => '已取消',
   TaskStage.undone => '已撤销',
+  TaskStage.failed => '失败',
   TaskStage.awaitingReview => '待确认',
   TaskStage.renamingFiles => '正在重命名文件',
   TaskStage.renamingFolders => '正在整理文件夹',
   _ => _steps[_currentStep(s)],
 };
+
+/// Color for a task's status pill.
+Color taskStatusColor(TaskStage stage, Palette p) => switch (stage) {
+  TaskStage.awaitingReview => p.accent,
+  TaskStage.done => p.success,
+  TaskStage.partiallyFailed => p.warning,
+  TaskStage.failed => p.danger,
+  TaskStage.cancelled || TaskStage.undone => p.textFaint,
+  _ => p.textMuted,
+};
+
+/// Whether recognition produced works that can be read via [taskWorksProvider].
+bool isTaskRecognized(TaskSummary t) =>
+    t.stage.index >= TaskStage.awaitingReview.index &&
+    t.stage != TaskStage.cancelled &&
+    t.stage != TaskStage.failed;
+
+/// Tracks task IDs with an in-flight user action (undo / retry / runConfident)
+/// so rapid double-clicks don't fire duplicate operations.
+final _busyTasks = <TaskId>{};
+
+Future<void> retryFailedTask(
+  BuildContext context,
+  WidgetRef ref,
+  TaskId id,
+) async {
+  if (!_busyTasks.add(id)) return;
+  try {
+    await ref.read(taskManagerProvider).retryFailed(id);
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('已重试失败项')));
+    }
+  } on StateError catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(e.message)));
+    }
+  } finally {
+    _busyTasks.remove(id);
+  }
+}
 
 class TaskCard extends ConsumerWidget {
   final TaskSummary task;
@@ -195,15 +258,12 @@ class TaskCard extends ConsumerWidget {
         .where((c) => c.id == t.connection)
         .map((c) => c.name)
         .firstOrNull;
-    final recognized =
-        t.stage.index >= TaskStage.awaitingReview.index &&
-        t.stage != TaskStage.cancelled;
-    final works = recognized
-        ? ref.watch(taskWorksProvider(t.id)).value ?? const <Candidate>[]
-        : const <Candidate>[];
-    final unassigned = recognized
-        ? ref.watch(taskUnassignedProvider(t.id)).value ?? 0
-        : 0;
+    final recognized = isTaskRecognized(t);
+    final meta = recognized
+        ? ref.watch(_taskReviewMetaProvider(t.id)).value
+        : null;
+    final works = meta?.works ?? const <Candidate>[];
+    final unassigned = meta?.unassigned ?? 0;
     final folder =
         t.paths.firstOrNull?.split('/').where((s) => s.isNotEmpty).lastOrNull ??
         '根目录';
@@ -215,33 +275,36 @@ class TaskCard extends ConsumerWidget {
     final where = t.paths.length == 1
         ? t.paths.single
         : '${t.paths.length} 个文件夹';
-    final statusColor = switch (t.stage) {
-      TaskStage.awaitingReview => p.accent,
-      TaskStage.done => p.success,
-      TaskStage.partiallyFailed => p.warning,
-      TaskStage.cancelled || TaskStage.undone => p.textFaint,
-      _ => p.textMuted,
-    };
+    final statusColor = taskStatusColor(t.stage, p);
 
     Future<void> runConfident() async {
-      // Deletes of uncertain works are dropped by the run, so this may
-      // over-count; asking too often beats deleting unasked.
-      final ops = (await tm.review(t.id)).preview.ops;
-      final deletes = ops
-          .where(
-            (o) => o.selected && o.kind == OpKind.delete && o.warning == null,
-          )
-          .length;
-      if (deletes > 0 && context.mounted) {
-        if (!await confirmPermanentDelete(context, deletes)) return;
-      }
+      if (!_busyTasks.add(t.id)) return;
       try {
+        // Deletes of uncertain works are dropped by the run, so this may
+        // over-count; asking too often beats deleting unasked.
+        final ops = (await tm.review(t.id)).preview.ops;
+        final deletes = ops
+            .where(
+              (o) => o.selected && o.kind == OpKind.delete && o.warning == null,
+            )
+            .length;
+        if (deletes > 0 && context.mounted) {
+          if (!await confirmPermanentDelete(context, deletes)) return;
+        }
         await tm.run(t.id, onlyConfident: true);
+        if (context.mounted) {
+          ScaffoldMessenger.of(context)
+            ..hideCurrentSnackBar()
+            ..showSnackBar(const SnackBar(content: Text('已开始整理有把握的项目')));
+        }
       } on StateError catch (e) {
         if (context.mounted) {
           ScaffoldMessenger.of(context)
-              .showSnackBar(SnackBar(content: Text(e.message)));
+            ..hideCurrentSnackBar()
+            ..showSnackBar(SnackBar(content: Text(e.message)));
         }
+      } finally {
+        _busyTasks.remove(t.id);
       }
     }
 
@@ -262,17 +325,11 @@ class TaskCard extends ConsumerWidget {
         MenuAction('只整理有把握的', runConfident, icon: CupertinoIcons.play),
       ],
       if (t.stage == TaskStage.partiallyFailed)
-        MenuAction('重试失败项', () async {
-          try {
-            await tm.retryFailed(t.id);
-          } on StateError catch (e) {
-            if (context.mounted) {
-              ScaffoldMessenger.of(context)
-                ..hideCurrentSnackBar()
-                ..showSnackBar(SnackBar(content: Text(e.message)));
-            }
-          }
-        }, icon: CupertinoIcons.arrow_clockwise),
+        MenuAction(
+          '重试失败项',
+          () => retryFailedTask(context, ref, t.id),
+          icon: CupertinoIcons.arrow_clockwise,
+        ),
       if (canUndo(t))
         MenuAction('撤销', undo, icon: CupertinoIcons.arrow_uturn_left),
       if (canRetry(t))
@@ -313,11 +370,14 @@ class TaskCard extends ConsumerWidget {
     // Why a task stopped short; progress messages are the stepper's job.
     final problem =
         t.message.isNotEmpty &&
-            (t.stage == TaskStage.cancelled ||
+            (t.stage == TaskStage.failed ||
+                t.stage == TaskStage.cancelled ||
                 t.stage == TaskStage.partiallyFailed ||
                 t.message.startsWith('已撤销部分操作'))
         ? t.message
         : null;
+    final needsTmdbKey =
+        t.stage == TaskStage.failed && isTmdbKeyError(t.message);
 
     return ContextMenuArea(
       items: menu,
@@ -368,11 +428,19 @@ class TaskCard extends ConsumerWidget {
                     ),
                     if (problem != null) ...[
                       const SizedBox(height: 3),
-                      Text(
-                        problem,
-                        style: TextStyle(fontSize: 12, color: p.warning),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                      Tooltip(
+                        message: problem,
+                        child: Text(
+                          problem,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: t.stage == TaskStage.failed
+                                ? p.danger
+                                : p.warning,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
                     ],
                     if (works.length > 1) ...[
@@ -421,11 +489,25 @@ class TaskCard extends ConsumerWidget {
                   onPressed: () => tm.cancel(t.id),
                   child: const Text('取消'),
                 ),
+              if (t.stage == TaskStage.partiallyFailed)
+                TextButton(
+                  key: ValueKey('retry-failed ${t.id.value}'),
+                  onPressed: () => retryFailedTask(context, ref, t.id),
+                  child: const Text('重试失败项'),
+                ),
               if (canUndo(t))
                 TextButton(onPressed: undo, child: const Text('撤销')),
-              // A failed recognition is the common case; undone ones keep it
-              // in the menu.
-              if (t.stage == TaskStage.cancelled && canRetry(t))
+              if (needsTmdbKey)
+                TextButton(
+                  key: ValueKey('goto-settings ${t.id.value}'),
+                  onPressed: () => context.go('/settings'),
+                  child: const Text('去设置'),
+                ),
+              // A failed or cancelled recognition is the common retry case;
+              // undone ones keep it in the menu.
+              if ((t.stage == TaskStage.cancelled ||
+                      t.stage == TaskStage.failed) &&
+                  canRetry(t))
                 TextButton(
                   key: ValueKey('retry ${t.id.value}'),
                   onPressed: () => retryTask(context, ref, t.id),
@@ -569,13 +651,21 @@ Future<bool> confirmDeleteTask(
 /// Undo a whole task. No confirmation: undoing only restores names and
 /// places, and the task can be recognized and run again afterwards.
 Future<void> undoTask(BuildContext context, WidgetRef ref, TaskId id) async {
+  if (!_busyTasks.add(id)) return;
   try {
     await ref.read(taskManagerProvider).undo(id);
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('已撤销')));
+    }
   } on StateError catch (e) {
     if (context.mounted) {
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(SnackBar(content: Text(e.message)));
     }
+  } finally {
+    _busyTasks.remove(id);
   }
 }

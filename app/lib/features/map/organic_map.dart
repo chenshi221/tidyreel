@@ -144,7 +144,35 @@ class _PlacedBlock {
   /// [polygon] is already a rounded outline: draw it as is.
   final bool smooth;
 
-  const _PlacedBlock(this.block, this.polygon, {this.smooth = false});
+  late final List<Offset> outline = smooth ? polygon : smoothPolygon(polygon);
+  late final Offset centroid = polygonCentroid(polygon);
+  late final Rect bounds = polygonBounds(polygon);
+  late final Path fillPath = smooth
+      ? (Path()
+          ..addPolygon(smoothPolygon(polygon, rounds: 2, minEdge: 0), true))
+      : pebblePath(polygon);
+
+  Rect? _contourKeep;
+  bool _contourBuilt = false;
+  Path? _contourPath;
+
+  /// Combined path for all contour rings, cached per label keep-out rect.
+  Path contoursFor(Rect? keep) {
+    if (_contourBuilt && _contourKeep == keep) return _contourPath!;
+    _contourKeep = keep;
+    _contourBuilt = true;
+    final path = Path();
+    for (final ring in contourRings(
+      polygon,
+      _MapPainter._contourStep,
+      keep: keep,
+    )) {
+      path.addPath(pebblePath(ring), Offset.zero);
+    }
+    return _contourPath = path;
+  }
+
+  _PlacedBlock(this.block, this.polygon, {this.smooth = false});
 }
 
 /// How a painter gets its labels: laid out once on [source] for [zoom],
@@ -175,8 +203,12 @@ class _OrganicMapState extends State<OrganicMap> with TickerProviderStateMixin {
 
   String? _hover;
 
-  /// What was drawn last, in screen space: hit testing uses it.
+  /// What was drawn last, in screen space: hit testing and base paint reuse it
+  /// so mouse hover changes only trigger the foreground painter.
   List<_PlacedBlock> _placed = const [];
+  _LabelPlan? _cachedPlan;
+  Object? _pictureKey;
+  Matrix4? _lastFrameMatrix;
 
   /// Last layout and what it was for: a rebuild with equal sizes reuses it.
   List<MapCell> _cells = const [];
@@ -516,7 +548,74 @@ class _OrganicMapState extends State<OrganicMap> with TickerProviderStateMixin {
     return _LabelPlan(source, zoom: zoom, scale: scale, cache: _labels);
   }
 
-  (List<_PlacedBlock>, _LabelPlan) _picture(Size viewport) {
+  /// Content signature of [widget.blocks], used to cache pictures and labels
+  /// across rebuilds that pass freshly allocated lists with identical items.
+  String _blocksSig() => [
+    for (final b in widget.blocks)
+      '${b.id}\u0000${b.label}\u0000${b.bytes}\u0000${b.state.index}\u0000${b.caption ?? ''}',
+  ].join('\u0001');
+
+  static bool _matrixEquals(Matrix4? a, Matrix4 b) {
+    if (a == null) return false;
+    final sa = a.storage, sb = b.storage;
+    for (var i = 0; i < 16; i++) {
+      if (sa[i] != sb[i]) return false;
+    }
+    return true;
+  }
+
+  /// Computes (or reuses) the placed blocks and label plan independently of
+  /// [_hover], so moving the mouse never rebuilds polygons or repaints the
+  /// base layer.
+  (List<_PlacedBlock>, _LabelPlan) _ensurePicture(
+    Size viewport,
+    int paletteSig,
+  ) {
+    final style = _style;
+    final sig = _blocksSig();
+    if (style == MapZoomStyle.frame) {
+      final m = _view.value;
+      final key = (style, viewport, _laidOut, sig, paletteSig);
+      if (key == _pictureKey &&
+          _cachedPlan != null &&
+          _matrixEquals(_lastFrameMatrix, m)) {
+        return (_placed, _cachedPlan!);
+      }
+      _pictureKey = key;
+      _lastFrameMatrix = m.clone();
+      final res = _picture(viewport, sig, paletteSig);
+      _placed = res.$1;
+      _cachedPlan = res.$2;
+      return res;
+    }
+    final key = (
+      style,
+      viewport,
+      _laidOut,
+      sig,
+      paletteSig,
+      _morphing,
+      _morphing ? _morph.value : 0.0,
+      _rest,
+      _to,
+      _gesture,
+    );
+    if (key == _pictureKey && _cachedPlan != null) {
+      return (_placed, _cachedPlan!);
+    }
+    _pictureKey = key;
+    _lastFrameMatrix = null;
+    final res = _picture(viewport, sig, paletteSig);
+    _placed = res.$1;
+    _cachedPlan = res.$2;
+    return res;
+  }
+
+  (List<_PlacedBlock>, _LabelPlan) _picture(
+    Size viewport,
+    String blockSig,
+    int paletteSig,
+  ) {
     switch (_style) {
       case MapZoomStyle.frame:
         final m = _view.value;
@@ -530,7 +629,7 @@ class _OrganicMapState extends State<OrganicMap> with TickerProviderStateMixin {
         return (
           _finish(_geometric(m), viewport),
           _plan(
-            (_cells, widget.blocks, q),
+            (_laidOut, blockSig, paletteSig, q),
             (id) => switch (cellOf[id]) {
               final c? => insetConvex(c, _insetOf(id) / q),
               null => null,
@@ -565,7 +664,7 @@ class _OrganicMapState extends State<OrganicMap> with TickerProviderStateMixin {
         final polyOf = {for (final b in still) b.block.id: b.polygon};
         final g = _gesture;
         final plan = _plan(
-          (rest, widget.blocks),
+          (rest, blockSig, paletteSig),
           (id) => polyOf[id],
           scale: g?.getMaxScaleOnAxis() ?? 1,
         );
@@ -588,6 +687,11 @@ class _OrganicMapState extends State<OrganicMap> with TickerProviderStateMixin {
   Widget build(BuildContext context) {
     final p = Palette.of(context);
     final dark = Theme.of(context).brightness == Brightness.dark;
+    final paletteSig = Object.hash(
+      dark,
+      p.text.toARGB32(),
+      p.accent.toARGB32(),
+    );
     return LayoutBuilder(
       builder: (context, box) {
         final viewport = box.biggest;
@@ -612,9 +716,12 @@ class _OrganicMapState extends State<OrganicMap> with TickerProviderStateMixin {
           });
         }
 
+        // Refresh placed blocks before reading `hovered` so the hover pill is
+        // never 1 frame stale after layout/zoom changes.
+        _ensurePicture(viewport, paletteSig);
+
         Widget paint(BuildContext context) {
-          final (placed, labels) = _picture(viewport);
-          _placed = placed;
+          final (placed, labels) = _ensurePicture(viewport, paletteSig);
           _MapPainter painter({String? only}) => _MapPainter(
             placed: placed,
             palette: p,
@@ -622,7 +729,6 @@ class _OrganicMapState extends State<OrganicMap> with TickerProviderStateMixin {
             hover: only,
             selected: widget.selected,
             textScaler: MediaQuery.textScalerOf(context),
-            zoom: 1,
             labels: labels,
             baseStyle: DefaultTextStyle.of(context).style,
           );
@@ -745,11 +851,16 @@ class _OrganicMapState extends State<OrganicMap> with TickerProviderStateMixin {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Segmented<MapZoomStyle>(
-                    key: const ValueKey('map-style'),
-                    options: {for (final s in MapZoomStyle.values) s: s.label},
-                    value: style,
-                    onChanged: (s) => mapZoomStyle.value = s,
+                  Tooltip(
+                    message: '缩放：几何放大并裁剪边缘  ·  展开：重排视野内的区块填满画面',
+                    child: Segmented<MapZoomStyle>(
+                      key: const ValueKey('map-style'),
+                      options: {
+                        for (final s in MapZoomStyle.values) s: s.label,
+                      },
+                      value: style,
+                      onChanged: (s) => mapZoomStyle.value = s,
+                    ),
                   ),
                   const SizedBox(width: 8),
                   _MapPill(
@@ -872,15 +983,11 @@ class _MapPainter extends CustomPainter {
   final TextScaler textScaler;
   final TextStyle baseStyle;
 
-  /// View scale: text and the room it needs are divided by it, so labels
-  /// keep their on-screen size and more of them fit as you zoom in.
-  final double zoom;
-
-  /// Stable, cached labels; without it each paint lays labels out afresh.
-  final _LabelPlan? labels;
+  /// Stable, cached labels.
+  final _LabelPlan labels;
 
   _MapPainter({
-    this.labels,
+    required this.labels,
     required this.placed,
     required this.palette,
     required this.dark,
@@ -888,7 +995,6 @@ class _MapPainter extends CustomPainter {
     required this.selected,
     required this.textScaler,
     required this.baseStyle,
-    required this.zoom,
   });
 
   static const _contourStep = 7.0;
@@ -897,23 +1003,18 @@ class _MapPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final p = palette;
     assert(() {
-      debugUnlabeled.clear();
+      if (hover == null) debugUnlabeled.clear();
       return true;
     }());
     for (final b in placed) {
       final hovered = b.block.id == hover;
       if (hover != null && !hovered) continue;
       final fill = blockFill(b.block.state, p, dark: dark, id: b.block.id);
-      // A morphing outline is already round: a light pass hides the facets
-      // between its sample points. Contour rings inset from it get the full
-      // rounding, or their corners come out sharp.
-      Path path(List<Offset> poly) => b.smooth
-          ? (Path()
-              ..addPolygon(smoothPolygon(poly, rounds: 2, minEdge: 0), true))
-          : pebblePath(poly);
       final (label, at) = _place(b, fill);
       assert(() {
-        if (label == null && polygonArea(b.polygon) > 200 * 200) {
+        if (hover == null &&
+            label == null &&
+            polygonArea(b.polygon) > 200 * 200) {
           debugUnlabeled.add(b.block.label);
         }
         return true;
@@ -926,25 +1027,22 @@ class _MapPainter extends CustomPainter {
           ..color = hovered
               ? p.text.withValues(alpha: math.min(1, p.contour.a * 1.6))
               : p.contour;
-        canvas.drawPath(path(b.polygon), line);
+        canvas.drawPath(b.fillPath, line);
         final keep = at?.inflate(6);
-        for (final ring in contourRings(b.polygon, _contourStep, keep: keep)) {
-          canvas.drawPath(pebblePath(ring), line);
-        }
+        canvas.drawPath(b.contoursFor(keep), line);
       } else {
         final c = hovered
             ? Color.lerp(fill, dark ? Colors.white : Colors.black, 0.08)!
             : fill;
-        canvas.drawPath(path(b.polygon), Paint()..color = c);
+        canvas.drawPath(b.fillPath, Paint()..color = c);
       }
       if (selected.contains(b.block.id)) {
-        final outline = path(b.polygon);
         canvas.drawPath(
-          outline,
+          b.fillPath,
           Paint()..color = p.accent.withValues(alpha: 0.14),
         );
         canvas.drawPath(
-          outline,
+          b.fillPath,
           Paint()
             ..style = PaintingStyle.stroke
             ..strokeWidth = 2
@@ -967,23 +1065,21 @@ class _MapPainter extends CustomPainter {
   /// wholly inside the pebble as drawn.
   (_Label?, Rect?) _place(_PlacedBlock b, Color? fill) {
     final plan = labels;
-    final label = plan == null
-        ? _labelFor(b.block, b.polygon, fill, zoom)
-        : plan.cache.putIfAbsent(
-            '${b.block.id}\u0000${fill?.toARGB32()}\u0000${plan.zoom}',
-            () => switch (plan.source(b.block.id)) {
-              final src? when src.length >= 3 => _labelFor(
-                b.block,
-                src,
-                fill,
-                plan.zoom,
-              ),
-              _ => null,
-            },
-          );
+    final label = plan.cache.putIfAbsent(
+      '${b.block.id}\u0000${fill?.toARGB32()}\u0000${plan.zoom}',
+      () => switch (plan.source(b.block.id)) {
+        final src? when src.length >= 3 => _labelFor(
+          b.block,
+          src,
+          fill,
+          plan.zoom,
+        ),
+        _ => null,
+      },
+    );
     // Against the outline as drawn (rounding eats the corners), with air.
-    final outline = b.smooth ? b.polygon : smoothPolygon(b.polygon);
-    final c = polygonCentroid(b.polygon);
+    final outline = b.outline;
+    final c = b.centroid;
     (_Label, Rect)? fit(_Label? l, double k) {
       if (l == null) return null;
       final at = Rect.fromCenter(
@@ -994,12 +1090,11 @@ class _MapPainter extends CustomPainter {
       return _inside(outline, at.inflate(4)) ? (l, at) : null;
     }
 
-    if (fit(label, plan?.scale ?? 1) case final ok?) return ok;
-    if (plan == null) return (null, null);
+    if (fit(label, plan.scale) case final ok?) return ok;
     // Cut by the frame, the pebble is smaller than the shape the text was
     // laid out on: lay it out again on what shows, per 24px of size so it
     // doesn't reflow every frame.
-    final box = polygonBounds(b.polygon);
+    final box = b.bounds;
     final again = plan.cache.putIfAbsent(
       '${b.block.id}\u0000${fill?.toARGB32()}\u0000'
       '${(box.width / 24).round()}x${(box.height / 24).round()}',
@@ -1104,8 +1199,7 @@ class _MapPainter extends CustomPainter {
       old.hover != hover ||
       !identical(old.selected, selected) ||
       old.palette != palette ||
-      old.zoom != zoom ||
-      old.labels?.scale != labels?.scale ||
+      old.labels.scale != labels.scale ||
       old.dark != dark;
 }
 

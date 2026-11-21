@@ -1,9 +1,11 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tidyreel/data/providers.dart';
 import 'package:tidyreel/features/naming/naming_page.dart';
 import 'package:tidyreel/features/settings/settings_page.dart';
-import 'package:tidyreel/features/settings/settings_providers.dart';
+import 'package:tidyreel/data/settings.dart';
+import 'package:tidyreel/ui/theme.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
 import 'helpers.dart';
@@ -38,57 +40,133 @@ void main() {
     expect(tester.widget<Text>(searches).data, '依次搜索：幸福伽菜子的快乐杀手生活');
   });
 
-  testWidgets('naming page: toggles update the profile, preview degrades', (
-    tester,
-  ) async {
-    final (_, c) = await pumpPage(tester, const NamingPage());
-    // Engine is a stub or real: either way the example card renders something.
-    expect(find.byKey(const ValueKey('example-name')), findsOneWidget);
-    expect(c.read(namingProfileProvider).movie.includeYear, isTrue);
+  testWidgets(
+    'naming page: toggles update preview, custom template keeps folders editable, player preset confirms reset',
+    (tester) async {
+      final (_, c) = await pumpPage(tester, const NamingPage());
+      expect(find.byKey(const ValueKey('example-name')), findsOneWidget);
+      expect(c.read(namingProfileProvider).movie.includeYear, isTrue);
 
-    await tester.tap(find.byKey(const ValueKey('year-movie')));
-    await tester.pumpAndSettle();
-    expect(c.read(namingProfileProvider).movie.includeYear, isFalse);
-    expect(c.read(namingProfileProvider).tv.includeYear, isTrue);
+      await tester.tap(find.byKey(const ValueKey('year-movie')));
+      await tester.pumpAndSettle();
+      expect(c.read(namingProfileProvider).movie.includeYear, isFalse);
+      expect(c.read(namingProfileProvider).tv.includeYear, isTrue);
 
-    await tester.tap(find.byKey(const ValueKey('extra-movie')));
-    await tester.pumpAndSettle();
-    expect(c.read(namingProfileProvider).movie.extraInfo, isTrue);
+      await tester.tap(find.byKey(const ValueKey('extra-movie')));
+      await tester.pumpAndSettle();
+      expect(c.read(namingProfileProvider).movie.extraInfo, isTrue);
 
-    // TV tab: episode style radio
-    await tester.tap(find.text('剧集'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('style-cross')));
-    await tester.pumpAndSettle();
-    expect(c.read(namingProfileProvider).tv.episodeStyle, EpisodeStyle.cross);
+      // Movie custom template hides TV-only variables.
+      Finder leftScroll() => find
+          .descendant(
+            of: find.byType(ListView).first,
+            matching: find.byType(Scrollable),
+          )
+          .first;
+      final advMovie = find.byKey(const ValueKey('advanced-movie'));
+      await tester.scrollUntilVisible(advMovie, 200, scrollable: leftScroll());
+      await tester.pumpAndSettle();
+      await tester.tap(advMovie);
+      await tester.pumpAndSettle();
+      expect(find.text('+ {season:02}'), findsNothing);
+      expect(find.text('+ {episode:02}'), findsNothing);
+      expect(find.text('+ {episode_title}'), findsNothing);
+      expect(find.text('+ {original_title}'), findsWidgets);
+      expect(find.text('+ {tmdbid}'), findsWidgets);
 
-    // advanced template editor makes the option controls read-only
-    await tester.tap(find.byKey(const ValueKey('advanced-tv')));
-    await tester.pumpAndSettle();
-    expect(c.read(namingProfileProvider).tv.customTemplate, isNotNull);
-    await tester.tap(
-      find.byKey(const ValueKey('extra-tv')),
-      warnIfMissed: false,
-    );
-    await tester.pumpAndSettle();
-    expect(c.read(namingProfileProvider).tv.extraInfo, isFalse);
-    await tester.enterText(
-      find.byKey(const ValueKey('custom-tv')).last,
-      '{title}',
-    );
-    await tester.pumpAndSettle();
-    expect(c.read(namingProfileProvider).tv.customTemplate, '{title}');
+      // TV tab: showYear & singleSeasonFolder visibly update the preview.
+      await tester.tap(find.text('剧集'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('1994'), findsWidgets);
+      await tester.tap(find.text('当季首播年份'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('1995'), findsWidgets);
 
-    // switching player resets everything
-    await tester.tap(find.byKey(const ValueKey('player')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Infuse').last);
-    await tester.pumpAndSettle();
-    final p = c.read(namingProfileProvider);
-    expect(p.player, TargetPlayer.infuse);
-    expect(p.movie.includeYear, isTrue);
-    expect(p.tv.customTemplate, isNull);
-  });
+      await tester.tap(find.byKey(const ValueKey('style-cross')));
+      await tester.pumpAndSettle();
+      expect(c.read(namingProfileProvider).tv.episodeStyle, EpisodeStyle.cross);
+
+      // Advanced template editor makes filename controls read-only, while folder
+      // settings stay editable.
+      final advTv = find.byKey(const ValueKey('advanced-tv'));
+      await tester.scrollUntilVisible(advTv, 200, scrollable: leftScroll());
+      await tester.pumpAndSettle();
+      await tester.tap(advTv);
+      await tester.pumpAndSettle();
+      expect(c.read(namingProfileProvider).tv.customTemplate, isNotNull);
+
+      final singleSeason = find.byKey(
+        const ValueKey('single-season-folder-tv'),
+      );
+      await tester.scrollUntilVisible(
+        singleSeason,
+        -200,
+        scrollable: leftScroll(),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(singleSeason);
+      await tester.pumpAndSettle();
+      expect(c.read(namingProfileProvider).tv.singleSeasonFolder, isFalse);
+      expect(
+        tester
+            .widget<Text>(find.byKey(const ValueKey('single-season-preview')))
+            .data,
+        contains('单季剧省略季文件夹'),
+      );
+
+      final extraTv = find.byKey(const ValueKey('extra-tv'));
+      await tester.scrollUntilVisible(extraTv, -200, scrollable: leftScroll());
+      await tester.pumpAndSettle();
+      await tester.tap(extraTv, warnIfMissed: false);
+      await tester.pumpAndSettle();
+      expect(c.read(namingProfileProvider).tv.extraInfo, isFalse);
+
+      await tester.scrollUntilVisible(advTv, 200, scrollable: leftScroll());
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('custom-tv')).last,
+        '{title}',
+      );
+      await tester.pumpAndSettle();
+      expect(c.read(namingProfileProvider).tv.customTemplate, '{title}');
+
+      // Switching player warns when customized; cancel keeps current settings.
+      await tester.tap(find.byKey(const ValueKey('player')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Infuse').last);
+      await tester.pumpAndSettle();
+      expect(find.text('切换到 Infuse 预设？'), findsOneWidget);
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      expect(c.read(namingProfileProvider).player, TargetPlayer.vidhub);
+      expect(c.read(namingProfileProvider).tv.customTemplate, '{title}');
+
+      // Confirming applies NamingProfile.forPlayer(TargetPlayer.infuse).
+      await tester.tap(find.byKey(const ValueKey('player')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Infuse').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('切换并重置'));
+      await tester.pumpAndSettle();
+      final p = c.read(namingProfileProvider);
+      expect(p, NamingProfile.forPlayer(TargetPlayer.infuse));
+      expect(p.player, TargetPlayer.infuse);
+      expect(p.movie.bilingual, isFalse);
+      expect(p.movie.includeYear, isTrue);
+      expect(p.tv.customTemplate, isNull);
+
+      // Switching when uncustomized applies immediately without confirmation.
+      await tester.tap(find.byKey(const ValueKey('player')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Plex').last);
+      await tester.pumpAndSettle();
+      expect(find.text('切换到 Plex 预设？'), findsNothing);
+      expect(
+        c.read(namingProfileProvider),
+        NamingProfile.forPlayer(TargetPlayer.plex),
+      );
+    },
+  );
 
   testWidgets('season presets and regex rules reach the profile', (
     tester,
@@ -98,7 +176,10 @@ void main() {
     await tester.pumpAndSettle();
 
     final list = find
-        .ancestor(of: find.text('高级'), matching: find.byType(Scrollable))
+        .descendant(
+          of: find.byType(ListView).first,
+          matching: find.byType(Scrollable),
+        )
         .first;
     final preset = find.byKey(const ValueKey('season-preset-S01'));
     await tester.scrollUntilVisible(preset, 200, scrollable: list);
@@ -111,13 +192,7 @@ void main() {
     );
 
     final add = find.byKey(const ValueKey('add-rewrite'));
-    await tester.scrollUntilVisible(
-      add,
-      200,
-      scrollable: find
-          .ancestor(of: preset, matching: find.byType(Scrollable))
-          .first,
-    );
+    await tester.scrollUntilVisible(add, 200, scrollable: list);
     await tester.pumpAndSettle();
     await tester.tap(add);
     await tester.pumpAndSettle();
@@ -140,11 +215,16 @@ void main() {
 
   testWidgets('settings fields bind to the settings provider', (tester) async {
     final (_, c) = await pumpPage(tester, const SettingsPage());
+    expect(find.byKey(const ValueKey('settings-single-season')), findsNothing);
+
     await tester.enterText(find.byKey(const ValueKey('tmdb-key')), 'abc123');
     await tester.enterText(
       find.byKey(const ValueKey('tmdb-url')),
       'https://tmdb.example.com/3',
     );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('tmdb-url-reset')), findsOneWidget);
+
     // The page is a lazy list: scroll each control into view before tapping.
     Future<void> tap(Finder f) async {
       await tester.scrollUntilVisible(
@@ -159,10 +239,13 @@ void main() {
 
     await tap(find.text('测试连接'));
     expect(find.textContaining('连接成功：找到「盗梦空间」'), findsOneWidget);
+    expect(find.textContaining('自定义 key'), findsOneWidget);
 
     await tap(find.text('移动到媒体库'));
     await tap(find.byKey(const ValueKey('auto-junk')));
     await tap(find.byKey(const ValueKey('scan-preview')));
+    await tap(find.text('8'));
+    expect(find.byKey(const ValueKey('restart-concurrency')), findsOneWidget);
     await tap(find.text('繁体'));
     await tap(find.text('严格'));
     await tap(find.text('深色'));
@@ -174,6 +257,7 @@ void main() {
     expect(s.defaultMode, OrganizeMode.moveToLibrary);
     expect(s.autoDeleteJunk, isTrue);
     expect(s.scanPreview, isFalse);
+    expect(s.concurrency, 8);
     expect(s.tmdbLanguage, 'zh-TW');
     expect(s.confidenceThreshold, 0.85);
     expect(s.accent, AccentChoice.indigo);
@@ -187,4 +271,31 @@ void main() {
     );
     expect(find.textContaining('基于 mnamer (MIT)'), findsOneWidget);
   });
+
+  testWidgets(
+    'settings dark mode ink accent checkmark uses black for contrast',
+    (tester) async {
+      final (_, c) = await pumpPage(
+        tester,
+        Theme(data: buildTheme(Brightness.dark), child: const SettingsPage()),
+      );
+      final ink = find.byKey(const ValueKey('accent-ink'));
+      await tester.scrollUntilVisible(
+        ink,
+        150,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(ink);
+      await tester.pumpAndSettle();
+      expect(c.read(settingsProvider).accent, AccentChoice.ink);
+      final check = tester.widget<Icon>(
+        find.descendant(
+          of: ink,
+          matching: find.byIcon(CupertinoIcons.checkmark),
+        ),
+      );
+      expect(check.color, Colors.black);
+    },
+  );
 }

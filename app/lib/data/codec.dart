@@ -6,6 +6,25 @@ import 'package:tidyreel_core/tidyreel_core.dart';
 
 typedef Json = Map<String, dynamic>;
 
+/// Safe enum decoder: unknown names fall back instead of crashing startup.
+T enumByName<T extends Enum>(List<T> values, Object? name, T fallback) {
+  if (name is String) {
+    for (final v in values) {
+      if (v.name == name) return v;
+    }
+  }
+  return fallback;
+}
+
+T? enumByNameOrNull<T extends Enum>(List<T> values, Object? name) {
+  if (name is String) {
+    for (final v in values) {
+      if (v.name == name) return v;
+    }
+  }
+  return null;
+}
+
 Json candidateToJson(Candidate c) => {
   'tmdbId': c.tmdbId,
   'kind': c.kind.name,
@@ -23,7 +42,7 @@ Json candidateToJson(Candidate c) => {
 
 Candidate candidateFromJson(Json j) => Candidate(
   tmdbId: j['tmdbId'] as int,
-  kind: MediaKind.values.byName(j['kind'] as String),
+  kind: enumByName(MediaKind.values, j['kind'], MediaKind.unknown),
   title: j['title'] as String,
   englishTitle: j['englishTitle'] as String?,
   originalTitle: j['originalTitle'] as String?,
@@ -57,10 +76,10 @@ ParsedName _parsedFromJson(Json j) => ParsedName(
   season: j['season'] as int?,
   episodes: List<int>.of((j['episodes'] as List).cast<int>()),
   absolute: j['absolute'] as int?,
-  airDate: j['airDate'] == null
-      ? null
-      : DateTime.tryParse(j['airDate'] as String),
-  kind: MediaKind.values.byName(j['kind'] as String),
+  airDate: j['airDate'] is String
+      ? DateTime.tryParse(j['airDate'] as String)
+      : null,
+  kind: enumByName(MediaKind.values, j['kind'], MediaKind.unknown),
   resolution: j['resolution'] as String?,
   group: j['group'] as String?,
   lang: j['lang'] as String?,
@@ -80,7 +99,7 @@ ScanFile _fileFromJson(Json j) => ScanFile(
   path: j['path'] as String,
   name: j['name'] as String,
   size: j['size'] as int,
-  role: FileRole.values.byName(j['role'] as String),
+  role: enumByName(FileRole.values, j['role'], FileRole.other),
   parsed: j['parsed'] == null ? null : _parsedFromJson(j['parsed'] as Json),
 );
 
@@ -106,9 +125,9 @@ ShowDetail _showFromJson(Json j) => ShowDetail(
         number: x['number'] as int,
         episodeCount: x['episodeCount'] as int,
         name: x['name'] as String?,
-        airDate: x['airDate'] == null
-            ? null
-            : DateTime.parse(x['airDate'] as String),
+        airDate: x['airDate'] is String
+            ? DateTime.tryParse(x['airDate'] as String)
+            : null,
         posterPath: x['posterPath'] as String?,
       ),
   ],
@@ -128,7 +147,7 @@ Json _groupToJson(MediaGroup g) => {
 
 MediaGroup _groupFromJson(Json j) => MediaGroup(
   id: GroupId(j['id'] as String),
-  kind: MediaKind.values.byName(j['kind'] as String),
+  kind: enumByName(MediaKind.values, j['kind'], MediaKind.unknown),
   anchorTitle: j['anchorTitle'] as String,
   anchorYear: j['anchorYear'] as int?,
   rootDir: j['rootDir'] as String,
@@ -190,7 +209,11 @@ Map<GroupId, GroupDecision> decisionsFromJson(String text) {
 
 GroupDecision _decisionFromJson(Json j) => GroupDecision(
   match: j['match'] == null ? null : candidateFromJson(j['match'] as Json),
-  strategy: SeasonStrategy.values.byName(j['strategy'] as String),
+  strategy: enumByName(
+    SeasonStrategy.values,
+    j['strategy'],
+    SeasonStrategy.asParsed,
+  ),
   episodeOffset: j['episodeOffset'] as int,
   episodeGroupId: j['episodeGroupId'] as String?,
   selected: j['selected'] as bool,
@@ -201,9 +224,7 @@ GroupDecision _decisionFromJson(Json j) => GroupDecision(
       path: FileOverride(
         season: (o as Json)['season'] as int?,
         episode: o['episode'] as int?,
-        kind: o['kind'] == null
-            ? null
-            : MediaKind.values.byName(o['kind'] as String),
+        kind: enumByNameOrNull(MediaKind.values, o['kind']),
         ignore: o['ignore'] as bool,
       ),
   },

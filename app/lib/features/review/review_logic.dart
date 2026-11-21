@@ -84,14 +84,16 @@ class ReviewRow {
   final FileOverride? override;
   final int season;
   final bool conflict;
+  final String? conflictReason;
 
   const ReviewRow(
     this.file,
     this.op,
     this.override,
     this.season,
-    this.conflict,
-  );
+    this.conflict, [
+    this.conflictReason,
+  ]);
 
   bool get ignored => override?.ignore ?? false;
 
@@ -110,7 +112,10 @@ class ReviewRow {
 
 List<ReviewRow> rowsOf(MediaGroup g, GroupDecision? d, TaskReview r) {
   final bySrc = {for (final o in r.preview.ops) o.src: o};
-  final conflictOps = {for (final c in r.preview.conflicts) ...c.ops};
+  final conflictByOp = <OpId, PlanConflict>{
+    for (final c in r.preview.conflicts)
+      for (final id in c.ops) id: c,
+  };
   return [
     for (final f in g.files)
       ReviewRow(
@@ -118,9 +123,42 @@ List<ReviewRow> rowsOf(MediaGroup g, GroupDecision? d, TaskReview r) {
         bySrc[f.path],
         d?.overrides[f.path],
         seasonOf(g, f, d?.overrides[f.path]),
-        bySrc[f.path] != null && conflictOps.contains(bySrc[f.path]!.id),
+        bySrc[f.path] != null && conflictByOp.containsKey(bySrc[f.path]!.id),
+        bySrc[f.path] == null ? null : conflictByOp[bySrc[f.path]!.id]?.reason,
       ),
   ];
+}
+
+/// Group IDs that have at least one op involved in [r.preview.conflicts].
+Set<GroupId> conflictGroups(TaskReview r) {
+  if (r.preview.conflicts.isEmpty) return const {};
+  final conflictOps = {for (final c in r.preview.conflicts) ...c.ops};
+  final byPath = <String, GroupId>{
+    for (final g in r.scan.groups)
+      for (final f in g.files) f.path: g.id,
+  };
+  final out = <GroupId>{};
+  for (final o in r.preview.ops) {
+    if (!conflictOps.contains(o.id)) continue;
+    final gid = o.group ?? byPath[o.src];
+    if (gid != null) out.add(gid);
+  }
+  return out;
+}
+
+/// First group (and its conflicting season, or null if it's a folder conflict)
+/// involved in [r.preview.conflicts].
+({GroupId group, int? season})? firstConflictLocation(TaskReview r) {
+  final groups = conflictGroups(r);
+  if (groups.isEmpty) return null;
+  for (final g in r.scan.groups) {
+    if (!groups.contains(g.id)) continue;
+    final d = r.decisions[g.id];
+    final eg = effectiveGroup(g, d);
+    final bad = rowsOf(eg, d, r).where((row) => row.conflict).firstOrNull;
+    return (group: g.id, season: bad?.season);
+  }
+  return null;
 }
 
 /// Ops of [g] that are not tied to a single scanned file (mkdir / folder moves).
@@ -217,6 +255,24 @@ bool _isMainVideo(ReviewRow r) {
   if (kind == MediaKind.special || kind == MediaKind.extra) return false;
   if ((r.override?.season ?? r.file.parsed?.season) == 0) return false;
   return true;
+}
+
+/// Number of later main-video files in the same local season that [shiftFrom]
+/// would renumber alongside [from].
+int shiftFollowingCount(List<ReviewRow> rows, ReviewRow from) {
+  final start = _localEpisode(from.file);
+  if (start == null) return 0;
+  final localSeason = from.file.parsed?.season ?? 1;
+  var count = 0;
+  for (final r in rows) {
+    if (_isMainVideo(r) &&
+        r.file.path != from.file.path &&
+        (r.file.parsed?.season ?? 1) == localSeason &&
+        (_localEpisode(r.file) ?? 0) > start) {
+      count++;
+    }
+  }
+  return count;
 }
 
 /// Puts [from] at [to] and shifts every later file of the same local season

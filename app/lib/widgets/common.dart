@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../ui/tokens.dart';
+import '../ui/widgets.dart';
 
 /// Minimal settable state holder: `NotifierProvider<Val<T>, T>(() => Val(x))`.
 class Val<T> extends Notifier<T> {
@@ -61,13 +62,22 @@ String fmtDate(DateTime? d) => d == null
     ? ''
     : '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
+/// Last path segment, or [empty] for root / empty paths.
+String pathBasename(String path, {String empty = '根目录'}) {
+  final trimmed = path.replaceAll(RegExp(r'[/\\]+$'), '');
+  if (trimmed.isEmpty) return empty;
+  final i = trimmed.lastIndexOf(RegExp(r'[/\\]'));
+  final name = i < 0 ? trimmed : trimmed.substring(i + 1);
+  return name.isEmpty ? empty : name;
+}
+
 /// True in the real macOS app (not tests): the native title bar is hidden and
 /// page headers double as the window's drag area.
 bool get isMacDesktop => !kIsWeb && Platform.isMacOS;
 
 /// Page frame: bold title (+ optional subtitle, leading and actions) over the
 /// body. On macOS the header is the window's drag area. With [maxWidth] the
-/// whole page is centered.
+/// whole page is constrained to that width and aligned top-left.
 class PageScaffold extends StatelessWidget {
   final String title;
   final String? subtitle;
@@ -90,7 +100,7 @@ class PageScaffold extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     Widget header = Padding(
-      padding: EdgeInsets.fromLTRB(leading == null ? 48 : 34, 30, 36, 18),
+      padding: EdgeInsets.fromLTRB(leading == null ? 48 : 34, 30, 40, 18),
       child: Row(
         children: [
           if (leading != null) ...[leading!, const SizedBox(width: 6)],
@@ -152,8 +162,15 @@ class PageScaffold extends StatelessWidget {
 }
 
 /// TMDB image URL; [size] is a TMDB size bucket (w92, w185, w342, w780, original).
-String tmdbImage(String path, [String size = 'w185']) =>
-    'https://image.tmdb.org/t/p/$size$path';
+/// Pass [baseUrl] to override the image host (e.g. a reverse proxy).
+String tmdbImage(String path, [String size = 'w185', String? baseUrl]) {
+  final base =
+      (baseUrl == null || baseUrl.trim().isEmpty
+              ? 'https://image.tmdb.org/t/p'
+              : baseUrl.trim())
+          .replaceAll(RegExp(r'/+$'), '');
+  return '$base/$size$path';
+}
 
 /// TMDB poster (2:3) with a hairline border and soft shadow, or an icon when
 /// there is none. Picks the image size from the rendered width.
@@ -222,41 +239,130 @@ Future<bool> confirmDialog(
 }) async =>
     await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(title),
-        content: content,
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消'),
-          ),
-          // Destructive: a red word, not a red slab.
-          destructive
-              ? OutlinedButton(
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: Theme.of(ctx).colorScheme.error,
-                  ),
-                  onPressed: () => Navigator.pop(ctx, true),
-                  child: Text(confirmLabel),
-                )
-              : FilledButton(
-                  onPressed: () => Navigator.pop(ctx, true),
-                  child: Text(confirmLabel),
+      builder: (ctx) => MacSheet(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minWidth: 320, maxWidth: 460),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(22, 20, 22, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(title, style: Theme.of(ctx).textTheme.titleMedium),
+                const SizedBox(height: 10),
+                DefaultTextStyle.merge(
+                  style: Theme.of(ctx).textTheme.bodyMedium,
+                  child: content,
                 ),
-        ],
+                const SizedBox(height: 18),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('取消'),
+                    ),
+                    const SizedBox(width: 8),
+                    // Destructive: a red word, not a red slab.
+                    destructive
+                        ? OutlinedButton(
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Theme.of(ctx).colorScheme.error,
+                            ),
+                            onPressed: () => Navigator.pop(ctx, true),
+                            child: Text(confirmLabel),
+                          )
+                        : FilledButton(
+                            onPressed: () => Navigator.pop(ctx, true),
+                            child: Text(confirmLabel),
+                          ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     ) ??
     false;
 
 /// The one confirmation before running: deleting files can't be undone.
-Future<bool> confirmPermanentDelete(BuildContext context, int count) =>
-    confirmDialog(
-      context,
-      title: '永久删除 $count 个文件？',
-      content: const Text('这些是广告和垃圾文件，删除后无法撤销。改名和移动仍可在任务页撤销。'),
-      confirmLabel: '删除并整理',
-      destructive: true,
-    );
+Future<bool> confirmPermanentDelete(
+  BuildContext context,
+  int count, {
+  List<String> paths = const [],
+}) {
+  const maxShown = 50;
+  final shown = paths.take(maxShown).toList();
+  final more = paths.length - shown.length;
+  return confirmDialog(
+    context,
+    title: '永久删除 $count 个文件？',
+    content: Builder(
+      builder: (ctx) {
+        final p = Palette.of(ctx);
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text('这些是广告和垃圾文件，删除后无法撤销。改名和移动仍可在任务页撤销。'),
+            if (shown.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 180),
+                child: Panel(
+                  framed: true,
+                  color: p.sidebar,
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        for (final path in shown)
+                          Tooltip(
+                            message: path,
+                            waitDuration: const Duration(milliseconds: 500),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 2),
+                              child: Text(
+                                pathBasename(path, empty: path),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: TypeScale.small,
+                                  color: p.textMuted,
+                                ),
+                              ),
+                            ),
+                          ),
+                        if (more > 0)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text(
+                              '+$more 个更多文件',
+                              style: TextStyle(
+                                fontSize: TypeScale.small,
+                                color: p.textFaint,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        );
+      },
+    ),
+    confirmLabel: '删除并整理',
+    destructive: true,
+  );
+}
 
 /// A network image also kept on disk (app cache dir), so posters show at once
 /// after a restart instead of downloading again. TMDB image URLs never change.
@@ -266,7 +372,27 @@ class CachedImage extends ImageProvider<CachedImage> {
   const CachedImage(this.url);
 
   static Future<Directory>? _dir;
-  static final _http = HttpClient();
+  static var _tmpSeq = 0;
+  static final _http = HttpClient()
+    ..connectionTimeout = const Duration(seconds: 15);
+
+  /// Removes all cached TMDB images from disk.
+  static Future<void> clearDiskCache() async {
+    try {
+      final dir =
+          await (_dir ??
+              getApplicationCacheDirectory().then(
+                (d) => Directory('${d.path}/tmdb_images'),
+              ));
+      if (await dir.exists()) {
+        await dir.delete(recursive: true);
+      }
+    } on Object {
+      // Ignore cache cleanup errors (e.g. missing path_provider in tests).
+    } finally {
+      _dir = null;
+    }
+  }
 
   @override
   Future<CachedImage> obtainKey(ImageConfiguration configuration) =>
@@ -297,10 +423,24 @@ class CachedImage extends ImageProvider<CachedImage> {
         );
       }
       bytes = await consolidateHttpClientResponseBytes(res);
-      // Write then rename: a crash mid-write never leaves a broken image.
-      final tmp = File('${file.path}.part');
-      await tmp.writeAsBytes(bytes, flush: true);
-      await tmp.rename(file.path);
+      // Unique temp file then rename: concurrent loads never collide and a
+      // crash mid-write never leaves a broken image.
+      final tmp = File(
+        '${file.path}.${DateTime.now().microsecondsSinceEpoch}.${_tmpSeq++}.part',
+      );
+      try {
+        await tmp.writeAsBytes(bytes, flush: true);
+        await tmp.rename(file.path);
+      } catch (_) {
+        if (await tmp.exists()) {
+          try {
+            await tmp.delete();
+          } on Object {
+            // Ignore cleanup failure.
+          }
+        }
+        rethrow;
+      }
     }
     return decode(await ui.ImmutableBuffer.fromUint8List(bytes));
   }

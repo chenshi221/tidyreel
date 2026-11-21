@@ -467,14 +467,18 @@ class MacSwitch extends StatelessWidget {
   const MacSwitch({super.key, required this.value, required this.onChanged});
 
   @override
-  Widget build(BuildContext context) => Transform.scale(
-    scale: 0.72,
-    child: CupertinoSwitch(
-      value: value,
-      activeTrackColor: Palette.of(context).text,
-      onChanged: onChanged,
-    ),
-  );
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    return Transform.scale(
+      scale: 0.72,
+      child: CupertinoSwitch(
+        value: value,
+        activeTrackColor: p.text,
+        thumbColor: p.canvas,
+        onChanged: onChanged,
+      ),
+    );
+  }
 }
 
 /// Constrains page content to a readable width.
@@ -648,8 +652,10 @@ class GradientProgress extends StatelessWidget {
 }
 
 /// A stable hue per season number so 第 1 季 / 第 2 季 read apart at a glance.
-Color seasonColor(int season) {
-  const hues = [
+/// Uses a lighter high-contrast palette in dark mode so badges stay legible
+/// on dark panels.
+Color seasonColor(int season, [Brightness brightness = Brightness.light]) {
+  const lightHues = [
     Color(0xFF948E88), // 0: specials, neutral
     Color(0xFF9D2933),
     Color(0xFF425066),
@@ -659,6 +665,17 @@ Color seasonColor(int season) {
     Color(0xFF2E6F78), // 石青
     Color(0xFF6E4F5E), // 葡萄褐
   ];
+  const darkHues = [
+    Color(0xFFAEA8A1), // 0: specials, neutral
+    Color(0xFFD87880),
+    Color(0xFF8E9DB8),
+    Color(0xFF8DBB98),
+    Color(0xFFB996C2), // 紫棠
+    Color(0xFFCBBF73), // 秋香
+    Color(0xFF6FB1B9), // 石青
+    Color(0xFFB892A3), // 葡萄褐
+  ];
+  final hues = brightness == Brightness.dark ? darkHues : lightHues;
   if (season <= 0) return hues[0];
   return hues[1 + (season - 1) % (hues.length - 1)];
 }

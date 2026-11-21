@@ -7,7 +7,8 @@ import '../../ui/tokens.dart';
 import '../../ui/widgets.dart';
 import '../../data/smb_backend.dart' show SmbTarget, parseSmbEndpoint;
 import 'folder_picker.dart';
-import 'sources_providers.dart' show ConnCheck, ConnStatus, FolderLister;
+import 'sources_providers.dart'
+    show ConnCheck, ConnStatus, FolderLister, FolderSessionOpener;
 
 String connectionTypeLabel(ConnectionType t) => switch (t) {
   ConnectionType.alist => 'Alist',
@@ -103,6 +104,7 @@ Future<ConnectionDraft?> showConnectionDialog(
   bool copy = false,
   Future<ConnCheck> Function(ConnectionConfig, String password)? tester,
   FolderLister? lister,
+  FolderSessionOpener? openLister,
 }) => showDialog<ConnectionDraft>(
   context: context,
   builder: (_) => _ConnectionDialog(
@@ -111,6 +113,7 @@ Future<ConnectionDraft?> showConnectionDialog(
     copy: copy,
     tester: tester,
     lister: lister,
+    openLister: openLister,
   ),
 );
 
@@ -120,6 +123,7 @@ class _ConnectionDialog extends StatefulWidget {
   final bool copy;
   final Future<ConnCheck> Function(ConnectionConfig, String)? tester;
   final FolderLister? lister;
+  final FolderSessionOpener? openLister;
 
   const _ConnectionDialog({
     this.existing,
@@ -127,6 +131,7 @@ class _ConnectionDialog extends StatefulWidget {
     this.copy = false,
     this.tester,
     this.lister,
+    this.openLister,
   });
 
   @override
@@ -182,6 +187,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
   var _showPassword = false;
   var _testing = false;
   ConnCheck? _testResult;
+  String? _browseHint;
 
   bool get _local => _type == ConnectionType.local;
   bool get _isSmb => _type == ConnectionType.smb;
@@ -228,7 +234,10 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
   }
 
   /// Any edit invalidates a previous test result and refreshes the preview.
-  void _onEdit() => setState(() => _testResult = null);
+  void _onEdit() => setState(() {
+    _testResult = null;
+    _browseHint = null;
+  });
 
   EndpointParts get _parts => EndpointParts(
     scheme: _scheme,
@@ -302,6 +311,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
     if (k == _Kind.smb) _port.text = '';
     if (k == _Kind.dav && _port.text.trim().isEmpty) _port.text = _defaultPort;
     _testResult = null;
+    _browseHint = null;
   });
 
   void _setTemplate(DavTemplate t) => setState(() {
@@ -310,6 +320,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
     _path.text = t.path;
     if (t == DavTemplate.synology) _scheme = 'http';
     _testResult = null;
+    _browseHint = null;
   });
 
   String? _portError() {
@@ -359,7 +370,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
       favorites: widget.copy
           ? const []
           : widget.existing?.favorites ?? const [],
-      startDir: _apiPath(_start.text),
+      startDir: _local ? '/' : _apiPath(_start.text),
     );
   }
 
@@ -394,19 +405,30 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
   /// 浏览…: pick [c]'s folder on the server with the unsaved settings.
   Future<void> _browse(TextEditingController c, String title) async {
     if (!_valid()) {
-      setState(() => _showErrors = true);
+      setState(() {
+        _showErrors = true;
+        _browseHint = _local ? '请先选择本地文件夹' : '请先填写服务器信息，再浏览远程文件夹';
+      });
       return;
     }
+    setState(() => _browseHint = null);
     final config = _config();
     final password = _local ? '' : _password.text;
-    final dir = await showRemoteFolderPicker(
-      context,
-      title: title,
-      initial: c.text.trim().isEmpty ? '/' : _apiPath(c.text),
-      list: (dir) => widget.lister!(config, password, dir),
-    );
-    if (!mounted) return;
-    if (dir != null) c.text = dir == '/' ? '' : dir;
+    final session = widget.openLister?.call(config, password);
+    try {
+      final dir = await showRemoteFolderPicker(
+        context,
+        title: title,
+        initial: c.text.trim().isEmpty ? '/' : _apiPath(c.text),
+        list: session != null
+            ? session.list
+            : (dir) => widget.lister!(config, password, dir),
+      );
+      if (!mounted) return;
+      if (dir != null) c.text = dir == '/' ? '' : dir;
+    } finally {
+      await session?.close();
+    }
   }
 
   Future<void> _pickFolder() async {
@@ -418,7 +440,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
   }
 
   Widget _withBrowse(Widget field, VoidCallback onBrowse) =>
-      widget.lister == null
+      widget.openLister == null && widget.lister == null
       ? field
       : Row(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -672,22 +694,39 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                       padding: EdgeInsets.symmetric(vertical: 8),
                       child: Divider(),
                     ),
-                    FormRow(
-                      label: '连接路径',
-                      help: '只能访问这个路径及以下，比如 /PC；留空可访问全部',
-                      child: _withBrowse(
-                        field('连接路径', _start, hint: '/'),
-                        () => _browse(_start, '选择连接路径'),
+                    if (!_local)
+                      FormRow(
+                        label: '连接路径',
+                        help: '只能访问这个路径及以下，比如 /PC；留空可访问全部',
+                        child: _withBrowse(
+                          field('连接路径', _start, hint: '/'),
+                          () => _browse(_start, '选择连接路径'),
+                        ),
                       ),
-                    ),
                     FormRow(
                       label: '媒体库',
-                      help: '「移动到媒体库」模式下，整理好的文件放到这里（可选）',
+                      help: _local
+                          ? '「移动到媒体库」模式下，整理好的文件放到这里（相对于上方本地文件夹，可选）'
+                          : '「移动到媒体库」模式下，整理好的文件放到这里（可选）',
                       child: _withBrowse(
                         field('媒体库', _root, hint: '/影视库'),
                         () => _browse(_root, '选择媒体库文件夹'),
                       ),
                     ),
+                    if (_browseHint != null) ...[
+                      const SizedBox(height: 6),
+                      Padding(
+                        padding: const EdgeInsets.only(left: 96),
+                        child: Text(
+                          _browseHint!,
+                          key: const ValueKey('browse-hint'),
+                          style: TextStyle(
+                            fontSize: TypeScale.small,
+                            color: p.warning,
+                          ),
+                        ),
+                      ),
+                    ],
                     if (result != null) ...[
                       const SizedBox(height: 10),
                       Container(
@@ -739,13 +778,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                     TextButton.icon(
                       onPressed: _testing ? null : _test,
                       icon: _testing
-                          ? const SizedBox(
-                              width: 12,
-                              height: 12,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 1.5,
-                              ),
-                            )
+                          ? const Spinner(size: 13)
                           : const Icon(
                               CupertinoIcons.bolt_horizontal,
                               size: 15,
@@ -769,6 +802,44 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
   }
 }
 
+class _MenuTrigger extends StatelessWidget {
+  final String label;
+  final EdgeInsetsGeometry padding;
+  final double gap;
+
+  const _MenuTrigger(
+    this.label, {
+    this.padding = const EdgeInsets.only(left: 10, right: 6),
+    this.gap = 4,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    return Container(
+      height: 31,
+      padding: padding,
+      decoration: BoxDecoration(
+        color: p.panel,
+        borderRadius: BorderRadius.circular(Radii.sm),
+        border: Border.all(color: p.lineStrong, width: hairline),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(label, style: const TextStyle(fontSize: 13)),
+          SizedBox(width: gap),
+          Icon(
+            CupertinoIcons.chevron_up_chevron_down,
+            size: 11,
+            color: p.textMuted,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// 模板 popup: Alist API / Alist WebDAV / 群晖 / 通用.
 class _TemplateMenu extends StatelessWidget {
   final DavTemplate value;
@@ -777,46 +848,23 @@ class _TemplateMenu extends StatelessWidget {
   const _TemplateMenu({required this.value, required this.onChanged});
 
   @override
-  Widget build(BuildContext context) {
-    final p = Palette.of(context);
-    return PopupMenuButton<DavTemplate>(
-      key: const ValueKey('dav-template'),
-      tooltip: '选择服务器类型，自动填好端口和路径',
-      initialValue: value,
-      onSelected: onChanged,
-      position: PopupMenuPosition.under,
-      itemBuilder: (_) => [
-        for (final t in DavTemplate.values)
-          PopupMenuItem(
-            key: ValueKey('template-${t.name}'),
-            value: t,
-            height: 32,
-            child: Text(t.label),
-          ),
-      ],
-      child: Container(
-        height: 31,
-        padding: const EdgeInsets.only(left: 10, right: 6),
-        decoration: BoxDecoration(
-          color: p.panel,
-          borderRadius: BorderRadius.circular(Radii.sm),
-          border: Border.all(color: p.lineStrong, width: hairline),
+  Widget build(BuildContext context) => PopupMenuButton<DavTemplate>(
+    key: const ValueKey('dav-template'),
+    tooltip: '选择服务器类型，自动填好端口和路径',
+    initialValue: value,
+    onSelected: onChanged,
+    position: PopupMenuPosition.under,
+    itemBuilder: (_) => [
+      for (final t in DavTemplate.values)
+        PopupMenuItem(
+          key: ValueKey('template-${t.name}'),
+          value: t,
+          height: 32,
+          child: Text(t.label),
         ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(value.label, style: const TextStyle(fontSize: 13)),
-            const SizedBox(width: 4),
-            Icon(
-              CupertinoIcons.chevron_up_chevron_down,
-              size: 11,
-              color: p.textMuted,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+    ],
+    child: _MenuTrigger(value.label),
+  );
 }
 
 /// http / https popup button.
@@ -827,39 +875,20 @@ class _SchemeMenu extends StatelessWidget {
   const _SchemeMenu({required this.value, required this.onChanged});
 
   @override
-  Widget build(BuildContext context) {
-    final p = Palette.of(context);
-    return PopupMenuButton<String>(
-      key: const ValueKey('scheme'),
-      tooltip: '协议',
-      initialValue: value,
-      onSelected: onChanged,
-      position: PopupMenuPosition.under,
-      itemBuilder: (_) => [
-        for (final s in ['http', 'https'])
-          PopupMenuItem(value: s, height: 30, child: Text(s)),
-      ],
-      child: Container(
-        height: 31,
-        padding: const EdgeInsets.only(left: 9, right: 5),
-        decoration: BoxDecoration(
-          color: p.panel,
-          borderRadius: BorderRadius.circular(Radii.sm),
-          border: Border.all(color: p.lineStrong, width: hairline),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('$value://', style: const TextStyle(fontSize: 13)),
-            const SizedBox(width: 2),
-            Icon(
-              CupertinoIcons.chevron_up_chevron_down,
-              size: 11,
-              color: p.textMuted,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => PopupMenuButton<String>(
+    key: const ValueKey('scheme'),
+    tooltip: '协议',
+    initialValue: value,
+    onSelected: onChanged,
+    position: PopupMenuPosition.under,
+    itemBuilder: (_) => [
+      for (final s in ['http', 'https'])
+        PopupMenuItem(value: s, height: 30, child: Text(s)),
+    ],
+    child: _MenuTrigger(
+      '$value://',
+      padding: const EdgeInsets.only(left: 9, right: 5),
+      gap: 2,
+    ),
+  );
 }

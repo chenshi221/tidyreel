@@ -24,7 +24,9 @@ void main() {
   ) async {
     final container = ProviderContainer(
       overrides: [
-        backendForProvider.overrideWithValue((_) => _FailingBackend(error)),
+        connectionBackendProvider.overrideWith(
+          (ref, id) => _FailingBackend(error),
+        ),
       ],
     );
     addTearDown(container.dispose);
@@ -83,4 +85,39 @@ void main() {
       expect(s.detail, err);
     }
   });
+
+  test(
+    'toggling favorites does not re-ping connectionStatusProvider',
+    () async {
+      var lists = 0;
+      final counting = _CountingListBackend(() => lists++);
+      final container = ProviderContainer(
+        overrides: [
+          connectionBackendProvider.overrideWith((ref, id) => counting),
+        ],
+      );
+      addTearDown(container.dispose);
+      const id = ConnectionId('demo-alist');
+      final sub = container.listen(connectionStatusProvider(id), (_, _) {});
+      addTearDown(sub.close);
+      final first = await container.read(connectionStatusProvider(id).future);
+      expect(first.status, ConnStatus.connected);
+      expect(lists, 1);
+
+      container.read(connectionsProvider.notifier).toggleFavorite(id, '/下载');
+      await Future<void>.delayed(Duration.zero);
+      expect(lists, 1);
+    },
+  );
+}
+
+class _CountingListBackend extends MemoryStorageBackend {
+  final void Function() onList;
+  _CountingListBackend(this.onList) : super({'/下载/a.mkv': 1});
+
+  @override
+  Future<List<RemoteEntry>> list(String dir, {bool refresh = false}) {
+    onList();
+    return super.list(dir, refresh: refresh);
+  }
 }

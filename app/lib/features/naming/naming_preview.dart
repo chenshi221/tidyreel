@@ -18,7 +18,7 @@ class NamingSample {
       'year': 1994,
       'season': 2,
       'episode': 3,
-      'episode_title': "The One Where Phoebe Hates PBS",
+      'episode_title': 'The One Where Phoebe Hates PBS',
       'tmdbid': 1668,
       'tmdb_tag': '{tmdb-1668}',
       'resolution': '2160p',
@@ -29,6 +29,13 @@ class NamingSample {
       'ext': 'mp4',
     },
   );
+
+  /// TV sample reflecting [ShowYearSource]: Season 1 aired in 1994, Season 2 in 1995.
+  static NamingSample tvFor(NamingOptions options) =>
+      NamingSample(tv.original, tv.ext, {
+        ...tv.vars,
+        'year': options.showYear == ShowYearSource.seasonAir ? 1995 : 1994,
+      });
 
   static const movie = NamingSample(
     'Inception.2010.2160p.BluRay.x265.mkv',
@@ -50,22 +57,19 @@ class NamingSample {
   );
 }
 
-/// Outcome of one preview render. [text] null means "engine not wired yet"
-/// ([pending]) or an invalid template ([error]).
+/// Outcome of one preview render. [text] null means an invalid template ([error]).
 class PreviewResult {
   final String? text;
-  final bool pending;
   final String? error;
 
-  const PreviewResult.ok(String this.text) : pending = false, error = null;
-  const PreviewResult.pending() : text = null, pending = true, error = null;
-  const PreviewResult.error(String this.error) : text = null, pending = false;
+  const PreviewResult.ok(String this.text) : error = null;
+  const PreviewResult.error(String this.error) : text = null;
 
   /// What to show in the example card.
-  String get display => text ?? (pending ? '预览：等待命名引擎接入' : '模板有误：$error');
+  String get display => text ?? '模板有误：$error';
 }
 
-/// compileTemplate + renderTemplate, tolerant of the engine still being a stub.
+/// compileTemplate + renderTemplate.
 PreviewResult renderNaming(
   NamingOptions options,
   MediaKind kind,
@@ -76,8 +80,6 @@ PreviewResult renderNaming(
     return PreviewResult.ok(
       '${applyRewrites(renderTemplate(tpl, sample.vars), options.rewrites)}.${sample.ext}',
     );
-  } on UnimplementedError {
-    return const PreviewResult.pending();
   } catch (e) {
     return PreviewResult.error('$e');
   }
@@ -93,14 +95,12 @@ PreviewResult renderFolder(
     return PreviewResult.ok(
       applyRewrites(renderTemplate(template, sample.vars), rewrites),
     );
-  } on UnimplementedError {
-    return const PreviewResult.pending();
   } catch (e) {
     return PreviewResult.error('$e');
   }
 }
 
-/// The compiled file template, or [fallback] while the engine is a stub.
+/// The compiled file template, or [fallback] on error.
 String compiledOrDefault(
   NamingOptions o,
   MediaKind kind, {

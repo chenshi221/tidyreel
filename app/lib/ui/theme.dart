@@ -204,41 +204,6 @@ ThemeData buildTheme(Brightness brightness, {Color? accent}) {
         iconSize: 17,
       ),
     ),
-    segmentedButtonTheme: SegmentedButtonThemeData(
-      style: ButtonStyle(
-        visualDensity: VisualDensity.compact,
-        textStyle: const WidgetStatePropertyAll(buttonText),
-        shape: WidgetStatePropertyAll(rounded(Radii.lg)),
-        side: WidgetStatePropertyAll(ink),
-        backgroundColor: WidgetStateProperty.resolveWith(
-          (s) => s.contains(WidgetState.selected)
-              ? p.selected
-              : Colors.transparent,
-        ),
-        foregroundColor: WidgetStatePropertyAll(p.text),
-        iconColor: WidgetStatePropertyAll(p.textMuted),
-      ),
-    ),
-    chipTheme: ChipThemeData(
-      backgroundColor: Colors.transparent,
-      selectedColor: p.selected,
-      side: BorderSide(color: p.lineStrong, width: hairline),
-      shape: rounded(Radii.lg),
-      labelStyle: TextStyle(
-        fontSize: TypeScale.small,
-        color: p.text,
-        fontFamilyFallback: sansFallback,
-      ),
-      secondaryLabelStyle: TextStyle(
-        fontSize: TypeScale.small,
-        color: p.text,
-        fontFamilyFallback: sansFallback,
-      ),
-      checkmarkColor: p.text,
-      iconTheme: IconThemeData(color: p.textMuted, size: 14),
-      padding: const EdgeInsets.symmetric(horizontal: 4),
-      labelPadding: const EdgeInsets.symmetric(horizontal: 6),
-    ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
       fillColor: Colors.transparent,
@@ -316,24 +281,6 @@ ThemeData buildTheme(Brightness brightness, {Color? accent}) {
       titleTextStyle: text.bodyMedium,
       subtitleTextStyle: text.bodySmall,
     ),
-    tabBarTheme: TabBarThemeData(
-      labelColor: p.text,
-      unselectedLabelColor: p.textMuted,
-      indicatorColor: p.text,
-      indicatorSize: TabBarIndicatorSize.label,
-      dividerColor: p.line,
-      labelStyle: const TextStyle(
-        fontSize: TypeScale.body,
-        fontWeight: FontWeight.w500,
-        fontFamilyFallback: sansFallback,
-      ),
-      unselectedLabelStyle: const TextStyle(
-        fontSize: TypeScale.body,
-        fontFamilyFallback: sansFallback,
-      ),
-      overlayColor: const WidgetStatePropertyAll(Colors.transparent),
-      labelPadding: const EdgeInsets.symmetric(horizontal: 12),
-    ),
     checkboxTheme: CheckboxThemeData(
       // Square ink boxes, like a paper form.
       shape: rounded(4),
@@ -344,32 +291,12 @@ ThemeData buildTheme(Brightness brightness, {Color? accent}) {
       ),
       checkColor: WidgetStatePropertyAll(p.canvas),
     ),
-    radioTheme: RadioThemeData(
-      visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
-      fillColor: WidgetStateProperty.resolveWith(
-        (s) => s.contains(WidgetState.selected) ? p.text : p.lineStrong,
-      ),
-    ),
-    switchTheme: SwitchThemeData(
-      thumbColor: const WidgetStatePropertyAll(Colors.white),
-      trackColor: WidgetStateProperty.resolveWith(
-        (s) => s.contains(WidgetState.selected) ? p.text : p.selected,
-      ),
-      trackOutlineColor: const WidgetStatePropertyAll(Colors.transparent),
-      thumbIcon: const WidgetStatePropertyAll(null),
-    ),
     progressIndicatorTheme: ProgressIndicatorThemeData(
       color: p.text,
       linearTrackColor: p.selected,
       circularTrackColor: Colors.transparent,
       linearMinHeight: 3,
       borderRadius: BorderRadius.circular(2),
-    ),
-    sliderTheme: SliderThemeData(
-      activeTrackColor: p.text,
-      thumbColor: Colors.white,
-      inactiveTrackColor: p.selected,
-      trackHeight: 3,
     ),
     badgeTheme: BadgeThemeData(
       backgroundColor: p.text,
