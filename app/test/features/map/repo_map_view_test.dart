@@ -410,4 +410,21 @@ void main() {
     expect(shortName('(2004)'), '(2004)');
     expect(shortName('超时空要塞Δ'), '超时空要塞Δ');
   });
+
+  testWidgets('toggling a favorite in map mode keeps the same SizeScanner', (
+    tester,
+  ) async {
+    final c = await _pump(tester);
+    await tester.tap(find.text('地图'));
+    await tester.pumpAndSettle();
+    final before = c.read(sizeScannerProvider(_id));
+    expect(before.isComplete(root), isTrue);
+
+    await tester.tap(find.byTooltip('收藏此文件夹'));
+    await tester.pumpAndSettle();
+    final after = c.read(sizeScannerProvider(_id));
+    expect(identical(before, after), isTrue);
+    expect(find.byType(OrganicMap), findsOneWidget);
+    expect(find.byType(Spinner), findsNothing);
+  });
 }

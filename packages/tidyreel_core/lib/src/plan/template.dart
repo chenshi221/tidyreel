@@ -7,6 +7,16 @@ import '../model/naming.dart';
 /// a variable directly inside is null/empty; nested segments decide on their own),
 /// `\x` escapes a literal character.
 
+final _emptyParensRe = RegExp(r'\(\s*\)|（\s*）');
+final _sepRunRe = RegExp(r'([._\- ])\1+');
+final _leadingSepRe = RegExp(r'^[._\- ]+');
+final _trailingSepRe = RegExp(r'[._\- ]+$');
+final _captureRefRe = RegExp(r'\$(\d)');
+final _illegalPathCharsRe = RegExp(r'[\\/\x00-\x1f]');
+final _fullWidthCharsRe = RegExp(r'[:?*"<>|]');
+final _multiSpaceRe = RegExp(r'\s+');
+final _trailingDotSpaceRe = RegExp(r'[. ]+$');
+
 /// File-name template (no extension) for [kind] ([MediaKind.movie] or [MediaKind.episode]).
 String compileTemplate(NamingOptions options, MediaKind kind) {
   final custom = options.customTemplate;
@@ -14,12 +24,6 @@ String compileTemplate(NamingOptions options, MediaKind kind) {
 
   final sep = options.separator;
   final isTv = kind != MediaKind.movie;
-  final titlePiece = switch ((options.titleLanguage, options.bilingual)) {
-    (TitleLanguage.chineseFirst, true) => '{title}[$sep{en_title}]',
-    (TitleLanguage.chineseFirst, false) => '{title}',
-    (TitleLanguage.englishFirst, true) => '{en_title}[$sep{title}]',
-    (TitleLanguage.englishFirst, false) => '{en_title}',
-  };
   final episodePiece = switch (options.episodeStyle) {
     EpisodeStyle.upperPadded =>
       r'S{season:02}E{episode:02}[-E{episode_end:02}]',
@@ -35,7 +39,18 @@ String compileTemplate(NamingOptions options, MediaKind kind) {
   for (final f in options.order) {
     switch (f) {
       case NameField.title:
-        pieces.add((titlePiece, true));
+        switch ((options.titleLanguage, options.bilingual)) {
+          case (TitleLanguage.chineseFirst, true):
+            pieces.add(('{title}', true));
+            pieces.add(('{en_title}', false));
+          case (TitleLanguage.chineseFirst, false):
+            pieces.add(('{title}', true));
+          case (TitleLanguage.englishFirst, true):
+            pieces.add(('{en_title}', false));
+            pieces.add(('{title}', false));
+          case (TitleLanguage.englishFirst, false):
+            pieces.add(('{en_title}', true));
+        }
       case NameField.year:
         if (options.includeYear) {
           pieces.add((options.yearInParens ? '({year})' : '{year}', false));
@@ -62,13 +77,49 @@ String compileTemplate(NamingOptions options, MediaKind kind) {
 }
 
 /// Fills `{var}`, `{var:02}` and optional `[ ... ]` segments, then collapses repeated
-/// separators and trims separators at both ends.
+/// separators in template literals and trims separators at both ends without altering
+/// punctuation inside substituted values (such as `...` or `--` in titles).
 String renderTemplate(String template, Map<String, Object?> vars) {
-  final (text, _) = _Renderer(template, vars).sequence(inOptional: false);
-  return text
-      .replaceAll(RegExp(r'\(\s*\)|（\s*）'), '')
-      .replaceAllMapped(RegExp(r'([._\- ])\1+'), (m) => m[1]!)
-      .replaceAll(RegExp(r'^[._\- ]+|[._\- ]+$'), '');
+  final (raw, _) = _Renderer(template, vars).sequence(inOptional: false);
+  final chunks = <(String, bool)>[];
+  for (final (text, isValue) in raw) {
+    if (text.isEmpty) continue;
+    if (!isValue && chunks.isNotEmpty && !chunks.last.$2) {
+      chunks[chunks.length - 1] = ('${chunks.last.$1}$text', false);
+    } else {
+      chunks.add((text, isValue));
+    }
+  }
+  final cleaned = <(String, bool)>[];
+  for (final (text, isValue) in chunks) {
+    if (isValue) {
+      cleaned.add((text, true));
+    } else {
+      final s = text
+          .replaceAll(_emptyParensRe, '')
+          .replaceAllMapped(_sepRunRe, (m) => m[1]!);
+      if (s.isNotEmpty) cleaned.add((s, false));
+    }
+  }
+  while (cleaned.isNotEmpty && !cleaned.first.$2) {
+    final s = cleaned.first.$1.replaceFirst(_leadingSepRe, '');
+    if (s.isEmpty) {
+      cleaned.removeAt(0);
+    } else {
+      cleaned[0] = (s, false);
+      break;
+    }
+  }
+  while (cleaned.isNotEmpty && !cleaned.last.$2) {
+    final s = cleaned.last.$1.replaceFirst(_trailingSepRe, '');
+    if (s.isEmpty) {
+      cleaned.removeLast();
+    } else {
+      cleaned[cleaned.length - 1] = (s, false);
+      break;
+    }
+  }
+  return [for (final (text, _) in cleaned) text].join();
 }
 
 /// Runs [rewrites] over [name] in order. A rule with a bad pattern is skipped
@@ -85,7 +136,7 @@ String applyRewrites(String name, List<NameRewrite> rewrites) {
     }
     final next = out.replaceAllMapped(
       re,
-      (m) => r.replacement.replaceAllMapped(RegExp(r'\$(\d)'), (g) {
+      (m) => r.replacement.replaceAllMapped(_captureRefRe, (g) {
         final i = int.parse(g[1]!);
         return i <= m.groupCount ? m[i] ?? '' : g[0]!;
       }),
@@ -102,22 +153,34 @@ class _Renderer {
 
   _Renderer(this.t, this.vars);
 
-  /// Returns the rendered text and whether a direct variable was missing.
-  (String, bool) sequence({required bool inOptional}) {
-    final b = StringBuffer();
+  /// Returns the rendered chunks `(text, isValue)` and whether a direct variable was missing.
+  (List<(String, bool)>, bool) sequence({required bool inOptional}) {
+    final out = <(String, bool)>[];
+    final lit = StringBuffer();
+    void flushLit() {
+      if (lit.isNotEmpty) {
+        out.add((lit.toString(), false));
+        lit.clear();
+      }
+    }
+
     var missing = false;
     while (i < t.length) {
       final c = t[i];
       if (c == r'\' && i + 1 < t.length) {
-        b.write(t[i + 1]);
+        lit.write(t[i + 1]);
         i += 2;
       } else if (c == '[') {
         i++;
-        final (s, m) = sequence(inOptional: true);
+        final (sub, m) = sequence(inOptional: true);
         if (i < t.length && t[i] == ']') i++;
-        if (!m) b.write(s);
+        if (!m && sub.isNotEmpty) {
+          flushLit();
+          out.addAll(sub);
+        }
       } else if (c == ']' && inOptional) {
-        return (b.toString(), missing);
+        flushLit();
+        return (out, missing);
       } else if (c == '{' && t.indexOf('}', i) > 0) {
         final end = t.indexOf('}', i);
         final v = _value(t.substring(i + 1, end));
@@ -125,14 +188,16 @@ class _Renderer {
         if (v == null) {
           missing = true;
         } else {
-          b.write(v);
+          flushLit();
+          out.add((v, true));
         }
       } else {
-        b.write(c);
+        lit.write(c);
         i++;
       }
     }
-    return (b.toString(), missing);
+    flushLit();
+    return (out, missing);
   }
 
   String? _value(String spec) {
@@ -158,8 +223,8 @@ const _fullWidth = {
 
 /// Replaces characters illegal on Windows / cloud drives; trims trailing dots and spaces.
 String sanitizeName(String name) => name
-    .replaceAll(RegExp(r'[\\/\x00-\x1f]'), '')
-    .replaceAllMapped(RegExp(r'[:?*"<>|]'), (m) => _fullWidth[m[0]]!)
-    .replaceAll(RegExp(r'\s+'), ' ')
+    .replaceAll(_illegalPathCharsRe, '')
+    .replaceAllMapped(_fullWidthCharsRe, (m) => _fullWidth[m[0]]!)
+    .replaceAll(_multiSpaceRe, ' ')
     .trim()
-    .replaceAll(RegExp(r'[. ]+$'), '');
+    .replaceAll(_trailingDotSpaceRe, '');

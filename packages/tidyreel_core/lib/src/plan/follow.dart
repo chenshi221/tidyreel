@@ -70,10 +70,14 @@ const _en = {'eng', 'en', 'english', 'en-us', 'en-gb', '英文', '英语'};
 const _ja = {'jpn', 'jap', 'ja', 'jp', 'japanese', '日文', '日语'};
 const _ko = {'kor', 'ko', 'korean', '韩文', '韩语'};
 
+final _langPartSep = RegExp(r'[&+/,]');
+final _remSep = RegExp(r'[.\s_\[\]()（）]+');
+final _edgeHyphen = RegExp(r'^-+|-+$');
+
 /// Maps a language tag as found in file names to zh-Hans / zh-Hant / en / ja / ko.
 /// Null when unknown. Combined tags like "chs&eng" resolve to the first language.
 String? normalizeLang(String token) {
-  for (final part in token.toLowerCase().split(RegExp(r'[&+/,]'))) {
+  for (final part in token.toLowerCase().split(_langPartSep)) {
     final t = part.trim();
     if (_zhHans.contains(t)) return 'zh-Hans';
     if (_zhHant.contains(t)) return 'zh-Hant';
@@ -84,11 +88,25 @@ String? normalizeLang(String token) {
   return null;
 }
 
-/// First known language among the dot / underscore separated tokens of [remainder].
+/// First known language among the dot / underscore / hyphen separated tokens of [remainder].
 String? langFromRemainder(String remainder) {
-  for (final t in remainder.split(RegExp(r'[.\s_\[\]()（）]+'))) {
-    final l = t.isEmpty ? null : normalizeLang(t);
-    if (l != null) return l;
+  for (final raw in remainder.split(_remSep)) {
+    final t = raw.replaceAll(_edgeHyphen, '');
+    if (t.isEmpty) continue;
+    final direct = normalizeLang(t);
+    if (direct != null) return direct;
+    if (t.contains('-')) {
+      final parts = t.split('-');
+      for (var i = 0; i + 1 < parts.length; i++) {
+        final pair = normalizeLang('${parts[i]}-${parts[i + 1]}');
+        if (pair != null) return pair;
+      }
+      for (final part in parts) {
+        if (part.isEmpty) continue;
+        final single = normalizeLang(part);
+        if (single != null) return single;
+      }
+    }
   }
   return null;
 }

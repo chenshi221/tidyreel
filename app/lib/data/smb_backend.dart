@@ -59,19 +59,48 @@ class SmbBackend implements StorageBackend {
     );
   }
 
+  Future<void> _closePool(Future<Smb2Pool>? pending) async {
+    if (pending == null) return;
+    try {
+      final pool = await pending;
+      await pool.disconnect();
+    } on Object {
+      // Ignore errors while tearing down a broken or failed pool.
+    }
+  }
+
   /// Runs [f] on the (lazily connected) pool; a failed connect is retried
   /// on the next call instead of being cached.
   Future<T> _run<T>(String path, Future<T> Function(Smb2Pool pool) f) async {
+    final pending = _pool ??= _connect();
+    final Smb2Pool pool;
     try {
-      final pool = await (_pool ??= _connect());
+      pool = await pending;
+    } on Smb2Exception catch (e) {
+      if (identical(_pool, pending)) _pool = null;
+      throw StorageException(_code(e.type), '$path: ${e.message}');
+    } on StorageException {
+      if (identical(_pool, pending)) _pool = null;
+      rethrow;
+    } on Object {
+      if (identical(_pool, pending)) _pool = null;
+      rethrow;
+    }
+    try {
       return await f(pool);
     } on Smb2Exception catch (e) {
       if (e.type.isNetworkFailure || e.type == Smb2ErrorType.auth) {
-        _pool = null;
+        if (identical(_pool, pending)) {
+          _pool = null;
+          await _closePool(pending);
+        }
       }
       throw StorageException(_code(e.type), '$path: ${e.message}');
     } on StorageException {
-      _pool = null;
+      if (identical(_pool, pending)) {
+        _pool = null;
+        await _closePool(pending);
+      }
       rethrow;
     }
   }
@@ -114,8 +143,26 @@ class SmbBackend implements StorageBackend {
 
   @override
   Future<void> mkdirs(String dir) => _run(dir, (pool) async {
-    var cur = '';
-    for (final s in _rel(dir).split('/').where((s) => s.isNotEmpty)) {
+    final relSegs = dir.split('/').where((s) => s.isNotEmpty).toList();
+    if (_base.isEmpty) {
+      await _mkdirSegs(pool, '', relSegs);
+      return;
+    }
+    if (await pool.exists(_base)) {
+      await _mkdirSegs(pool, _base, relSegs);
+    } else {
+      final baseSegs = _base.split('/').where((s) => s.isNotEmpty).toList();
+      await _mkdirSegs(pool, '', [...baseSegs, ...relSegs]);
+    }
+  });
+
+  Future<void> _mkdirSegs(
+    Smb2Pool pool,
+    String prefix,
+    List<String> segs,
+  ) async {
+    var cur = prefix;
+    for (final s in segs) {
       cur = cur.isEmpty ? s : '$cur/$s';
       try {
         await pool.mkdir(cur);
@@ -124,7 +171,7 @@ class SmbBackend implements StorageBackend {
         if (!(await pool.stat(cur)).isDirectory) rethrow;
       }
     }
-  });
+  }
 
   /// SMB rename refuses an existing target, so this never overwrites.
   Future<void> _relocate(String from, String to) =>
@@ -132,8 +179,28 @@ class SmbBackend implements StorageBackend {
 
   @override
   Future<void> rename(String path, String newName) async {
-    if (p.posix.basename(path) == newName) return;
-    await _relocate(path, p.posix.join(p.posix.dirname(path), newName));
+    final oldName = p.posix.basename(path);
+    if (oldName == newName) return;
+    final dir = p.posix.dirname(path);
+    final target = p.posix.join(dir, newName);
+    if (oldName.toLowerCase() == newName.toLowerCase()) {
+      final tmpName =
+          '.tidyreel_tmp_${DateTime.now().microsecondsSinceEpoch}_$newName';
+      final tmpPath = p.posix.join(dir, tmpName);
+      await _relocate(path, tmpPath);
+      try {
+        await _relocate(tmpPath, target);
+      } on Object {
+        try {
+          await _relocate(tmpPath, path);
+        } on Object {
+          // Best-effort rollback.
+        }
+        rethrow;
+      }
+      return;
+    }
+    await _relocate(path, target);
   }
 
   @override
@@ -191,4 +258,11 @@ class SmbBackend implements StorageBackend {
 
   @override
   Future<void> ping() => _run('/', (pool) => pool.listDirectory(_rel('/')));
+
+  @override
+  Future<void> close() async {
+    final p = _pool;
+    _pool = null;
+    await _closePool(p);
+  }
 }

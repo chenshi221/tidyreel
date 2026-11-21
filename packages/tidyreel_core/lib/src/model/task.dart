@@ -12,7 +12,8 @@ enum TaskStage {
   done,
   partiallyFailed,
   cancelled,
-  undone;
+  undone,
+  failed;
 
   bool get isActive => index <= renamingFolders.index;
 }
@@ -20,7 +21,8 @@ enum TaskStage {
 /// Whether [TaskManager.retry] accepts [t]: nothing of it is on disk.
 bool canRetry(TaskSummary t) =>
     t.stage == TaskStage.undone ||
-    (t.stage == TaskStage.cancelled && t.batch == null);
+    ((t.stage == TaskStage.cancelled || t.stage == TaskStage.failed) &&
+        t.batch == null);
 
 /// Whether [TaskManager.undo] applies to [t]: stopped or finished with a batch.
 bool canUndo(TaskSummary t) =>

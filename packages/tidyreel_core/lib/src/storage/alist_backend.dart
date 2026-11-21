@@ -8,6 +8,7 @@ import 'storage_backend.dart';
 
 /// Alist v3 / OpenList. Every endpoint answers HTTP 200 with `{code, message, data}`.
 class AlistBackend implements StorageBackend {
+  final Uri _endpoint;
   final String? _username;
   final String? _password;
   String? _token;
@@ -17,15 +18,17 @@ class AlistBackend implements StorageBackend {
   static const _perPage = 500;
 
   AlistBackend(ConnectionConfig config, Credentials credentials)
-    : _username = config.username,
+    : _endpoint = Uri.parse(config.endpoint),
+      _username = config.username,
       _password = credentials.password,
-      _token = credentials.token,
+      _token = (credentials.token ?? '').isEmpty ? null : credentials.token,
       _dio = directForPrivateHosts(
         Dio(
           BaseOptions(
             baseUrl: config.endpoint.replaceFirst(RegExp(r'/+$'), ''),
             connectTimeout: const Duration(seconds: 15),
             receiveTimeout: const Duration(seconds: 60),
+            sendTimeout: const Duration(seconds: 30),
             validateStatus: (_) => true,
           ),
         ),
@@ -34,6 +37,33 @@ class AlistBackend implements StorageBackend {
   /// Empty fields mean "browse as guest" rather than a login with blanks.
   bool get _canLogin =>
       (_username ?? '').isNotEmpty && (_password ?? '').isNotEmpty;
+
+  String _dioMsg(DioException e) {
+    final detail = e.message;
+    return switch (e.type) {
+      DioExceptionType.connectionTimeout => '连接超时',
+      DioExceptionType.sendTimeout => '发送请求超时',
+      DioExceptionType.receiveTimeout => '服务器响应超时',
+      DioExceptionType.badCertificate => 'HTTPS 证书校验失败',
+      DioExceptionType.cancel => '请求已取消',
+      DioExceptionType.connectionError =>
+        detail != null && detail.isNotEmpty ? '无法连接服务器（$detail）' : '无法连接服务器',
+      _ => detail != null && detail.isNotEmpty ? detail : e.type.name,
+    };
+  }
+
+  Map<String, dynamic> _parseResponse(Response<dynamic> r) {
+    final data = r.data;
+    if (data is Map<String, dynamic> && data['code'] is int) return data;
+    final status = r.statusCode ?? 0;
+    if (status == 200) {
+      return {
+        'code': 0,
+        'message': '服务器返回了非 JSON 响应（HTTP 200），请检查 Alist 地址是否正确',
+      };
+    }
+    return {'code': status, 'message': 'HTTP $status'};
+  }
 
   Future<Map<String, dynamic>> _post(
     String api,
@@ -50,15 +80,12 @@ class AlistBackend implements StorageBackend {
         ),
       );
     } on DioException catch (e) {
-      throw StorageException(StorageErrorCode.network, '$api: ${e.message}');
+      throw StorageException(
+        StorageErrorCode.network,
+        'Alist 请求失败（$api）：${_dioMsg(e)}',
+      );
     }
-    final data = r.data;
-    if (data is Map<String, dynamic> && data['code'] is int) return data;
-    final status = r.statusCode ?? 0;
-    return {
-      'code': status == 200 ? 0 : status,
-      'message': 'HTTP ${r.statusCode}',
-    };
+    return _parseResponse(r);
   }
 
   Future<void> _login() =>
@@ -69,28 +96,44 @@ class AlistBackend implements StorageBackend {
       'username': _username,
       'password': _password,
     }, null);
-    try {
-      final data = _data(res, 'login');
-      if (data is! Map || data['token'] is! String) {
-        throw const StorageException(
-          StorageErrorCode.other,
-          'login: invalid response',
-        );
-      }
-      _token = data['token'] as String;
-    } on StorageException catch (e) {
-      // Bad credentials come back as code 400 "password is incorrect".
-      if (e.code != StorageErrorCode.other) rethrow;
-      throw StorageException(StorageErrorCode.unauthorized, e.message);
+    final code = res['code'] as int;
+    final msg = '${res['message'] ?? ''}';
+    final lower = msg.toLowerCase();
+    // Alist returns code 400 for wrong password / unknown user / 2FA errors;
+    // do not misclassify HTTP 500 or wrong-URL HTML 200 (code 0) as unauthorized.
+    if (code == 400 &&
+        (lower.contains('password') ||
+            lower.contains('user') ||
+            lower.contains('auth') ||
+            lower.contains('credential') ||
+            lower.contains('otp') ||
+            lower.contains('2fa'))) {
+      throw StorageException(
+        StorageErrorCode.unauthorized,
+        'Alist 登录失败：用户名或密码错误（$msg）',
+      );
     }
+    final data = _data(res, '登录');
+    if (data is! Map ||
+        data['token'] is! String ||
+        (data['token'] as String).isEmpty) {
+      throw const StorageException(
+        StorageErrorCode.other,
+        'Alist 登录失败：服务器未返回有效令牌',
+      );
+    }
+    _token = data['token'] as String;
   }
 
   /// The `data` field of a successful reply; maps `code != 200` to [StorageException].
   dynamic _data(Map<String, dynamic> res, String what) {
     final code = res['code'] as int;
     if (code == 200) return res['data'];
-    final msg = '$what: ${res['message']} (code $code)';
-    final lower = '${res['message']}'.toLowerCase();
+    final rawMsg = res['message']?.toString();
+    final msg = (rawMsg != null && rawMsg.isNotEmpty)
+        ? '$what 失败：$rawMsg（code $code）'
+        : '$what 失败（code $code）';
+    final lower = (rawMsg ?? '').toLowerCase();
     final err = switch (code) {
       401 || 403 => StorageErrorCode.unauthorized,
       404 => StorageErrorCode.notFound,
@@ -109,20 +152,26 @@ class AlistBackend implements StorageBackend {
     throw StorageException(err, msg);
   }
 
-  /// POST with the token; on expiry (code 401) logs in again once and retries.
-  Future<dynamic> _call(String api, Map<String, dynamic> body) async {
+  /// Runs [send] with the token; on expiry (code 401) logs in again once and retries.
+  Future<Map<String, dynamic>> _withAuthRaw(
+    Future<Map<String, dynamic>> Function(String? token) send,
+  ) async {
     for (var attempt = 0; ; attempt++) {
       if (_token == null && _canLogin) await _login();
       final used = _token;
-      final res = await _post(api, body, used);
+      final res = await send(used);
       if (res['code'] == 401 && attempt == 0 && _canLogin) {
         // If the token changed, a concurrent call already refreshed it.
         if (_token == used) _token = null;
         continue;
       }
-      return _data(res, api);
+      return res;
     }
   }
+
+  /// POST with the token; on expiry (code 401) logs in again once and retries.
+  Future<dynamic> _call(String api, Map<String, dynamic> body) async =>
+      _data(await _withAuthRaw((token) => _post(api, body, token)), api);
 
   @override
   Future<List<RemoteEntry>> list(String dir, {bool refresh = false}) async {
@@ -176,27 +225,31 @@ class AlistBackend implements StorageBackend {
     final info = await _get(path);
     final raw = info?['raw_url'];
     if (info == null || raw is! String || raw.isEmpty) {
-      throw StorageException(StorageErrorCode.notFound, path);
+      throw StorageException(StorageErrorCode.notFound, '文件不存在：$path');
     }
     try {
-      // raw_url may point at the drive's CDN: no Alist token there.
+      // raw_url may be relative or point at the drive's CDN (no Alist token).
+      final uri = _endpoint.resolve(raw);
       final r = await _dio.getUri<List<int>>(
-        Uri.parse(raw),
+        uri,
         options: Options(responseType: ResponseType.bytes),
       );
-      if (r.statusCode != 200) {
-        throw StorageException(
-          r.statusCode == 404
-              ? StorageErrorCode.notFound
-              : StorageErrorCode.other,
-          'GET $path: HTTP ${r.statusCode}',
-        );
+      final status = r.statusCode ?? 0;
+      if (status != 200) {
+        final code = switch (status) {
+          401 || 403 => StorageErrorCode.unauthorized,
+          404 => StorageErrorCode.notFound,
+          429 => StorageErrorCode.rateLimited,
+          >= 500 && < 600 => StorageErrorCode.network,
+          _ => StorageErrorCode.other,
+        };
+        throw StorageException(code, '读取文件失败（$path）：HTTP $status');
       }
       return r.data ?? const [];
     } on DioException catch (e) {
       throw StorageException(
         StorageErrorCode.network,
-        'GET $path: ${e.message}',
+        '读取文件失败（$path）：${_dioMsg(e)}',
       );
     }
   }
@@ -205,11 +258,13 @@ class AlistBackend implements StorageBackend {
   Future<void> write(String path, List<int> bytes) async {
     // Alist's put overwrites, so refuse here first.
     if (await exists(path)) {
-      throw StorageException(StorageErrorCode.alreadyExists, path);
+      throw StorageException(StorageErrorCode.alreadyExists, '文件已存在：$path');
     }
-    for (var attempt = 0; ; attempt++) {
-      if (_token == null && _canLogin) await _login();
-      final used = _token;
+    final parent = p.posix.dirname(path);
+    if (parent != '/') {
+      await mkdirs(parent);
+    }
+    final res = await _withAuthRaw((token) async {
       final Response<dynamic> r;
       try {
         r = await _dio.put<dynamic>(
@@ -217,7 +272,7 @@ class AlistBackend implements StorageBackend {
           data: Stream.value(bytes),
           options: Options(
             headers: {
-              'Authorization': ?used,
+              'Authorization': ?token,
               'File-Path': Uri.encodeComponent(path),
               'As-Task': 'false',
               Headers.contentLengthHeader: bytes.length,
@@ -228,23 +283,12 @@ class AlistBackend implements StorageBackend {
       } on DioException catch (e) {
         throw StorageException(
           StorageErrorCode.network,
-          'put $path: ${e.message}',
+          '上传文件失败（$path）：${_dioMsg(e)}',
         );
       }
-      final data = r.data;
-      final res = data is Map<String, dynamic> && data['code'] is int
-          ? data
-          : {
-              'code': r.statusCode == 200 ? 200 : r.statusCode ?? 0,
-              'message': 'HTTP ${r.statusCode}',
-            };
-      if (res['code'] == 401 && attempt == 0 && _canLogin) {
-        if (_token == used) _token = null;
-        continue;
-      }
-      _data(res, 'put');
-      return;
-    }
+      return _parseResponse(r);
+    });
+    _data(res, '上传 $path');
   }
 
   @override
@@ -252,7 +296,7 @@ class AlistBackend implements StorageBackend {
     final cur = await _get(dir);
     if (cur != null) {
       if (cur['is_dir'] == true) return;
-      throw StorageException(StorageErrorCode.alreadyExists, dir);
+      throw StorageException(StorageErrorCode.alreadyExists, '路径已存在且不是目录：$dir');
     }
     await _call('/api/fs/mkdir', {'path': dir}); // creates parents
   }
@@ -269,10 +313,10 @@ class AlistBackend implements StorageBackend {
     if (oldName.toLowerCase() == newName.toLowerCase()) {
       final have = {for (final e in await list(dir, refresh: true)) e.name};
       if (have.contains(newName)) {
-        throw StorageException(StorageErrorCode.alreadyExists, target);
+        throw StorageException(StorageErrorCode.alreadyExists, '目标已存在：$target');
       }
     } else if (await exists(target)) {
-      throw StorageException(StorageErrorCode.alreadyExists, target);
+      throw StorageException(StorageErrorCode.alreadyExists, '目标已存在：$target');
     }
     await _call('/api/fs/rename', {'path': path, 'name': newName});
   }
@@ -281,50 +325,68 @@ class AlistBackend implements StorageBackend {
   /// whole folder); servers without it get one `fs/rename` per file.
   @override
   Future<void> renameMany(String dir, Map<String, String> names) async {
+    final effective = <String, String>{
+      for (final e in names.entries)
+        if (e.key != e.value) e.key: e.value,
+    };
+    if (effective.isEmpty) return;
+    final seenTargets = <String>{};
+    for (final target in effective.values) {
+      if (!seenTargets.add(target)) {
+        throw StorageException(
+          StorageErrorCode.alreadyExists,
+          '目标文件名重复：${p.posix.join(dir, target)}',
+        );
+      }
+    }
     final have = {for (final e in await list(dir, refresh: true)) e.name};
-    for (final e in names.entries) {
+    for (final e in effective.entries) {
       if (!have.contains(e.key)) {
         throw StorageException(
           StorageErrorCode.notFound,
-          p.posix.join(dir, e.key),
+          '源文件不存在：${p.posix.join(dir, e.key)}',
         );
       }
       // Some drivers overwrite silently, so never rely on the server to refuse.
       if (have.contains(e.value)) {
         throw StorageException(
           StorageErrorCode.alreadyExists,
-          p.posix.join(dir, e.value),
+          '目标已存在：${p.posix.join(dir, e.value)}',
         );
       }
     }
-    try {
-      await _call('/api/fs/batch_rename', {
+    final res = await _withAuthRaw(
+      (token) => _post('/api/fs/batch_rename', {
         'src_dir': dir,
         'rename_objects': [
-          for (final e in names.entries)
+          for (final e in effective.entries)
             {'src_name': e.key, 'new_name': e.value},
         ],
-      });
-    } on StorageException catch (err) {
-      // Older Alist: the route is missing (HTTP 404); the sources exist (listed above).
-      if (err.code != StorageErrorCode.notFound) rethrow;
-      for (final e in names.entries) {
+      }, token),
+    );
+    final code = res['code'] as int;
+    // Older Alist: the batch_rename route itself is unsupported (HTTP 404/405).
+    if (code == 404 || code == 405) {
+      for (final e in effective.entries) {
         await _call('/api/fs/rename', {
           'path': p.posix.join(dir, e.key),
           'name': e.value,
         });
       }
+      return;
     }
+    _data(res, '/api/fs/batch_rename');
   }
 
   @override
   Future<void> move(String srcDir, String dstDir, List<String> names) async {
+    if (names.isEmpty) return;
     final taken = {for (final e in await list(dstDir, refresh: true)) e.name};
     for (final n in names) {
       if (taken.contains(n)) {
         throw StorageException(
           StorageErrorCode.alreadyExists,
-          p.posix.join(dstDir, n),
+          '目标已存在：${p.posix.join(dstDir, n)}',
         );
       }
     }
@@ -337,11 +399,15 @@ class AlistBackend implements StorageBackend {
 
   @override
   Future<void> remove(String dir, List<String> names) async {
+    if (names.isEmpty) return;
     // fs/remove succeeds silently for missing names; the contract says notFound.
     final have = {for (final e in await list(dir, refresh: true)) e.name};
     for (final n in names) {
       if (!have.contains(n)) {
-        throw StorageException(StorageErrorCode.notFound, p.posix.join(dir, n));
+        throw StorageException(
+          StorageErrorCode.notFound,
+          '文件不存在：${p.posix.join(dir, n)}',
+        );
       }
     }
     await _call('/api/fs/remove', {'dir': dir, 'names': names});
@@ -349,6 +415,18 @@ class AlistBackend implements StorageBackend {
 
   @override
   Future<void> ping() async {
-    await _get('/'); // authenticated round trip
+    // Call /api/fs/get directly without swallowing notFound so HTTP 404 / wrong URL fails.
+    final res = await _call('/api/fs/get', {'path': '/', 'password': ''});
+    if (res is! Map<String, dynamic>) {
+      throw const StorageException(
+        StorageErrorCode.other,
+        '连接检测失败：服务器返回数据格式异常',
+      );
+    }
+  }
+
+  @override
+  Future<void> close() async {
+    _dio.close();
   }
 }

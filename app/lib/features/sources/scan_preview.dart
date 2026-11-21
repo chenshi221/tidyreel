@@ -2,24 +2,13 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
+import '../../data/settings.dart' show mediaHintLabels;
 import '../../ui/tokens.dart';
 import '../../ui/widgets.dart';
 import '../../widgets/common.dart';
 
-const videoExt = {
-  'mkv',
-  'mp4',
-  'avi',
-  'mov',
-  'ts',
-  'm2ts',
-  'wmv',
-  'flv',
-  'rmvb',
-  'webm',
-  'iso',
-};
-const subtitleExt = {'ass', 'ssa', 'srt', 'sub', 'idx', 'vtt', 'sup'};
+const videoExt = videoExtensions;
+const subtitleExt = subtitleExtensions;
 
 String _ext(String name) =>
     name.contains('.') ? name.split('.').last.toLowerCase() : '';
@@ -30,19 +19,20 @@ class ScanPreview {
   var dirs = 0, videos = 0, subtitles = 0, others = 0, bytes = 0;
   var truncated = false;
 
-  /// Folders directly inside the selection: roughly one per work.
+  /// Full paths of folders directly inside the selection: roughly one per work.
   final topDirs = <String>[];
 }
 
 /// Walks [paths] a few folders at a time, at most [maxDepth] levels below each and
-/// [maxDirs] listings overall. A path whose name has a media extension is
-/// counted as a file without listing it.
+/// [maxDirs] listings overall. Paths present in [fileSizes] or whose names have
+/// a media extension are counted as files without listing them.
 Future<ScanPreview> previewScan(
   StorageBackend backend,
   List<String> paths, {
   int maxDepth = 3,
   int maxDirs = 200,
   bool Function()? cancelled,
+  Map<String, int> fileSizes = const {},
 }) async {
   final r = ScanPreview();
   void count(String name, int size) {
@@ -61,8 +51,10 @@ Future<ScanPreview> previewScan(
   for (final p in paths) {
     final name = p.split('/').last;
     final e = _ext(name);
-    if (videoExt.contains(e) || subtitleExt.contains(e)) {
-      count(name, 0);
+    if (fileSizes.containsKey(p) ||
+        videoExt.contains(e) ||
+        subtitleExt.contains(e)) {
+      count(name, fileSizes[p] ?? 0);
     } else {
       depth[p] = 0;
     }
@@ -85,7 +77,7 @@ Future<ScanPreview> previewScan(
     for (final e in entries) {
       if (e.isDir) {
         r.dirs++;
-        if (d == 0) r.topDirs.add(e.name);
+        if (d == 0) r.topDirs.add(e.path);
         if (d + 1 < maxDepth) {
           depth[e.path] = d + 1;
           subs.add(e.path);
@@ -117,13 +109,17 @@ List<String> previewWarnings(
 ];
 
 /// Scans [paths], shows the counts and warnings, and returns whether the
-/// user confirmed. [organizedCount] checks how many top folders were already
-/// organized.
+/// user confirmed. [organizedCount] checks how many selected/top folders were
+/// already organized.
 Future<bool> showScanPreview(
   BuildContext context, {
   required StorageBackend backend,
   required List<String> paths,
   Future<int> Function(List<String> dirs)? organizedCount,
+  Map<String, int> fileSizes = const {},
+  OrganizeMode? mode,
+  bool scrape = false,
+  MediaHint? mediaHint,
 }) async =>
     await showDialog<bool>(
       context: context,
@@ -131,6 +127,10 @@ Future<bool> showScanPreview(
         backend: backend,
         paths: paths,
         organizedCount: organizedCount,
+        fileSizes: fileSizes,
+        mode: mode,
+        scrape: scrape,
+        mediaHint: mediaHint,
       ),
     ) ??
     false;
@@ -139,11 +139,19 @@ class _PreviewSheet extends StatefulWidget {
   final StorageBackend backend;
   final List<String> paths;
   final Future<int> Function(List<String> dirs)? organizedCount;
+  final Map<String, int> fileSizes;
+  final OrganizeMode? mode;
+  final bool scrape;
+  final MediaHint? mediaHint;
 
   const _PreviewSheet({
     required this.backend,
     required this.paths,
     this.organizedCount,
+    this.fileSizes = const {},
+    this.mode,
+    this.scrape = false,
+    this.mediaHint,
   });
 
   @override
@@ -172,13 +180,11 @@ class _PreviewSheetState extends State<_PreviewSheet> {
       widget.backend,
       widget.paths,
       cancelled: () => _closed,
+      fileSizes: widget.fileSizes,
     );
     var organized = 0;
     if (widget.organizedCount != null && !_closed) {
-      final dirs = [
-        for (final p in widget.paths)
-          for (final d in r.topDirs) '$p/$d'.replaceAll('//', '/'),
-      ];
+      final dirs = {...widget.paths, ...r.topDirs}.toList();
       organized = await widget.organizedCount!(dirs.take(100).toList());
     }
     if (mounted) {
@@ -226,6 +232,13 @@ class _PreviewSheetState extends State<_PreviewSheet> {
           ),
         );
 
+    final topNames = r == null
+        ? const <String>[]
+        : [
+            for (final d in r.topDirs.take(8))
+              d.split('/').where((s) => s.isNotEmpty).lastOrNull ?? d,
+          ];
+
     return MacSheet(
       child: SizedBox(
         width: 520,
@@ -246,13 +259,31 @@ class _PreviewSheetState extends State<_PreviewSheet> {
                 overflow: TextOverflow.ellipsis,
                 style: theme.textTheme.bodySmall,
               ),
+              if (widget.mode != null ||
+                  widget.scrape ||
+                  widget.mediaHint != null) ...[
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    if (widget.mode != null)
+                      Tag(
+                        widget.mode == OrganizeMode.inPlace ? '原地整理' : '移动到媒体库',
+                      ),
+                    if (widget.scrape) Tag('刮削', color: p.accent),
+                    if (widget.mediaHint != null)
+                      Tag('类型：${mediaHintLabels[widget.mediaHint]}'),
+                  ],
+                ),
+              ],
               const SizedBox(height: 16),
               if (r == null)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 28),
                   child: Column(
                     children: [
-                      CupertinoActivityIndicator(),
+                      Spinner(size: 18),
                       SizedBox(height: 10),
                       Text(
                         '正在快速扫描…',
@@ -291,7 +322,7 @@ class _PreviewSheetState extends State<_PreviewSheet> {
                 if (r.topDirs.isNotEmpty) ...[
                   const SizedBox(height: 14),
                   Text(
-                    '包含：${r.topDirs.take(8).join('、')}'
+                    '包含：${topNames.join('、')}'
                     '${r.topDirs.length > 8 ? ' 等 ${r.topDirs.length} 个' : ''}',
                     maxLines: 3,
                     overflow: TextOverflow.ellipsis,

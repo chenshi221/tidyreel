@@ -16,22 +16,24 @@ import 'storage_backend.dart';
 /// blindly on 409.
 class WebDAVBackend implements StorageBackend {
   final Uri _base;
+  final String? _authHeader;
   final Dio _dio;
 
   WebDAVBackend(ConnectionConfig config, Credentials credentials)
     : _base = Uri.parse(config.endpoint),
+      _authHeader =
+          ((config.username ?? '').isNotEmpty ||
+              (credentials.password ?? '').isNotEmpty)
+          ? 'Basic ${base64.encode(utf8.encode('${config.username ?? ''}:${credentials.password ?? ''}'))}'
+          : null,
       _dio = directForPrivateHosts(
         Dio(
           BaseOptions(
             connectTimeout: const Duration(seconds: 15),
             receiveTimeout: const Duration(seconds: 60),
+            sendTimeout: const Duration(seconds: 30),
             validateStatus: (_) => true,
             responseType: ResponseType.plain,
-            headers: {
-              if (config.username != null)
-                'Authorization':
-                    'Basic ${base64.encode(utf8.encode('${config.username}:${credentials.password ?? ''}'))}',
-            },
           ),
         ),
       );
@@ -40,6 +42,8 @@ class WebDAVBackend implements StorageBackend {
       '<?xml version="1.0" encoding="utf-8"?>'
       '<d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/>'
       '<d:getcontentlength/><d:getlastmodified/></d:prop></d:propfind>';
+
+  static const _redirects = {301, 302, 303, 307, 308};
 
   List<String> _segs(String path) =>
       path.split('/').where((s) => s.isNotEmpty).toList();
@@ -56,6 +60,23 @@ class WebDAVBackend implements StorageBackend {
     return _base.replace(pathSegments: [...segs, if (dir) '']);
   }
 
+  bool _sameOrigin(Uri a, Uri b) =>
+      a.scheme == b.scheme && a.host == b.host && a.port == b.port;
+
+  String _dioMsg(DioException e) {
+    final detail = e.message;
+    return switch (e.type) {
+      DioExceptionType.connectionTimeout => '连接超时',
+      DioExceptionType.sendTimeout => '发送请求超时',
+      DioExceptionType.receiveTimeout => '服务器响应超时',
+      DioExceptionType.badCertificate => 'HTTPS 证书校验失败',
+      DioExceptionType.cancel => '请求已取消',
+      DioExceptionType.connectionError =>
+        detail != null && detail.isNotEmpty ? '无法连接服务器（$detail）' : '无法连接服务器',
+      _ => detail != null && detail.isNotEmpty ? detail : e.type.name,
+    };
+  }
+
   StorageException _fail(Response<dynamic> r, String path) {
     final s = r.statusCode ?? 0;
     final code = switch (s) {
@@ -68,43 +89,51 @@ class WebDAVBackend implements StorageBackend {
       502 || 503 || 504 => StorageErrorCode.network,
       _ => StorageErrorCode.other,
     };
-    return StorageException(code, '${r.requestOptions.method} $path: HTTP $s');
+    return StorageException(
+      code,
+      'WebDAV ${r.requestOptions.method} $path 失败：HTTP $s',
+    );
   }
 
   /// dart:io only follows redirects for GET/HEAD, so a 301/302/307/308 on
-  /// PROPFIND etc. is followed here, once, to the same server.
+  /// PROPFIND / PUT / MKCOL etc. is followed here, once, to the same origin.
   Future<Response<dynamic>> _send(
     String method,
     String path, {
-    Map<String, String>? headers,
-    String? body,
+    Map<String, Object>? headers,
+    Object? Function()? bodyBuilder,
     bool dir = false,
   }) async {
     var uri = _uri(path, dir: dir);
+    final reqHeaders = <String, Object>{
+      if (_authHeader != null) 'Authorization': _authHeader,
+      ...?headers,
+    };
     try {
       for (var hop = 0; ; hop++) {
         final r = await _dio.requestUri<dynamic>(
           uri,
-          data: body,
+          data: bodyBuilder?.call(),
           options: Options(
             method: method,
-            headers: headers,
+            headers: reqHeaders,
             followRedirects: false,
           ),
         );
         final location = r.headers.value('location');
-        const redirects = {301, 302, 307, 308};
-        if (hop > 0 || !redirects.contains(r.statusCode) || location == null) {
+        if (hop > 0 ||
+            !const {301, 302, 307, 308}.contains(r.statusCode) ||
+            location == null) {
           return r;
         }
         final next = uri.resolve(location);
-        if (next.host != uri.host || next.port != uri.port) return r;
+        if (!_sameOrigin(uri, next)) return r;
         uri = next;
       }
     } on DioException catch (e) {
       throw StorageException(
         StorageErrorCode.network,
-        '$method $path: ${e.message}',
+        'WebDAV $method $path 失败：${_dioMsg(e)}',
       );
     }
   }
@@ -117,7 +146,7 @@ class WebDAVBackend implements StorageBackend {
     'PROPFIND',
     path,
     headers: {'Depth': '$depth', 'Content-Type': 'application/xml'},
-    body: _propfindBody,
+    bodyBuilder: () => _propfindBody,
     dir: dir,
   );
 
@@ -125,23 +154,40 @@ class WebDAVBackend implements StorageBackend {
   static String _tag(String name) =>
       '<(?:[\\w.-]+:)?$name\\b[^>]*>(.*?)</(?:[\\w.-]+:)?$name>';
   static final _responseRe = RegExp(_tag('response'), dotAll: true);
+  static final _propstatRe = RegExp(_tag('propstat'), dotAll: true);
+  static final _statusRe = RegExp(_tag('status'), dotAll: true);
+  static final _http2xxRe = RegExp(r'\b2\d\d\b');
   static final _hrefRe = RegExp(_tag('href'), dotAll: true);
   static final _lengthRe = RegExp(_tag('getcontentlength'), dotAll: true);
   static final _modifiedRe = RegExp(_tag('getlastmodified'), dotAll: true);
   static final _collectionRe = RegExp(r'<(?:[\w.-]+:)?collection\b');
+  static final _xmlEntityRe = RegExp(
+    r'&(?:#x([0-9a-fA-F]+)|#(\d+)|(amp|lt|gt|quot|apos));',
+  );
 
-  static String _unxml(String s) => s
-      .replaceAllMapped(
-        RegExp(r'&#x([0-9a-fA-F]+);|&#(\d+);'),
-        (m) => String.fromCharCode(
-          m[1] != null ? int.parse(m[1]!, radix: 16) : int.parse(m[2]!),
-        ),
-      )
-      .replaceAll('&lt;', '<')
-      .replaceAll('&gt;', '>')
-      .replaceAll('&quot;', '"')
-      .replaceAll('&apos;', "'")
-      .replaceAll('&amp;', '&');
+  /// Single-pass XML entity decoder: never double-unescapes and rejects
+  /// out-of-range numeric character references instead of throwing RangeError.
+  static String _unxml(String s) => s.replaceAllMapped(_xmlEntityRe, (m) {
+    final hex = m[1];
+    final dec = m[2];
+    if (hex != null || dec != null) {
+      final cp = hex != null
+          ? int.tryParse(hex, radix: 16)
+          : int.tryParse(dec!);
+      if (cp != null && cp >= 0 && cp <= 0x10FFFF) {
+        return String.fromCharCode(cp);
+      }
+      return m[0]!;
+    }
+    return switch (m[3]) {
+      'amp' => '&',
+      'lt' => '<',
+      'gt' => '>',
+      'quot' => '"',
+      'apos' => "'",
+      _ => m[0]!,
+    };
+  });
 
   /// Converts a resolved URI to a connection-relative path (`/`-rooted).
   String _toRelativePath(Uri resolved) {
@@ -161,10 +207,32 @@ class WebDAVBackend implements StorageBackend {
   }
 
   /// href (absolute URL, path, or relative URI, percent-encoded) -> connection-relative path.
-  String _relative(String href, {Uri? scope}) {
-    final parsed = Uri.parse(_unxml(href.trim()));
-    final resolved = (scope ?? _base).resolveUri(parsed);
-    return _toRelativePath(resolved);
+  String? _relative(String href, {Uri? scope}) {
+    // WebDAV hrefs never carry HTML fragments; escape literal '#' so Uri.parse
+    // doesn't truncate filenames containing '#'.
+    final raw = _unxml(href.trim()).replaceAll('#', '%23');
+    try {
+      final parsed = Uri.parse(raw);
+      final resolved = (scope ?? _base).resolveUri(parsed);
+      return _toRelativePath(resolved);
+    } on FormatException {
+      return null;
+    }
+  }
+
+  /// Combines only successful (2xx or status-less) `<propstat>` blocks so
+  /// 404 missing-property blocks don't pollute parsed metadata.
+  static String _okProps(String responseBlock) {
+    final matches = _propstatRe.allMatches(responseBlock).toList();
+    if (matches.isEmpty) return responseBlock;
+    final buf = StringBuffer();
+    for (final m in matches) {
+      final ps = m.group(1)!;
+      final status = _statusRe.firstMatch(ps)?.group(1);
+      if (status != null && !_http2xxRe.hasMatch(status)) continue;
+      buf.write(ps);
+    }
+    return buf.toString();
   }
 
   @override
@@ -179,11 +247,13 @@ class WebDAVBackend implements StorageBackend {
       final href = _hrefRe.firstMatch(block)?.group(1);
       if (href == null) continue;
       final path = _relative(href, scope: reqUri);
+      if (path == null) continue;
       // PROPFIND Depth 1 includes the collection itself.
       if (path == self) continue;
-      final isDir = _collectionRe.hasMatch(block);
-      final len = _lengthRe.firstMatch(block)?.group(1);
-      final mod = _modifiedRe.firstMatch(block)?.group(1);
+      final props = _okProps(block);
+      final isDir = _collectionRe.hasMatch(props);
+      final len = _lengthRe.firstMatch(props)?.group(1);
+      final mod = _modifiedRe.firstMatch(props)?.group(1);
       DateTime? modified;
       try {
         modified = mod == null ? null : HttpDate.parse(mod.trim());
@@ -213,50 +283,53 @@ class WebDAVBackend implements StorageBackend {
 
   @override
   Future<List<int>> read(String path) async {
-    final Response<List<int>> r;
+    var uri = _uri(path);
     try {
-      r = await _dio.getUri<List<int>>(
-        _uri(path),
-        options: Options(responseType: ResponseType.bytes),
-      );
+      for (var hop = 0; ; hop++) {
+        final sendAuth = _authHeader != null && _sameOrigin(_base, uri);
+        final r = await _dio.getUri<List<int>>(
+          uri,
+          options: Options(
+            responseType: ResponseType.bytes,
+            followRedirects: false,
+            headers: sendAuth ? {'Authorization': _authHeader} : null,
+          ),
+        );
+        final location = r.headers.value('location');
+        if (hop < 5 && _redirects.contains(r.statusCode) && location != null) {
+          uri = uri.resolve(location);
+          continue;
+        }
+        if (r.statusCode != 200) throw _fail(r, path);
+        return r.data ?? const [];
+      }
     } on DioException catch (e) {
       throw StorageException(
         StorageErrorCode.network,
-        'GET $path: ${e.message}',
+        'WebDAV 读取 $path 失败：${_dioMsg(e)}',
       );
     }
-    if (r.statusCode != 200) throw _fail(r, path);
-    return r.data ?? const [];
   }
 
   @override
   Future<void> write(String path, List<int> bytes) async {
     // Not every server honours If-None-Match, so check first as well.
     if (await exists(path)) {
-      throw StorageException(StorageErrorCode.alreadyExists, path);
+      throw StorageException(StorageErrorCode.alreadyExists, '文件已存在：$path');
     }
     await mkdirs(p.posix.dirname(path));
-    final Response<dynamic> r;
-    try {
-      r = await _dio.putUri<dynamic>(
-        _uri(path),
-        data: Stream.value(bytes),
-        options: Options(
-          headers: {
-            'If-None-Match': '*',
-            Headers.contentLengthHeader: bytes.length,
-            Headers.contentTypeHeader: 'application/octet-stream',
-          },
-        ),
-      );
-    } on DioException catch (e) {
-      throw StorageException(
-        StorageErrorCode.network,
-        'PUT $path: ${e.message}',
-      );
-    }
+    final r = await _send(
+      'PUT',
+      path,
+      headers: {
+        'If-None-Match': '*',
+        Headers.contentLengthHeader: bytes.length,
+        Headers.contentTypeHeader: 'application/octet-stream',
+      },
+      bodyBuilder: () => Stream.value(bytes),
+    );
     if (r.statusCode == 412) {
-      throw StorageException(StorageErrorCode.alreadyExists, path);
+      throw StorageException(StorageErrorCode.alreadyExists, '文件已存在：$path');
     }
     if (r.statusCode != 201 && r.statusCode != 204 && r.statusCode != 200) {
       throw _fail(r, path);
@@ -267,12 +340,18 @@ class WebDAVBackend implements StorageBackend {
   Future<void> mkdirs(String dir) async {
     // shortcut: MKCOL on an existing *file* also answers 405, so that case reads as
     // "exists" here; Memory/Local throw alreadyExists. Acceptable: planner never does it.
-    var cur = '';
-    for (final s in _segs(dir)) {
-      cur = '$cur/$s';
-      final r = await _send('MKCOL', cur);
-      if (r.statusCode != 201 && r.statusCode != 405) throw _fail(r, cur);
+    final segs = _segs(dir);
+    if (segs.isEmpty) return;
+    final norm = '/${segs.join('/')}';
+    final r = await _send('MKCOL', norm, dir: true);
+    if (r.statusCode == 201 || r.statusCode == 405) return;
+    if (r.statusCode == 409 && segs.length > 1) {
+      await mkdirs(p.posix.dirname(norm));
+      final retry = await _send('MKCOL', norm, dir: true);
+      if (retry.statusCode == 201 || retry.statusCode == 405) return;
+      throw _fail(retry, norm);
     }
+    throw _fail(r, norm);
   }
 
   Future<void> _move(String from, String to) async {
@@ -300,7 +379,7 @@ class WebDAVBackend implements StorageBackend {
     // since the target "exists" -- it is the source. Refuse only a separate
     // entry spelled exactly like the target, then go through a temporary name.
     if ((await list(dir)).any((e) => e.name == newName)) {
-      throw StorageException(StorageErrorCode.alreadyExists, target);
+      throw StorageException(StorageErrorCode.alreadyExists, '目标已存在：$target');
     }
     final tmp = p.posix.join(
       dir,
@@ -348,5 +427,10 @@ class WebDAVBackend implements StorageBackend {
   Future<void> ping() async {
     final r = await _propfind('/', 0, dir: true);
     if (r.statusCode != 207) throw _fail(r, '/');
+  }
+
+  @override
+  Future<void> close() async {
+    _dio.close();
   }
 }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tidyreel_core/testing.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
@@ -14,7 +16,10 @@ import 'settings_codec.dart';
 
 final bootstrapProvider = Provider<Bootstrap>((ref) {
   final boot = Bootstrap.demo();
-  ref.onDispose(boot.db.close);
+  ref.onDispose(() {
+    boot.tmdbCache?.flushSync();
+    unawaited(boot.db.close());
+  });
   return boot;
 });
 
@@ -135,35 +140,101 @@ final demoBackendProvider = Provider<StorageBackend>(
   }),
 );
 
-/// Live backends by server + account. Outlives [backendForProvider] so editing
-/// favorites doesn't log in again or drop cached listings, and connections to
-/// the same server share both.
-final _backendPoolProvider = Provider<Map<String, CachedBackend>>((_) => {});
+String _backendKey(ConnectionConfig c, String? password) =>
+    [c.type.name, c.endpoint, c.username, password].join('\n');
 
-/// Backend for a connection id, with listings cached (see [CachedBackend]).
-final backendForProvider = Provider<StorageBackend Function(ConnectionId)>((
-  ref,
-) {
-  if (ref.watch(bootstrapProvider).demo) {
-    final demo = ref.watch(demoBackendProvider);
-    return (_) => demo;
+class _BackendPool {
+  final _entries = <String, CachedBackend>{};
+
+  CachedBackend getOrCreate(
+    String key,
+    ConnectionConfig config,
+    String? password,
+    Duration minInterval,
+  ) => _entries.putIfAbsent(
+    key,
+    () => CachedBackend(
+      ThrottledBackend(
+        createBackend(config, Credentials(password: password)),
+        minInterval: config.type == ConnectionType.local
+            ? Duration.zero
+            : minInterval,
+      ),
+    ),
+  );
+
+  void prune(Set<String> activeKeys) {
+    final stale = [
+      for (final k in _entries.keys)
+        if (!activeKeys.contains(k)) k,
+    ];
+    for (final k in stale) {
+      final be = _entries.remove(k);
+      if (be != null) unawaited(be.close());
+    }
   }
-  final conns = ref.watch(connectionsProvider);
-  final passwords = ref.watch(connectionPasswordsProvider);
-  final pool = ref.watch(_backendPoolProvider);
-  return (id) {
-    final c = conns.firstWhere(
-      (c) => c.id == id,
-      orElse: () => throw StateError('连接不存在：${id.value}'),
-    );
-    final key = [c.type.name, c.endpoint, c.username, passwords[id]].join('\n');
-    return pool.putIfAbsent(
-      key,
-      () =>
-          CachedBackend(createBackend(c, Credentials(password: passwords[id]))),
-    );
-  };
+
+  void dispose() {
+    for (final be in _entries.values) {
+      unawaited(be.close());
+    }
+    _entries.clear();
+  }
+}
+
+/// Live backends by server + account. Outlives [connectionBackendProvider] so
+/// editing favorites doesn't log in again or drop cached listings, and
+/// connections to the same server share both rate limiting and cache.
+final _backendPoolProvider = Provider<_BackendPool>((ref) {
+  final pool = _BackendPool();
+  void prune() {
+    final conns = ref.read(connectionsProvider);
+    final passwords = ref.read(connectionPasswordsProvider);
+    pool.prune({for (final c in conns) _backendKey(c, passwords[c.id])});
+  }
+
+  ref.listen(connectionsProvider, (_, _) => prune());
+  ref.listen(connectionPasswordsProvider, (_, _) => prune());
+  ref.onDispose(pool.dispose);
+  return pool;
 });
+
+/// Targeted backend for one connection. Watches ONLY the target connection's
+/// `(type, endpoint, username)` and password so toggling favorites or editing
+/// other connections never invalidates this backend, its status, or its
+/// [SizeScanner].
+final connectionBackendProvider = Provider.family<StorageBackend, ConnectionId>(
+  (ref, id) {
+    if (ref.watch(bootstrapProvider).demo) {
+      return ref.watch(demoBackendProvider);
+    }
+    final keyParts = ref.watch(
+      connectionsProvider.select((list) {
+        final c = list.where((e) => e.id == id).firstOrNull;
+        return c == null ? null : (c.type, c.endpoint, c.username);
+      }),
+    );
+    if (keyParts == null) {
+      throw StateError('连接不存在：${id.value}');
+    }
+    final password = ref.watch(
+      connectionPasswordsProvider.select((m) => m[id]),
+    );
+    final pool = ref.watch(_backendPoolProvider);
+    final c = ref.read(connectionsProvider).firstWhere((e) => e.id == id);
+    final rps = ref.read(settingsProvider).requestsPerSecond;
+    final minInterval = rps <= 0
+        ? Duration.zero
+        : Duration(milliseconds: 1000 ~/ rps);
+    return pool.getOrCreate(_backendKey(c, password), c, password, minInterval);
+  },
+);
+
+/// Backend lookup by connection id, backed by [connectionBackendProvider].
+final backendForProvider = Provider<StorageBackend Function(ConnectionId)>(
+  (ref) =>
+      (id) => ref.read(connectionBackendProvider(id)),
+);
 
 /// TMDB token compiled in with `--dart-define-from-file=tmdb.local.json`
 /// (see tool/build_macos.sh); empty in source builds without that file.
@@ -217,9 +288,9 @@ final taskManagerProvider = Provider<TaskManager>((ref) {
     executor: DefaultExecutor(
       history,
       concurrency: s.concurrency,
-      minInterval: s.requestsPerSecond <= 0
-          ? Duration.zero
-          : Duration(milliseconds: 1000 ~/ s.requestsPerSecond),
+      // Real backends are already rate-limited inside _backendPoolProvider's
+      // ThrottledBackend so all operations share one pacing window.
+      minInterval: Duration.zero,
     ),
     history: history,
     store: DriftTaskStore(ref.watch(bootstrapProvider).db),

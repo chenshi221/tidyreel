@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:test/test.dart';
+import 'package:tidyreel_core/src/tmdb/tmdb_client.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
 /// Serves recorded JSON from test/tmdb/fixtures; no network.
@@ -343,5 +344,168 @@ void main() {
       );
       expect(a.count('/tv/1668/season/1'), 4);
     });
+
+    test('does not mutate caller-supplied Dio.options', () async {
+      final adapter = FixtureAdapter();
+      final dio = Dio(BaseOptions(baseUrl: 'https://original.example'))
+        ..httpClientAdapter = adapter;
+      final origValidate = dio.options.validateStatus;
+      final p = TmdbProvider(
+        const TmdbConfig(
+          apiKey: 'v3key',
+          baseUrl: 'https://proxy.example.com/tmdb/3',
+        ),
+        dio: dio,
+      );
+      await p.movie(27205);
+      expect(dio.options.baseUrl, 'https://original.example');
+      expect(dio.options.validateStatus, same(origValidate));
+      p.close();
+    });
+
+    test('does not retry cancel or badCertificate errors', () async {
+      for (final type in [
+        DioExceptionType.cancel,
+        DioExceptionType.badCertificate,
+      ]) {
+        var calls = 0;
+        final dio = Dio()
+          ..httpClientAdapter = _FnAdapter((opts) async {
+            calls++;
+            throw DioException(requestOptions: opts, type: type);
+          });
+        final client = TmdbClient(
+          apiKey: 'k',
+          baseUrl: 'https://api.themoviedb.org/3',
+          dio: dio,
+        );
+        await expectLater(
+          client.get('/movie/1'),
+          throwsA(isA<TmdbException>()),
+        );
+        expect(calls, 1, reason: '$type should not be retried');
+      }
+    });
+
+    test('parseRetryAfter parses numeric clamping and HTTP dates', () {
+      expect(TmdbClient.parseRetryAfter('0', 0), const Duration(seconds: 1));
+      expect(TmdbClient.parseRetryAfter('120', 0), const Duration(seconds: 30));
+      expect(TmdbClient.parseRetryAfter('5', 0), const Duration(seconds: 5));
+      final future = DateTime.now().toUtc().add(const Duration(seconds: 12));
+      final parsed = TmdbClient.parseRetryAfter(HttpDate.format(future), 0);
+      expect(parsed.inSeconds, inInclusiveRange(9, 13));
+    });
+
+    test('catches store.write errors and rejects non-JSON HTTP 200 with Chinese message', () async {
+      final throwingCache = _ThrowingCache();
+      final (p, _) = make(cache: throwingCache);
+      expect((await p.movie(27205)).info.tmdbId, 27205);
+
+      final htmlDio = Dio()
+        ..httpClientAdapter = _FnAdapter(
+          (_) async => ResponseBody.fromString(
+            '<html>blocked</html>',
+            200,
+            headers: {
+              Headers.contentTypeHeader: ['text/html'],
+            },
+          ),
+        );
+      final htmlProvider = TmdbProvider(
+        const TmdbConfig(apiKey: 'k'),
+        dio: htmlDio,
+      );
+      await expectLater(
+        htmlProvider.movie(27205),
+        throwsA(
+          isA<TmdbException>()
+              .having((e) => e.statusCode, 'status', 200)
+              .having((e) => e.message, 'msg', contains('非 JSON')),
+        ),
+      );
+    });
+
+    test('year-filtered low-score hits fall back to yearless search', () async {
+      final dio = Dio()
+        ..httpClientAdapter = _FnAdapter((opts) async {
+          final hasYear = opts.queryParameters.containsKey('year');
+          final body = hasYear
+              ? {
+                  'page': 1,
+                  'results': [
+                    {
+                      'id': 1,
+                      'title': 'Completely Unrelated Film',
+                      'original_title': 'Completely Unrelated Film',
+                      'release_date': '2011-01-01',
+                    },
+                  ],
+                }
+              : {
+                  'page': 1,
+                  'results': [
+                    {
+                      'id': 27205,
+                      'title': '盗梦空间',
+                      'original_title': 'Inception',
+                      'release_date': '2010-07-15',
+                    },
+                  ],
+                };
+          return ResponseBody.fromString(
+            jsonEncode(body),
+            200,
+            headers: {
+              Headers.contentTypeHeader: ['application/json'],
+            },
+          );
+        });
+      final p = TmdbProvider(const TmdbConfig(apiKey: 'k'), dio: dio);
+      final hits = await p.search(
+        'Inception',
+        kind: MediaKind.movie,
+        year: 2011,
+      );
+      expect(hits.first.tmdbId, 27205);
+    });
+
+    test('scoring: CJK-glued year, punctuation normalization, and tightened CJK sharesToken', () {
+      expect(normalizeQuery('请回答1988').text, '请回答1988');
+      expect(normalizeQuery('请回答1988').year, isNull);
+      expect(normalizeQuery('请回答1988 2015').text, '请回答1988');
+      expect(normalizeQuery('请回答1988 2015').year, 2015);
+
+      expect(sameTitle("Schindler's List", 'Schindlers List'), isTrue);
+      expect(sameTitle('『进击的巨人』', '进击的巨人'), isTrue);
+      expect(sameTitle('Mr & Mrs Smith', 'Mr Mrs Smith'), isTrue);
+      expect(sameTitle('Spider—Man', 'Spider-Man'), isTrue);
+
+      expect(sharesToken('流人', '潮流合伙人'), isTrue);
+      expect(sharesToken('流人', '好人'), isFalse);
+      expect(sharesToken('进击的巨人', '哈利波特的魔法石'), isFalse);
+    });
   });
+}
+
+class _ThrowingCache implements TmdbResponseCache {
+  @override
+  Map<String, dynamic>? read(String key) => null;
+  @override
+  void write(String key, Map<String, dynamic> value) =>
+      throw StateError('disk full');
+}
+
+class _FnAdapter implements HttpClientAdapter {
+  final Future<ResponseBody> Function(RequestOptions options) fn;
+  _FnAdapter(this.fn);
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) => fn(options);
+
+  @override
+  void close({bool force = false}) {}
 }

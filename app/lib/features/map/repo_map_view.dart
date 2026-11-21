@@ -127,6 +127,13 @@ class _RepoMapViewState extends ConsumerState<RepoMapView> {
 
   /// Repaints at most every 250 ms while a count streams in.
   void _changed() {
+    final s = _scanner;
+    if (s != null &&
+        !s.isListed(widget.dir) &&
+        s.running == null &&
+        s.error == null) {
+      _start();
+    }
     if (_throttle != null) {
       _dirty = true;
       return;
@@ -150,7 +157,13 @@ class _RepoMapViewState extends ConsumerState<RepoMapView> {
 
   @override
   Widget build(BuildContext context) {
+    final p = Palette.of(context);
     final s = ref.watch(sizeScannerProvider(widget.connection));
+    if (!identical(s, _scanner)) {
+      _scanner?.removeListener(_changed);
+      _scanner = s..addListener(_changed);
+      _start();
+    }
     final dir = widget.dir;
     final blocks = mapBlocksFor(s, dir);
     final busy = s.running != null;
@@ -167,22 +180,43 @@ class _RepoMapViewState extends ConsumerState<RepoMapView> {
               Expanded(
                 child: RepoMapSummary(scanner: s, dir: dir),
               ),
-              const MapLegend(),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const MapLegend(),
+                  Text(
+                    '点击进入 · ⌘/⇧ 点选多选 · 右键更多',
+                    style: TextStyle(
+                      fontSize: TypeScale.small,
+                      color: p.textFaint,
+                    ),
+                  ),
+                ],
+              ),
             ],
           ),
         ),
         Expanded(
           child: blocks.isEmpty
               ? (!busy && s.error != null
-                    ? const EmptyState(
+                    ? EmptyState(
                         icon: CupertinoIcons.exclamationmark_triangle,
                         title: '这里统计不了', // the summary says why
+                        action: OutlinedButton(
+                          onPressed: () => unawaited(s.scan(dir, fresh: true)),
+                          child: const Text('重试'),
+                        ),
                       )
                     : busy || !s.isListed(dir)
                     ? const Center(child: Spinner(size: 22))
-                    : const EmptyState(
+                    : EmptyState(
                         icon: CupertinoIcons.folder,
                         title: '这里没有文件',
+                        action: OutlinedButton(
+                          onPressed: widget.onShowList,
+                          child: const Text('切回列表视图'),
+                        ),
                       ))
               : AnimatedSwitcher(
                   duration: const Duration(milliseconds: 260),
@@ -222,7 +256,7 @@ class _RepoMapViewState extends ConsumerState<RepoMapView> {
 
 String scanErrorText(Object e) =>
     e is StorageException && e.code == StorageErrorCode.notFound
-    ? '统计出错：找不到这个文件夹，看看连接的媒体库路径对不对'
+    ? '统计出错：找不到这个文件夹，可能已被移动或删除'
     : '统计出错：${e is StorageException ? e.message : e}';
 
 /// Big size number with file count, 未整理 total and count progress.
@@ -230,15 +264,88 @@ class RepoMapSummary extends StatelessWidget {
   final SizeScanner scanner;
   final String dir;
 
-  /// Extra first caption line, e.g. 「演示 Alist · /影视库」.
-  final String? title;
+  const RepoMapSummary({super.key, required this.scanner, required this.dir});
 
-  const RepoMapSummary({
-    super.key,
-    required this.scanner,
-    required this.dir,
-    this.title,
-  });
+  Future<void> _showSkipped(BuildContext context) {
+    final entries = scanner.skipped.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+    return showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        final p = Palette.of(ctx);
+        return MacSheet(
+          child: SizedBox(
+            width: 520,
+            height: 400,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(22, 20, 22, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    '跳过 ${entries.length} 个读不了的文件夹',
+                    style: theme.textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: Panel(
+                      framed: true,
+                      child: ListView.separated(
+                        padding: const EdgeInsets.all(8),
+                        itemCount: entries.length,
+                        separatorBuilder: (_, _) => const Divider(),
+                        itemBuilder: (_, i) {
+                          final e = entries[i];
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 6,
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                SelectableText(
+                                  e.key,
+                                  style: TextStyle(
+                                    fontSize: TypeScale.small,
+                                    fontWeight: FontWeight.w500,
+                                    color: p.text,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                SelectableText(
+                                  e.value,
+                                  style: TextStyle(
+                                    fontSize: TypeScale.small,
+                                    color: p.textMuted,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.of(ctx).pop(),
+                        child: const Text('关闭'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -260,23 +367,41 @@ class RepoMapSummary extends StatelessWidget {
             ],
           )
         : s.error != null
-        ? Tooltip(
-            message: '${s.error}',
-            child: Text(
-              scanErrorText(s.error!),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: p.danger),
-            ),
+        ? Wrap(
+            spacing: 10,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Tooltip(
+                message: '${s.error}',
+                child: Text(
+                  scanErrorText(s.error!),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: p.danger),
+                ),
+              ),
+              LinkText('重试', onTap: () => unawaited(s.scan(dir, fresh: true))),
+            ],
           )
         : s.isComplete(dir)
-        ? Text(
-            [
-              '${stats.files} 个文件',
-              if (stats.unorganized > 0) '未整理 ${fmtSize(stats.unorganized)}',
-              if (s.skipped.isNotEmpty) '跳过 ${s.skipped.length} 个读不了的文件夹',
-            ].join('，'),
-            style: TextStyle(color: p.textMuted),
+        ? Wrap(
+            spacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Text(
+                [
+                  '${stats.files} 个文件',
+                  if (stats.unorganized > 0)
+                    '未整理 ${fmtSize(stats.unorganized)}',
+                ].join('，'),
+                style: TextStyle(color: p.textMuted),
+              ),
+              if (s.skipped.isNotEmpty)
+                LinkText(
+                  '跳过 ${s.skipped.length} 个读不了的文件夹',
+                  onTap: () => _showSkipped(context),
+                ),
+            ],
           )
         : Wrap(
             spacing: 10,
@@ -286,11 +411,7 @@ class RepoMapSummary extends StatelessWidget {
               LinkText('继续统计', onTap: () => unawaited(s.scan(dir))),
             ],
           );
-    return BigNumber(
-      value,
-      unit: unit,
-      captions: [?(title == null ? null : Text(title!)), status],
-    );
+    return BigNumber(value, unit: unit, captions: [status]);
   }
 }
 

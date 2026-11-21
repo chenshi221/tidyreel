@@ -32,6 +32,55 @@ const _fieldNames = {
   NameField.extraInfo: '附加信息',
 };
 
+const _varTooltips = {
+  '{title}': '中文或首选标题',
+  '{en_title}': '英文标题',
+  '{original_title}': '原语言标题',
+  '{year}': '发行或首播年份',
+  '{season}': '季号（不补零，如 1）',
+  '{season:02}': '两位季号（如 01）',
+  '{episode:02}': '两位集号（如 02）',
+  '{episode_title}': '分集标题（来自 TMDB）',
+  '{extra_info}': '附加信息（分辨率、HDR 等）',
+  '{group}': '发布组名称',
+  '{tmdbid}': 'TMDB 数字 ID',
+  '{tmdb_tag}': 'TMDB ID 标签（如 {tmdb-1668}）',
+};
+
+const _folderVars = [
+  '{title}',
+  '{en_title}',
+  '{original_title}',
+  '{year}',
+  '{tmdbid}',
+  '{tmdb_tag}',
+];
+
+const _movieCustomVars = [
+  '{title}',
+  '{en_title}',
+  '{original_title}',
+  '{year}',
+  '{extra_info}',
+  '{group}',
+  '{tmdbid}',
+  '{tmdb_tag}',
+];
+
+const _tvCustomVars = [
+  '{title}',
+  '{en_title}',
+  '{original_title}',
+  '{year}',
+  '{season:02}',
+  '{episode:02}',
+  '{episode_title}',
+  '{extra_info}',
+  '{group}',
+  '{tmdbid}',
+  '{tmdb_tag}',
+];
+
 /// 命名规则页（PLAN §3.2）: options on the left, a pinned live preview right.
 class NamingPage extends ConsumerStatefulWidget {
   const NamingPage({super.key});
@@ -52,6 +101,22 @@ const _seasonPresets = [
 class _NamingPageState extends ConsumerState<NamingPage> {
   var _tv = false;
 
+  Future<void> _selectPlayer(TargetPlayer next) async {
+    final current = ref.read(namingProfileProvider);
+    final customized = current != NamingProfile.forPlayer(current.player);
+    if (next == current.player && !customized) return;
+    if (customized) {
+      final ok = await confirmDialog(
+        context,
+        title: '切换到 ${_playerNames[next]!} 预设？',
+        content: const Text('切换播放器预设会重置电影和剧集的命名选项、自定义模板以及替换规则。'),
+        confirmLabel: '切换并重置',
+      );
+      if (!ok || !mounted) return;
+    }
+    ref.read(namingProfileProvider.notifier).set(NamingProfile.forPlayer(next));
+  }
+
   @override
   Widget build(BuildContext context) {
     final profile = ref.watch(namingProfileProvider);
@@ -64,17 +129,7 @@ class _NamingPageState extends ConsumerState<NamingPage> {
           onChanged: (v) => setState(() => _tv = v),
         ),
         const SizedBox(width: 6),
-        _PlayerMenu(
-          value: profile.player,
-          // Switching preset resets both option sets to that player's defaults.
-          onChanged: (p) => ref
-              .read(namingProfileProvider.notifier)
-              .set(
-                p == TargetPlayer.vidhub
-                    ? NamingProfile.vidhub
-                    : NamingProfile(player: p),
-              ),
-        ),
+        _PlayerMenu(value: profile.player, onChanged: _selectPlayer),
       ],
       child: Padding(
         padding: const EdgeInsets.fromLTRB(48, 0, 40, 0),
@@ -163,17 +218,17 @@ class _Preview extends ConsumerWidget {
     final theme = Theme.of(context);
     final profile = ref.watch(namingProfileProvider);
     final o = _optionsOf(profile, isTv);
-    final sample = isTv ? NamingSample.tv : NamingSample.movie;
+    final sample = isTv ? NamingSample.tvFor(o) : NamingSample.movie;
     final kind = isTv ? MediaKind.episode : MediaKind.movie;
     final name = renderNaming(o, kind, sample);
     final folder = renderFolder(o.folderTemplate, sample, o.rewrites);
     final season = isTv
         ? renderFolder(o.seasonFolderTemplate, sample, o.rewrites)
         : null;
-    final tree = [
-      isTv ? profile.tvDir : profile.movieDir,
-      if (folder.text != null) folder.text!,
-      if (season?.text != null) season!.text!,
+    final tree = <(String text, bool isError)>[
+      (isTv ? profile.tvDir : profile.movieDir, false),
+      (folder.text ?? folder.display, folder.text == null),
+      if (season != null) (season.text ?? season.display, season.text == null),
     ];
     final mono = TextStyle(
       fontFamily: monoFamily,
@@ -210,7 +265,7 @@ class _Preview extends ConsumerWidget {
             children: [
               Text('实时示例', style: theme.textTheme.titleSmall),
               const Spacer(),
-              Tag(_playerNames[profile.player]!, color: p.accent),
+              Tag(_playerNames[profile.player]!),
             ],
           ),
           const SizedBox(height: 14),
@@ -219,17 +274,25 @@ class _Preview extends ConsumerWidget {
           fileLine(CupertinoIcons.doc, sample.original, p.textFaint),
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 8),
-            child: Icon(CupertinoIcons.arrow_down, size: 14, color: p.accent),
+            child: Icon(
+              CupertinoIcons.arrow_down,
+              size: 14,
+              color: p.textMuted,
+            ),
           ),
           Text('整理后', style: theme.textTheme.labelSmall),
           const SizedBox(height: 4),
           Container(
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: p.accent.withValues(alpha: 0.07),
+              color: name.text == null
+                  ? p.danger.withValues(alpha: 0.06)
+                  : p.sidebar,
               borderRadius: BorderRadius.circular(Radii.sm),
               border: Border.all(
-                color: p.accent.withValues(alpha: 0.25),
+                color: name.text == null
+                    ? p.danger.withValues(alpha: 0.4)
+                    : p.line,
                 width: hairline,
               ),
             ),
@@ -246,13 +309,29 @@ class _Preview extends ConsumerWidget {
           for (var i = 0; i < tree.length; i++)
             Padding(
               padding: EdgeInsets.only(left: 16.0 * i, bottom: 2),
-              child: fileLine(CupertinoIcons.folder_fill, tree[i], p.textMuted),
+              child: fileLine(
+                tree[i].$2
+                    ? CupertinoIcons.exclamationmark_triangle
+                    : CupertinoIcons.folder_fill,
+                tree[i].$1,
+                tree[i].$2 ? p.danger : p.textMuted,
+              ),
             ),
           if (name.text != null)
             Padding(
               padding: EdgeInsets.only(left: 16.0 * tree.length),
               child: fileLine(CupertinoIcons.film, name.text!, p.text),
             ),
+          if (isTv) ...[
+            const SizedBox(height: 10),
+            Text(
+              o.singleSeasonFolder
+                  ? '单季剧也会建季文件夹（${season?.text ?? o.seasonFolderTemplate}）'
+                  : '单季剧省略季文件夹：${profile.tvDir}/${folder.text ?? '…'}/${name.text ?? '…'}',
+              key: const ValueKey('single-season-preview'),
+              style: theme.textTheme.bodySmall?.copyWith(color: p.textFaint),
+            ),
+          ],
         ],
       ),
     );
@@ -286,7 +365,7 @@ class _OptionsPanel extends ConsumerWidget {
     Widget sw(String key, bool v, ValueChanged<bool> f) =>
         MacSwitch(key: ValueKey('$key-$suffix'), value: v, onChanged: f);
 
-    final options = <Widget>[
+    final fileNameOptions = <Widget>[
       const SectionLabel('标题'),
       Panel(
         child: Rows(
@@ -454,103 +533,43 @@ class _OptionsPanel extends ConsumerWidget {
           },
           children: [
             for (var i = 0; i < order.length; i++)
-              ReorderableDragStartListener(
+              Container(
                 key: ValueKey(order[i]),
-                index: i,
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: p.panel,
-                    border: i == 0
-                        ? null
-                        : Border(
-                            top: BorderSide(color: p.line, width: hairline),
-                          ),
-                  ),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 9,
-                  ),
-                  child: Row(
-                    children: [
-                      Text(
-                        '${i + 1}',
-                        style: TextStyle(fontSize: 12, color: p.textFaint),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(child: Text(_fieldNames[order[i]]!)),
-                      Icon(
-                        CupertinoIcons.line_horizontal_3,
-                        size: 14,
-                        color: p.textFaint,
-                      ),
-                    ],
-                  ),
+                decoration: BoxDecoration(
+                  color: p.panel,
+                  border: i == 0
+                      ? null
+                      : Border(
+                          top: BorderSide(color: p.line, width: hairline),
+                        ),
                 ),
-              ),
-          ],
-        ),
-      ),
-      const SectionLabel('文件夹'),
-      Panel(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-        child: Column(
-          children: [
-            FormRow(
-              label: '作品文件夹',
-              child: _TextOption(
-                key: ValueKey('folder-$suffix'),
-                value: o.folderTemplate,
-                vars: const ['{title}', '{en_title}', '{year}'],
-                onChanged: (v) =>
-                    _edit(ref, (o) => o.copyWith(folderTemplate: v)),
-              ),
-            ),
-            if (isTv)
-              FormRow(
-                label: '季文件夹',
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                padding: const EdgeInsets.fromLTRB(14, 5, 6, 5),
+                child: Row(
                   children: [
-                    Wrap(
-                      spacing: 4,
-                      runSpacing: 4,
-                      children: [
-                        for (final (label, template) in _seasonPresets)
-                          _StyleChip(
-                            key: ValueKey('season-preset-$label'),
-                            label: label,
-                            selected: o.seasonFolderTemplate == template,
-                            onTap: () => _edit(
-                              ref,
-                              (o) => o.copyWith(seasonFolderTemplate: template),
-                            ),
-                          ),
-                      ],
+                    Text(
+                      '${i + 1}',
+                      style: TextStyle(fontSize: 12, color: p.textFaint),
                     ),
-                    const SizedBox(height: 8),
-                    _TextOption(
-                      key: const ValueKey('season-folder'),
-                      value: o.seasonFolderTemplate,
-                      vars: const ['{season}', '{season:02}'],
-                      onChanged: (v) => _edit(
-                        ref,
-                        (o) => o.copyWith(seasonFolderTemplate: v),
+                    const SizedBox(width: 12),
+                    Expanded(child: Text(_fieldNames[order[i]]!)),
+                    ReorderableDragStartListener(
+                      index: i,
+                      child: MouseRegion(
+                        cursor: SystemMouseCursors.grab,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                          child: Icon(
+                            CupertinoIcons.line_horizontal_3,
+                            size: 14,
+                            color: p.textFaint,
+                          ),
+                        ),
                       ),
                     ),
                   ],
-                ),
-              ),
-            if (isTv)
-              FormRow(
-                label: '单季剧',
-                help: '打开：只有一季的剧也放进季文件夹。多季剧总是分季文件夹',
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: sw(
-                    'single-season-folder',
-                    o.singleSeasonFolder,
-                    (v) => _edit(ref, (o) => o.copyWith(singleSeasonFolder: v)),
-                  ),
                 ),
               ),
           ],
@@ -561,6 +580,85 @@ class _OptionsPanel extends ConsumerWidget {
     return ListView(
       padding: const EdgeInsets.only(bottom: 28),
       children: [
+        AnimatedOpacity(
+          duration: const Duration(milliseconds: 150),
+          opacity: advanced ? 0.45 : 1,
+          child: AbsorbPointer(
+            absorbing: advanced,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: fileNameOptions,
+            ),
+          ),
+        ),
+        const SectionLabel('文件夹'),
+        Panel(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          child: Column(
+            children: [
+              FormRow(
+                label: '作品文件夹',
+                child: _TextOption(
+                  key: ValueKey('folder-$suffix'),
+                  value: o.folderTemplate,
+                  vars: _folderVars,
+                  onChanged: (v) =>
+                      _edit(ref, (o) => o.copyWith(folderTemplate: v)),
+                ),
+              ),
+              if (isTv)
+                FormRow(
+                  label: '季文件夹',
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Wrap(
+                        spacing: 4,
+                        runSpacing: 4,
+                        children: [
+                          for (final (label, template) in _seasonPresets)
+                            _StyleChip(
+                              key: ValueKey('season-preset-$label'),
+                              label: label,
+                              selected: o.seasonFolderTemplate == template,
+                              onTap: () => _edit(
+                                ref,
+                                (o) =>
+                                    o.copyWith(seasonFolderTemplate: template),
+                              ),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      _TextOption(
+                        key: const ValueKey('season-folder'),
+                        value: o.seasonFolderTemplate,
+                        vars: const ['{season}', '{season:02}'],
+                        onChanged: (v) => _edit(
+                          ref,
+                          (o) => o.copyWith(seasonFolderTemplate: v),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              if (isTv)
+                FormRow(
+                  label: '单季剧',
+                  help: '打开：只有一季的剧也放进季文件夹。多季剧总是分季文件夹',
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: sw(
+                      'single-season-folder',
+                      o.singleSeasonFolder,
+                      (v) =>
+                          _edit(ref, (o) => o.copyWith(singleSeasonFolder: v)),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
         const SectionLabel('高级'),
         Panel(
           child: Column(
@@ -568,7 +666,7 @@ class _OptionsPanel extends ConsumerWidget {
             children: [
               SettingRow(
                 title: '直接编辑模板',
-                caption: '开启后下面的选项变为只读',
+                caption: '开启后上面的文件名选项变为只读，文件夹设置仍可修改',
                 control: sw(
                   'advanced',
                   advanced,
@@ -588,16 +686,7 @@ class _OptionsPanel extends ConsumerWidget {
                     key: ValueKey('custom-$suffix'),
                     value: o.customTemplate!,
                     mono: true,
-                    vars: const [
-                      '{title}',
-                      '{en_title}',
-                      '{year}',
-                      '{season:02}',
-                      '{episode:02}',
-                      '{episode_title}',
-                      '{extra_info}',
-                      '{group}',
-                    ],
+                    vars: isTv ? _tvCustomVars : _movieCustomVars,
                     onChanged: (v) =>
                         _edit(ref, (o) => o.copyWith(customTemplate: () => v)),
                   ),
@@ -605,29 +694,25 @@ class _OptionsPanel extends ConsumerWidget {
             ],
           ),
         ),
-        AnimatedOpacity(
-          duration: const Duration(milliseconds: 150),
-          opacity: advanced ? 0.45 : 1,
-          child: AbsorbPointer(
-            absorbing: advanced,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: options,
-            ),
-          ),
-        ),
         SectionLabel(
           '替换规则',
-          trailing: TextButton.icon(
-            key: const ValueKey('add-rewrite'),
-            onPressed: () => _edit(
-              ref,
-              (o) => o.copyWith(
-                rewrites: [...o.rewrites, const NameRewrite('', '')],
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Tag(isTv ? '仅剧集' : '仅电影'),
+              const SizedBox(width: 6),
+              TextButton.icon(
+                key: const ValueKey('add-rewrite'),
+                onPressed: () => _edit(
+                  ref,
+                  (o) => o.copyWith(
+                    rewrites: [...o.rewrites, const NameRewrite('', '')],
+                  ),
+                ),
+                icon: const Icon(CupertinoIcons.plus, size: 12),
+                label: const Text('添加'),
               ),
-            ),
-            icon: const Icon(CupertinoIcons.plus, size: 12),
-            label: const Text('添加'),
+            ],
           ),
         ),
         Panel(
@@ -658,6 +743,7 @@ class _OptionsPanel extends ConsumerWidget {
                   ],
                 ),
         ),
+        const Padding(padding: EdgeInsets.only(top: 22), child: Divider()),
         const _TitleRulesSection(),
       ],
     );
@@ -712,7 +798,7 @@ class _TitleRulesSectionState extends ConsumerState<_TitleRulesSection> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         SectionLabel(
-          '片名规则',
+          '片名规则（电影与剧集共用）',
           trailing: TextButton.icon(
             key: const ValueKey('add-title-cleanup'),
             onPressed: () => _set(
@@ -783,8 +869,8 @@ class _TitleRulesSectionState extends ConsumerState<_TitleRulesSection> {
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           child: rules.pins.isEmpty
               ? Text(
-                  '总是搜不准的片名，在识别结果里「修正匹配」时勾选'
-                  '「以后都这样匹配」，就会记在这里：文件夹名包含关键词时直接用这部作品。',
+                  '总是搜不准的片名，在识别结果里点「重新搜索 TMDB」并勾选'
+                  '「以后文件夹名包含 … 时都匹配到选中的作品」，就会记在这里：文件夹名包含关键词时直接用这部作品。',
                   style: small,
                 )
               : Column(
@@ -875,6 +961,47 @@ class _StyleChip extends StatelessWidget {
   }
 }
 
+/// Insert-action chip for template variables, visually distinct from toggleable
+/// [_StyleChip] presets.
+class _VarChip extends StatelessWidget {
+  final String variable;
+  final VoidCallback onTap;
+
+  const _VarChip({required this.variable, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    return Tooltip(
+      message: _varTooltips[variable] ?? variable,
+      waitDuration: const Duration(milliseconds: 400),
+      child: Hoverable(
+        onTap: onTap,
+        builder: (context, hover) => Container(
+          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+          decoration: BoxDecoration(
+            color: hover ? p.selected : p.sidebar,
+            borderRadius: BorderRadius.circular(Radii.sm),
+            border: Border.all(
+              color: hover ? p.lineStrong : p.line,
+              width: hairline,
+            ),
+          ),
+          child: Text(
+            '+ $variable',
+            style: TextStyle(
+              fontFamily: monoFamily,
+              fontFamilyFallback: monoFallback,
+              fontSize: 11.5,
+              color: hover ? p.text : p.textMuted,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Text field that edits a provider-backed string; [vars] become buttons that
 /// insert a template variable at the cursor.
 class _TextOption extends StatefulWidget {
@@ -954,7 +1081,7 @@ class _TextOptionState extends State<_TextOption> {
           runSpacing: 4,
           children: [
             for (final v in widget.vars)
-              _StyleChip(label: v, selected: false, onTap: () => _insert(v)),
+              _VarChip(variable: v, onTap: () => _insert(v)),
           ],
         ),
       ],

@@ -8,22 +8,29 @@ import '../../data/providers.dart';
 import '../../ui/tokens.dart';
 import '../../ui/widgets.dart';
 import '../../widgets/common.dart';
+import '../sources/sources_providers.dart';
 import 'tasks_page.dart';
 
-/// What a finished task did: its review (works) plus the executed ops and
-/// their status from history.
+/// What a finished or executing task did: its review (works) plus the executed
+/// ops and their status from history. Watches progress/message while renaming
+/// so op statuses update live.
 final taskDetailProvider = FutureProvider.autoDispose
     .family<({TaskReview? review, List<HistoryRecord> records}), TaskId>((
       ref,
       id,
     ) async {
-      final (_, batch, _) = ref.watch(
+      final (_, batch, _, _) = ref.watch(
         tasksProvider.select((v) {
           final t = v.value?.where((t) => t.id == id).firstOrNull;
+          final renaming =
+              t != null &&
+              (t.stage == TaskStage.renamingFiles ||
+                  t.stage == TaskStage.renamingFolders);
           return (
             t?.stage,
             t?.batch,
-            t == null || t.stage.isActive ? null : t.message,
+            renaming ? t.progress : null,
+            t != null && (renaming || !t.stage.isActive) ? t.message : null,
           );
         }),
       );
@@ -31,7 +38,7 @@ final taskDetailProvider = FutureProvider.autoDispose
       try {
         review = await ref.read(taskManagerProvider).review(id);
       } catch (_) {
-        // Not recognized (cancelled early): show the history alone.
+        // Not recognized (failed / cancelled early): show the history alone.
       }
       final records = batch == null
           ? const <HistoryRecord>[]
@@ -67,12 +74,13 @@ class TaskDetailPage extends ConsumerWidget {
       },
     );
     final undoable = task != null && canUndo(task);
+    final running =
+        task != null &&
+        task.stage.isActive &&
+        task.stage != TaskStage.awaitingReview;
     return PageScaffold(
       title: '任务详情',
-      subtitle: [
-        if (task != null) stageLabel(task.stage),
-        if (task != null && task.message.isNotEmpty) task.message,
-      ].join('，'),
+      subtitle: task == null ? null : stageLabel(task.stage),
       leading: Builder(
         builder: (context) {
           // Opened from 最近整理 (?from=sources): back goes back there.
@@ -87,20 +95,15 @@ class TaskDetailPage extends ConsumerWidget {
         },
       ),
       actions: [
+        if (running)
+          OutlinedButton(
+            onPressed: () => ref.read(taskManagerProvider).cancel(id),
+            child: const Text('取消'),
+          ),
         if (task?.stage == TaskStage.partiallyFailed)
           FilledButton.icon(
             key: const ValueKey('retry-failed'),
-            onPressed: () async {
-              try {
-                await ref.read(taskManagerProvider).retryFailed(id);
-              } on StateError catch (e) {
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context)
-                    ..hideCurrentSnackBar()
-                    ..showSnackBar(SnackBar(content: Text(e.message)));
-                }
-              }
-            },
+            onPressed: () => retryFailedTask(context, ref, id),
             icon: const Icon(CupertinoIcons.arrow_clockwise, size: 13),
             label: const Text('重试失败项'),
           ),
@@ -133,27 +136,30 @@ class TaskDetailPage extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Progress steps (导入 → 识别 → … → 文件夹) while it runs.
           if (task != null)
             Padding(
               padding: const EdgeInsets.fromLTRB(48, 0, 40, 12),
-              child: Panel(child: TaskCard(task: task)),
+              child: Panel(child: _TaskSummaryHeader(task: task)),
             ),
           Expanded(
             child: detail.when(
-              loading: () => const Center(child: CircularProgressIndicator()),
+              loading: () => const Center(child: Spinner(size: 20)),
               error: (e, _) => EmptyState(
                 icon: CupertinoIcons.exclamationmark_triangle,
                 title: '无法读取任务详情',
                 message: '$e',
               ),
               data: (d) => _Body(
+                task: task,
                 review: d.review,
                 records: d.records,
                 busy:
                     task != null &&
                     task.stage.index < TaskStage.awaitingReview.index,
                 awaiting: task?.stage == TaskStage.awaitingReview ? id : null,
+                onRetry: task != null && canRetry(task)
+                    ? () => retryTask(context, ref, id)
+                    : null,
               ),
             ),
           ),
@@ -163,23 +169,171 @@ class TaskDetailPage extends ConsumerWidget {
   }
 }
 
+/// Non-interactive summary header for [TaskDetailPage]: shows work/folder info,
+/// status, full error message (when records also exist), and active stepper
+/// without duplicating header action buttons or self-navigation taps.
+class _TaskSummaryHeader extends ConsumerWidget {
+  final TaskSummary task;
+
+  const _TaskSummaryHeader({required this.task});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final t = task;
+    final p = Palette.of(context);
+    final theme = Theme.of(context);
+    final connName = ref
+        .watch(connectionsEditorProvider)
+        .where((c) => c.id == t.connection)
+        .map((c) => c.name)
+        .firstOrNull;
+    final recognized = isTaskRecognized(t);
+    final works = recognized
+        ? ref.watch(taskWorksProvider(t.id)).value ?? const <Candidate>[]
+        : const <Candidate>[];
+    final unassigned = recognized
+        ? ref.watch(taskUnassignedProvider(t.id)).value ?? 0
+        : 0;
+    final folder =
+        t.paths.firstOrNull?.split('/').where((s) => s.isNotEmpty).lastOrNull ??
+        '根目录';
+    final title = works.isEmpty
+        ? (t.paths.length > 1 ? '$folder 等 ${t.paths.length} 项' : folder)
+        : works.length == 1
+        ? works.single.title
+        : '${works.first.title} 等 ${works.length} 部';
+    final where = t.paths.length == 1
+        ? t.paths.single
+        : '${t.paths.length} 个文件夹';
+    final running = t.stage.isActive && t.stage != TaskStage.awaitingReview;
+    final counts = [
+      '${t.videoCount} 个视频',
+      if (t.subtitleCount > 0) '${t.subtitleCount} 个字幕',
+      if (t.folderCount > 0) '${t.folderCount} 个文件夹',
+      if (unassigned > 0) '$unassigned 个未归类',
+    ].join('，');
+    final showMessage =
+        t.message.isNotEmpty &&
+        t.stage != TaskStage.failed &&
+        t.stage != TaskStage.cancelled;
+    final isWarningMsg =
+        t.stage == TaskStage.partiallyFailed || t.message.startsWith('已撤销部分操作');
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Poster(
+            posterPath: works.firstOrNull?.posterPath,
+            icon: CupertinoIcons.folder,
+            width: 56,
+            height: 84,
+            radius: Radii.sm,
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w500,
+                          color: p.text,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    StatusPill(
+                      label: running && t.progress != null
+                          ? '${stageLabel(t.stage)} ${(t.progress! * 100).round()}%'
+                          : stageLabel(t.stage),
+                      color: taskStatusColor(t.stage, p),
+                      busy: running,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 3),
+                Tooltip(
+                  message: t.paths.join('\n'),
+                  child: Text(
+                    [
+                      connName ?? t.connection.value,
+                      t.mode == OrganizeMode.inPlace ? '原地整理' : '移动到媒体库',
+                      if (t.scrape) '刮削',
+                      if (recognized) counts else where,
+                    ].join('，'),
+                    style: theme.textTheme.bodySmall,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                if (showMessage) ...[
+                  const SizedBox(height: 4),
+                  SelectableText(
+                    t.message,
+                    style: TextStyle(
+                      fontSize: TypeScale.small,
+                      color: isWarningMsg ? p.warning : p.textMuted,
+                    ),
+                  ),
+                ],
+                if (works.length > 1) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    works.map((w) => w.title).join('、'),
+                    style: TextStyle(fontSize: 12, color: p.textFaint),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+                if (t.stage.isActive) ...[
+                  const SizedBox(height: 8),
+                  TaskStepper(
+                    stage: t.stage,
+                    progress: t.progress,
+                    running: running,
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _Body extends StatelessWidget {
+  final TaskSummary? task;
   final TaskReview? review;
   final List<HistoryRecord> records;
   final bool busy;
 
   /// Set while the task waits for review.
   final TaskId? awaiting;
+  final VoidCallback? onRetry;
 
   const _Body({
+    required this.task,
     required this.review,
     required this.records,
     required this.busy,
     required this.awaiting,
+    required this.onRetry,
   });
 
   @override
   Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    final theme = Theme.of(context);
     if (busy) {
       return const EmptyState(
         icon: CupertinoIcons.hourglass,
@@ -196,6 +350,73 @@ class _Body extends StatelessWidget {
       );
     }
     if (records.isEmpty) {
+      final t = task;
+      if (t != null &&
+          (t.stage == TaskStage.failed || t.stage == TaskStage.cancelled)) {
+        final failed = t.stage == TaskStage.failed;
+        final needsKey = failed && isTmdbKeyError(t.message);
+        return SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(48, 8, 40, 24),
+          child: Panel(
+            key: const ValueKey('task-stop-card'),
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      failed
+                          ? CupertinoIcons.exclamationmark_circle_fill
+                          : CupertinoIcons.xmark_circle,
+                      size: 18,
+                      color: failed ? p.danger : p.textMuted,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      failed ? '识别失败' : '任务已取消',
+                      style: theme.textTheme.titleMedium,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                SelectableText(
+                  t.message.isNotEmpty
+                      ? t.message
+                      : (failed ? '识别过程中出错，没有改动任何文件。' : '任务在修改文件前已取消。'),
+                  style: TextStyle(
+                    fontSize: TypeScale.body,
+                    color: failed ? p.danger : p.textMuted,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    if (needsKey)
+                      FilledButton(
+                        onPressed: () => context.go('/settings'),
+                        child: const Text('去设置'),
+                      ),
+                    if (onRetry != null)
+                      needsKey
+                          ? OutlinedButton(
+                              onPressed: onRetry,
+                              child: const Text('重新识别'),
+                            )
+                          : FilledButton(
+                              onPressed: onRetry,
+                              child: const Text('重新识别'),
+                            ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      }
       return const EmptyState(
         icon: CupertinoIcons.doc_text,
         title: '还没有整理记录',

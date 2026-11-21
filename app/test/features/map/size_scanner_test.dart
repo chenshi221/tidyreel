@@ -20,6 +20,9 @@ class _Counting implements StorageBackend {
   }
 
   @override
+  Future<void> close() => inner.close();
+
+  @override
   dynamic noSuchMethod(Invocation i) => throw UnimplementedError('read-only');
 }
 
@@ -147,6 +150,22 @@ void main() {
       BlockState.unorganized,
     );
     expect(blockStateOf(s.statsOfDir('$root/动漫')), BlockState.mixed);
+  });
+
+  test('batches organizedOf calls instead of N+1 per directory', () async {
+    var calls = 0;
+    final s = SizeScanner(
+      backend: MemoryStorageBackend(fakeLibrary),
+      organizedOf: (paths) async {
+        calls++;
+        return paths.where(fakeOrganized.contains).toSet();
+      },
+    );
+    await s.scan(root);
+    // fakeLibrary spans many directories; batching collapses them to a handful
+    // of calls rather than one per directory.
+    expect(calls, lessThan(s.dirsListed));
+    expect(blockStateOf(s.statsOfDir('$root/电影')), BlockState.organized);
   });
 
   group('looksOrganized', () {

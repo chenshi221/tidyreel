@@ -179,4 +179,47 @@ void main() {
       },
     );
   });
+
+  test('shiftFollowingCount counts later main videos in same local season', () {
+    expect(shiftFollowingCount(rows, rows[0]), 3);
+    expect(shiftFollowingCount(rows, rows[2]), 1);
+    expect(shiftFollowingCount(rows, rows[3]), 0);
+  });
+
+  test('conflictGroups and firstConflictLocation locate conflicting group and season', () {
+    final op1 = RenameOp(
+      id: const OpId('o1'),
+      kind: OpKind.relocate,
+      phase: ExecPhase.files,
+      src: '/s/10.mkv',
+      dst: '/s/Season 01/老友记.S01E10.mkv',
+      group: const GroupId('g'),
+    );
+    final review = TaskReview(
+      id: const TaskId('t'),
+      scan: ScanResult(
+        connection: const ConnectionId('c'),
+        roots: const ['/s'],
+        groups: [g],
+      ),
+      decisions: const {},
+      preview: RenamePlan(
+        ops: [op1],
+        conflicts: const [
+          PlanConflict(
+            ops: [OpId('o1')],
+            path: '/s/Season 01/老友记.S01E10.mkv',
+            reason: '目标位置已存在同名文件或文件夹',
+          ),
+        ],
+      ),
+    );
+    expect(conflictGroups(review), {const GroupId('g')});
+    final loc = firstConflictLocation(review);
+    expect(loc?.group, const GroupId('g'));
+    expect(loc?.season, 1);
+    final builtRows = rowsOf(g, null, review);
+    expect(builtRows.first.conflict, isTrue);
+    expect(builtRows.first.conflictReason, '目标位置已存在同名文件或文件夹');
+  });
 }

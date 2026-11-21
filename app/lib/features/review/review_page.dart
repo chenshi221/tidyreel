@@ -120,7 +120,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
   List<MediaGroup> _groups({required bool matched}) {
     final r = _review;
     if (r == null) return const [];
-    final q = _search.text.trim().toLowerCase();
+    final q = _search.text.trim();
     return [
       for (final g in r.scan.groups)
         if (isMatched(g, r.decisions[g.id]) == matched &&
@@ -129,7 +129,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                   g.anchorTitle,
                   effectiveMatch(g, r.decisions[g.id])?.title,
                   effectiveMatch(g, r.decisions[g.id])?.originalTitle,
-                ].any((t) => t != null && t.toLowerCase().contains(q))))
+                ].any((t) => t != null && fuzzyMatch(q, t))))
           effectiveGroup(g, r.decisions[g.id]),
     ];
   }
@@ -138,7 +138,40 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
 
   void _selectFirstVisible() {
     final v = _visible;
-    if (!v.any((g) => g.id == _selected)) _selected = v.firstOrNull?.id;
+    if (!v.any((g) => g.id == _selected)) {
+      _selected = v.firstOrNull?.id;
+      _detailTab = folderTab - 1;
+    }
+  }
+
+  void _changeTab(int tab) {
+    _tab = tab;
+    _showUnassigned = false;
+    _selectFirstVisible();
+  }
+
+  void _returnToWorks() {
+    if (_visible.isEmpty && _groups(matched: _tab != 0).isNotEmpty) {
+      _changeTab(1 - _tab);
+    } else {
+      _showUnassigned = false;
+      _selectFirstVisible();
+    }
+  }
+
+  void _jumpToFirstConflict(TaskReview r) {
+    final loc = firstConflictLocation(r);
+    if (loc == null) return;
+    final g = r.scan.groups.where((x) => x.id == loc.group).firstOrNull;
+    if (g == null) return;
+    final matched = isMatched(g, r.decisions[g.id]);
+    setState(() {
+      if (_search.text.isNotEmpty) _search.clear();
+      _tab = matched ? 0 : 1;
+      _showUnassigned = false;
+      _selected = loc.group;
+      _detailTab = loc.season ?? folderTab;
+    });
   }
 
   /// The selected group as its current match makes it.
@@ -216,8 +249,15 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
   Future<void> _editRow(MediaGroup g, ReviewRow row) async {
     final d = _decisionOf(g.id);
     final rows = rowsOf(g, d, _review!);
-    final o = await showEditRowDialog(context, g, row, decision: d, rows: rows);
-    if (o == null) return;
+    final res = await showEditRowDialog(
+      context,
+      g,
+      row,
+      decision: d,
+      rows: rows,
+    );
+    if (res == null) return;
+    final o = res.override;
     final to = o.season != null && o.episode != null
         ? EpisodeRef(o.season!, o.episode!)
         : null;
@@ -226,8 +266,9 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
         !o.ignore &&
         o.kind != MediaKind.special &&
         o.kind != MediaKind.extra;
-    // Moving one episode moves the ones after it too (12 -> S02E01, 13 -> S02E02 …).
-    if (g.kind == MediaKind.episode &&
+    // Moving one episode moves the ones after it when shiftFollowing is checked.
+    if (res.shiftFollowing &&
+        g.kind == MediaKind.episode &&
         main &&
         to != null &&
         to != targetRef(row)) {
@@ -310,6 +351,95 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
     );
   }
 
+  void _showShortcutsSheet() {
+    const shortcuts = [
+      ('↑ / ↓', '切换左侧作品'),
+      ('← / →', '切换季标签 / 文件夹'),
+      ('空格', '勾选或取消当前作品'),
+      ('⌘F / Ctrl+F', '聚焦作品搜索框'),
+      ('⌘↩ / Ctrl+↩', '开始整理'),
+    ];
+    showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        final p = Palette.of(ctx);
+        return MacSheet(
+          child: SizedBox(
+            width: 340,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text('快捷键', style: Theme.of(ctx).textTheme.titleMedium),
+                  const SizedBox(height: 12),
+                  Panel(
+                    framed: true,
+                    child: Rows(
+                      children: [
+                        for (final (keys, desc) in shortcuts)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 8,
+                            ),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    desc,
+                                    style: const TextStyle(fontSize: 13),
+                                  ),
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 7,
+                                    vertical: 2,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: p.sidebar,
+                                    borderRadius: BorderRadius.circular(
+                                      Radii.sm,
+                                    ),
+                                    border: Border.all(
+                                      color: p.lineStrong,
+                                      width: hairline,
+                                    ),
+                                  ),
+                                  child: Text(
+                                    keys,
+                                    style: TextStyle(
+                                      fontFamily: monoFamily,
+                                      fontFamilyFallback: monoFallback,
+                                      fontSize: 11.5,
+                                      color: p.text,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('关闭'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Future<void> _execute() async {
     if (_executing || _pendingUpdates > 0) return;
     var r = _review;
@@ -329,11 +459,19 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
       return;
     }
     if (merges.isNotEmpty) {
+      final mode = ref
+          .read(tasksProvider)
+          .asData
+          ?.value
+          .where((t) => t.id == _id)
+          .map((t) => t.mode)
+          .firstOrNull;
       final separate = await showMergeDialog(
         context,
         review: r,
         merges: merges,
         backend: ref.read(backendForProvider)(r.scan.connection),
+        mode: mode,
       );
       if (separate == null || !mounted) return;
       for (final id in separate) {
@@ -358,8 +496,17 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
     final ops = r.preview.ops.where((o) => o.selected).toList();
     if (ops.isEmpty) return;
     // Only deleting can't be undone, so that is the one thing we ask about.
-    final deletes = ops.where((o) => o.kind == OpKind.delete).length;
-    final ok = deletes == 0 || await confirmPermanentDelete(context, deletes);
+    final deletePaths = [
+      for (final o in ops)
+        if (o.kind == OpKind.delete) o.src,
+    ];
+    final ok =
+        deletePaths.isEmpty ||
+        await confirmPermanentDelete(
+          context,
+          deletePaths.length,
+          paths: deletePaths,
+        );
     if (!ok || !mounted || _executing) return;
     setState(() => _executing = true);
     final router = GoRouter.of(context);
@@ -487,13 +634,11 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
               color: Palette.of(context).textMuted,
             ),
           ),
-        const Tooltip(
-          message:
-              '快捷键\n↑ ↓  切换作品\n← →  切换季 / 文件夹\n空格  勾选或取消作品\n⌘F  搜索\n⌘↩  开始整理',
-          child: Padding(
-            padding: EdgeInsets.all(8),
-            child: Icon(CupertinoIcons.keyboard, size: 16),
-          ),
+        IconButton(
+          key: const ValueKey('shortcuts-button'),
+          tooltip: '快捷键（点击查看）\n↑ ↓  切换作品\n← →  切换季 / 文件夹\n空格  勾选或取消作品\n⌘F  搜索\n⌘↩  开始整理',
+          icon: const Icon(CupertinoIcons.keyboard, size: 16),
+          onPressed: _showShortcutsSheet,
         ),
         IconButton(
           key: const ValueKey('toggle-actions'),
@@ -514,7 +659,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
               message: '$_error',
             )
           : r == null
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: Spinner(size: 20))
           : Focus(
               autofocus: true,
               onKeyEvent: _onKey,
@@ -535,7 +680,10 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
 
   Widget _body(TaskReview r) {
     final g = _selectedGroup;
+    final visible = _visible;
+    final otherGroups = _groups(matched: _tab != 0);
     final p = Palette.of(context);
+    final theme = Theme.of(context);
     final hairlineSide = BorderSide(color: p.line, width: hairline);
     final unassignedDeletes = plannedUnassignedDeletes(
       r.scan.unassigned,
@@ -562,9 +710,23 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                     controller: _search,
                     focusNode: _searchFocus,
                     style: const TextStyle(fontSize: 13),
-                    decoration: const InputDecoration(
-                      prefixIcon: Icon(CupertinoIcons.search, size: 14),
+                    decoration: InputDecoration(
+                      prefixIcon: const Icon(CupertinoIcons.search, size: 14),
                       hintText: '搜索作品  ⌘F',
+                      suffixIcon: _search.text.isEmpty
+                          ? null
+                          : IconButton(
+                              key: const ValueKey('review-search-clear'),
+                              tooltip: '清空搜索',
+                              iconSize: 14,
+                              icon: const Icon(
+                                CupertinoIcons.xmark_circle_fill,
+                              ),
+                              onPressed: () {
+                                _search.clear();
+                                setState(_selectFirstVisible);
+                              },
+                            ),
                     ),
                     onChanged: (_) => setState(_selectFirstVisible),
                   ),
@@ -577,62 +739,149 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                       1: '需手动匹配 ${_groups(matched: false).length}',
                     },
                     value: _tab,
-                    onChanged: (v) => setState(() {
-                      _tab = v;
-                      _selectFirstVisible();
-                    }),
+                    onChanged: (v) => setState(() => _changeTab(v)),
                   ),
                 ),
                 Expanded(
-                  child: GroupList(
-                    groups: _visible,
-                    review: r,
-                    selected: _selected,
-                    onSelect: (id) => setState(() {
-                      _selected = id;
-                      _showUnassigned = false;
-                      _detailTab = folderTab - 1;
-                    }),
-                    onCheck: (id, v) =>
-                        _update(id, _decisionOf(id).copyWith(selected: v)),
-                    onPick: (grp, c) => _update(
-                      grp.id,
-                      _decisionOf(grp.id).copyWith(match: c, selected: true),
-                    ),
-                  ),
+                  child: visible.isEmpty
+                      ? EmptyState(
+                          icon: CupertinoIcons.tray,
+                          title: _search.text.trim().isNotEmpty
+                              ? '没有符合搜索条件的作品'
+                              : _tab == 0
+                              ? '没有可整理的作品'
+                              : '没有需要手动匹配的作品',
+                          action: otherGroups.isEmpty
+                              ? null
+                              : TextButton(
+                                  onPressed: () =>
+                                      setState(() => _changeTab(1 - _tab)),
+                                  child: Text(
+                                    _tab == 1
+                                        ? '查看可整理的 ${otherGroups.length} 个作品'
+                                        : '查看需手动匹配的 ${otherGroups.length} 个作品',
+                                  ),
+                                ),
+                        )
+                      : GroupList(
+                          groups: visible,
+                          review: r,
+                          selected: _showUnassigned ? null : _selected,
+                          onSelect: (id) => setState(() {
+                            if (_selected != id) _detailTab = folderTab - 1;
+                            _selected = id;
+                            _showUnassigned = false;
+                          }),
+                          onCheck: (id, v) => _update(
+                            id,
+                            _decisionOf(id).copyWith(selected: v),
+                          ),
+                          onPick: (grp, c) => _update(
+                            grp.id,
+                            _decisionOf(grp.id)
+                                .copyWith(match: c, selected: true),
+                          ),
+                        ),
                 ),
                 if (r.scan.unassigned.isNotEmpty)
-                  Material(
-                    type: MaterialType.transparency,
-                    child: ListTile(
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+                    child: Hoverable(
                       key: const ValueKey('unassigned-link'),
-                      dense: true,
-                      selected: _showUnassigned,
-                      leading: const Icon(CupertinoIcons.tray, size: 16),
-                      title: Text('未归类 ${r.scan.unassigned.length} 个文件'),
-                      subtitle: Text(
-                        unassignedDeletes > 0
-                            ? '其中 $unassignedDeletes 个垃圾文件将被永久删除'
-                            : '没归进任何作品，不会被整理',
-                      ),
-                      trailing: const Icon(
-                        CupertinoIcons.chevron_right,
-                        size: 12,
-                      ),
                       onTap: () => setState(() => _showUnassigned = true),
+                      builder: (context, hover) => AnimatedContainer(
+                        duration: const Duration(milliseconds: 120),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color: _showUnassigned
+                              ? p.selected
+                              : (hover ? p.hover : Colors.transparent),
+                          borderRadius: BorderRadius.circular(Radii.lg),
+                          border: Border.all(
+                            color: _showUnassigned
+                                ? p.text.withValues(alpha: 0.35)
+                                : Colors.transparent,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              CupertinoIcons.tray,
+                              size: 16,
+                              color: _showUnassigned ? p.text : p.textMuted,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    '未归类 ${r.scan.unassigned.length} 个文件',
+                                    style: theme.textTheme.bodyMedium?.copyWith(
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 1),
+                                  Text(
+                                    unassignedDeletes > 0
+                                        ? '其中 $unassignedDeletes 个垃圾文件将被永久删除'
+                                        : '没归进任何作品，不会被整理',
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                      color: unassignedDeletes > 0
+                                          ? p.danger
+                                          : p.textMuted,
+                                    ),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Icon(
+                              CupertinoIcons.chevron_right,
+                              size: 12,
+                              color: p.textFaint,
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
-                const SizedBox(height: 64),
+                const SizedBox(height: 104),
               ],
             ),
           ),
           Expanded(
             child: _showUnassigned
                 ? Padding(
-                    padding: const EdgeInsets.only(top: 12, bottom: 64),
-                    child: UnassignedPane(
-                      files: r.scan.unassigned,
-                      plan: r.preview,
+                    padding: const EdgeInsets.only(top: 12, bottom: 104),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton.icon(
+                            key: const ValueKey('return-to-works'),
+                            onPressed: () => setState(_returnToWorks),
+                            icon: const Icon(
+                              CupertinoIcons.chevron_left,
+                              size: 14,
+                            ),
+                            label: const Text('返回作品'),
+                          ),
+                        ),
+                        Expanded(
+                          child: UnassignedPane(
+                            files: r.scan.unassigned,
+                            plan: r.preview,
+                          ),
+                        ),
+                      ],
                     ),
                   )
                 : g == null
@@ -641,7 +890,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                     title: '选择左侧的作品查看明细',
                   )
                 : Padding(
-                    padding: const EdgeInsets.only(top: 12, bottom: 64),
+                    padding: const EdgeInsets.only(top: 12, bottom: 104),
                     child: DetailPane(
                       group: g,
                       decision: r.decisions[g.id],
@@ -651,26 +900,27 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                       onEdit: (row) => _editRow(g, row),
                       onCheck: (row, v) => _checkRow(g, row, v),
                       onShift: (row, to) => _shift(g, row, to),
+                      showActions: _showActions,
+                      onShowActions: () => setState(() => _showActions = true),
+                      onCorrect: () => _correct(g),
                     ),
                   ),
           ),
-          if (_showActions && !_showUnassigned)
+          if (_showActions && !_showUnassigned && g != null)
             Container(
               width: 284,
               decoration: BoxDecoration(border: Border(left: hairlineSide)),
-              padding: const EdgeInsets.only(bottom: 64),
-              child: g == null
-                  ? const SizedBox.shrink()
-                  // Own layer: stale strips were seen here while scrolling.
-                  : RepaintBoundary(
-                      child: ActionPane(
-                        key: ValueKey(g.id),
-                        group: g,
-                        decision: _decisionOf(g.id),
-                        onChange: (d) => _update(g.id, d),
-                        onCorrect: () => _correct(g),
-                      ),
-                    ),
+              padding: const EdgeInsets.only(bottom: 104),
+              // Own layer: stale strips were seen here while scrolling.
+              child: RepaintBoundary(
+                child: ActionPane(
+                  key: ValueKey(g.id),
+                  group: g,
+                  decision: _decisionOf(g.id),
+                  onChange: (d) => _update(g.id, d),
+                  onCorrect: () => _correct(g),
+                ),
+              ),
             ),
         ],
       ),
@@ -692,12 +942,70 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
         .map((t) => t.mode)
         .firstOrNull;
     final ops = r.preview.ops.where((o) => o.selected).length;
-    final canStart =
-        !_executing &&
-        _pendingUpdates == 0 &&
-        ops > 0 &&
-        (conflicts == 0 || merges.isNotEmpty);
-    return Container(
+    String? blockedReason;
+    if (_executing) {
+      blockedReason = '正在整理，请稍候';
+    } else if (_pendingUpdates > 0) {
+      blockedReason = '正在更新整理计划，请稍候';
+    } else if (conflicts > 0 && merges.isEmpty) {
+      blockedReason = '存在冲突，请先处理';
+    } else if (ops == 0) {
+      final matched = r.scan.groups
+          .where((g) => isMatched(g, r.decisions[g.id]))
+          .toList();
+      final selected = matched
+          .where((g) => r.decisions[g.id]?.selected ?? true)
+          .toList();
+      if (matched.isEmpty) {
+        blockedReason = '没有可整理的作品，请先手动匹配';
+      } else if (selected.isEmpty) {
+        blockedReason = '未勾选作品，请在左侧勾选';
+      } else if (r.preview.ops.any((o) => o.warning != null)) {
+        blockedReason = '有文件需要确认，请勾选文件或修正对应关系';
+      } else if (selected.any(
+        (g) => g.files.any(
+          (f) =>
+              f.role == FileRole.video &&
+              !(r.decisions[g.id]?.overrides[f.path]?.ignore ?? false),
+        ),
+      )) {
+        blockedReason = '没有可执行的改动，请检查文件对应关系';
+      } else {
+        blockedReason = '未选择可整理的文件，请勾选文件';
+      }
+    }
+    final canStart = blockedReason == null;
+    final conflictLabel = conflicts == 0
+        ? '没有冲突'
+        : merges.isNotEmpty
+        ? '$conflicts 处冲突，点「开始整理」可分开保留'
+        : '$conflicts 处冲突，处理后才能整理';
+    final conflictWidget = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          conflicts == 0
+              ? CupertinoIcons.checkmark_seal_fill
+              : CupertinoIcons.exclamationmark_triangle_fill,
+          size: 14,
+          color: conflicts == 0 ? p.textFaint : p.danger,
+        ),
+        const SizedBox(width: 6),
+        Text(
+          conflictLabel,
+          key: const ValueKey('conflict-count'),
+          style: TextStyle(
+            fontSize: TypeScale.small,
+            color: conflicts == 0 ? p.textMuted : p.danger,
+            fontWeight: conflicts == 0 ? null : FontWeight.w600,
+            decoration: conflicts > 0 ? TextDecoration.underline : null,
+            decorationColor: conflicts > 0 ? p.danger : null,
+          ),
+        ),
+      ],
+    );
+
+    final bar = Container(
       padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
       decoration: BoxDecoration(
         color: p.panel,
@@ -733,27 +1041,23 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
             },
           ),
           const SizedBox(width: 16),
-          Icon(
-            conflicts == 0
-                ? CupertinoIcons.checkmark_seal_fill
-                : CupertinoIcons.exclamationmark_triangle_fill,
-            size: 14,
-            color: conflicts == 0 ? p.textFaint : p.danger,
-          ),
-          const SizedBox(width: 6),
-          Text(
-            conflicts == 0
-                ? '没有冲突'
-                : merges.isNotEmpty
-                ? '$conflicts 处冲突，点「开始整理」可分开保留'
-                : '$conflicts 处冲突，处理后才能整理',
-            key: const ValueKey('conflict-count'),
-            style: TextStyle(
-              fontSize: TypeScale.small,
-              color: conflicts == 0 ? p.textMuted : p.danger,
-              fontWeight: conflicts == 0 ? null : FontWeight.w600,
-            ),
-          ),
+          if (conflicts > 0)
+            Tooltip(
+              message: '点击定位到冲突文件',
+              child: Hoverable(
+                key: const ValueKey('conflict-jump'),
+                onTap: () => _jumpToFirstConflict(r),
+                builder: (_, hover) => Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 2,
+                  ),
+                  child: conflictWidget,
+                ),
+              ),
+            )
+          else
+            conflictWidget,
           const SizedBox(width: 12),
           Text(
             '$ops 处改动',
@@ -761,7 +1065,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
           ),
           const SizedBox(width: 18),
           Tooltip(
-            message: '⌘↩',
+            message: blockedReason ?? '⌘↩',
             child: FilledButton(
               key: const ValueKey('execute-button'),
               onPressed: canStart ? _execute : null,
@@ -770,6 +1074,21 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
           ),
         ],
       ),
+    );
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        bar,
+        if (blockedReason != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              blockedReason,
+              key: const ValueKey('execute-disabled-reason'),
+              style: TextStyle(fontSize: TypeScale.small, color: p.textMuted),
+            ),
+          ),
+      ],
     );
   }
 }

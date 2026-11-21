@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
 import '../../data/providers.dart';
+import '../../data/settings.dart';
 import '../tasks/tasks_page.dart' show taskWorksProvider;
 
 import '../../ui/tokens.dart';
@@ -33,90 +34,138 @@ class SourcesPage extends ConsumerWidget {
         for (final f in c.favorites) (conn: c, path: f),
     ];
     final add = OutlinedButton.icon(
-      onPressed: () => _edit(context, ref),
+      onPressed: () => editConnection(context, ref),
       icon: const Icon(CupertinoIcons.plus, size: 13),
       label: const Text('添加连接'),
     );
+    final missingTmdbKey =
+        !ref.watch(bootstrapProvider).demo &&
+        ref.watch(
+          settingsProvider.select((s) => s.tmdbApiKey.trim().isEmpty),
+        ) &&
+        ref.watch(builtInTmdbTokenProvider).isEmpty;
     final theme = Theme.of(context);
+    final tmdbBanner = missingTmdbKey ? const _MissingTmdbKeyBanner() : null;
     if (conns.isEmpty) {
       return PageScaffold(
         title: '来源',
-        child: EmptyState(
-          icon: CupertinoIcons.cloud,
-          title: '还没有连接',
-          message: '添加一个 Alist、WebDAV、SMB 共享或本地文件夹，就可以开始整理了',
-          action: add,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (tmdbBanner != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(48, 0, 32, 8),
+                child: tmdbBanner,
+              ),
+            Expanded(
+              child: EmptyState(
+                icon: CupertinoIcons.cloud,
+                title: '还没有连接',
+                message:
+                    '添加一个 Alist、WebDAV、SMB 共享或本地文件夹，就可以开始整理了\n\n'
+                    '添加连接 → 浏览并识别 → 确认后整理（可随时撤销）',
+                action: add,
+              ),
+            ),
+          ],
         ),
       );
     }
-    Widget label(String text, IconData icon) => Padding(
-      padding: const EdgeInsets.only(top: 26, bottom: 8),
-      child: Row(
-        children: [
-          Icon(icon, size: 13, color: theme.textTheme.labelSmall?.color),
-          const SizedBox(width: 6),
-          Text(text, style: theme.textTheme.labelSmall),
-        ],
-      ),
-    );
 
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(48, 30, 32, 32),
-      children: [
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                '来源',
-                key: const ValueKey('page-title'),
-                style: theme.textTheme.displaySmall,
-              ),
-            ),
-            add,
-          ],
-        ),
-        const SizedBox(height: 8),
-        label('连接', CupertinoIcons.link),
-        Panel(
-          padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
-          child: Rows(
-            children: [
-              for (var i = 0; i < conns.length; i++)
-                FadeIn(
-                  index: i,
-                  child: _ConnectionRow(connection: conns[i]),
-                ),
-            ],
-          ),
-        ),
-        label('收藏', CupertinoIcons.star),
-        if (favorites.isEmpty)
-          Text('打开一个文件夹，点右上角的 ☆，常用目录就会出现在这里', style: theme.textTheme.bodySmall)
-        else
+    return PageScaffold(
+      title: '来源',
+      actions: [add],
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(48, 0, 32, 32),
+        children: [
+          if (tmdbBanner != null) ...[tmdbBanner, const SizedBox(height: 8)],
+          const SectionLabel('连接'),
           Panel(
             padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
             child: Rows(
               children: [
-                for (final f in favorites)
-                  _FavoriteRow(connection: f.conn, path: f.path),
+                for (var i = 0; i < conns.length; i++)
+                  FadeIn(
+                    index: i,
+                    child: _ConnectionRow(connection: conns[i]),
+                  ),
               ],
             ),
           ),
-        if (done.isNotEmpty) ...[
-          label('最近整理', CupertinoIcons.clock),
-          Wrap(
-            spacing: 20,
-            runSpacing: 16,
-            children: [
-              for (var i = 0; i < done.length; i++)
-                FadeIn(
-                  index: i,
-                  child: _RecentTask(task: done[i]),
-                ),
-            ],
+          const SectionLabel('收藏'),
+          if (favorites.isEmpty)
+            Text(
+              '打开一个文件夹，点右上角的 ☆，常用目录就会出现在这里',
+              style: theme.textTheme.bodySmall,
+            )
+          else
+            Panel(
+              padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
+              child: Rows(
+                children: [
+                  for (final f in favorites)
+                    _FavoriteRow(connection: f.conn, path: f.path),
+                ],
+              ),
+            ),
+          if (done.isNotEmpty) ...[
+            const SectionLabel('最近整理'),
+            Wrap(
+              spacing: 20,
+              runSpacing: 16,
+              children: [
+                for (var i = 0; i < done.length; i++)
+                  FadeIn(
+                    index: i,
+                    child: _RecentTask(task: done[i]),
+                  ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _MissingTmdbKeyBanner extends StatelessWidget {
+  const _MissingTmdbKeyBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    return Container(
+      key: const ValueKey('missing-tmdb-banner'),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: p.warning.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(Radii.lg),
+        border: Border.all(
+          color: p.warning.withValues(alpha: 0.30),
+          width: hairline,
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            CupertinoIcons.exclamationmark_triangle_fill,
+            size: 15,
+            color: p.warning,
+          ),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Text(
+              '尚未配置 TMDB API key，无法自动识别影片信息',
+              style: TextStyle(fontSize: TypeScale.small),
+            ),
+          ),
+          const SizedBox(width: 8),
+          OutlinedButton(
+            onPressed: () => context.go('/settings'),
+            child: const Text('去设置'),
           ),
         ],
-      ],
+      ),
     );
   }
 }
@@ -133,12 +182,13 @@ void openBrowser(WidgetRef ref, ConnectionConfig c, [String? path]) {
   ref.read(browserSelectionProvider.notifier).clear();
 }
 
-Future<void> _edit(
+Future<void> editConnection(
   BuildContext context,
   WidgetRef ref, [
   ConnectionConfig? existing,
   bool copy = false,
 ]) async {
+  final isNew = existing == null || copy;
   final passwords = ref.read(connectionPasswordsProvider);
   final draft = await showConnectionDialog(
     context,
@@ -146,7 +196,7 @@ Future<void> _edit(
     copy: copy,
     initialPassword: existing == null ? null : passwords[existing.id],
     tester: ref.read(connectionTesterProvider),
-    lister: ref.read(connectionListerProvider),
+    openLister: ref.read(connectionListerSessionProvider),
   );
   if (draft == null || !context.mounted) return;
   ref.read(connectionsEditorProvider.notifier).upsert(draft.config);
@@ -155,6 +205,19 @@ Future<void> _edit(
     draft.config.id: draft.password,
   });
   ref.invalidate(connectionStatusProvider(draft.config.id));
+  if (isNew) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text('已添加「${draft.config.name}」'),
+          action: SnackBarAction(
+            label: '打开',
+            onPressed: () => openBrowser(ref, draft.config),
+          ),
+        ),
+      );
+  }
 }
 
 /// Deletes at once and offers 撤销: only the config and saved password go,
@@ -208,12 +271,12 @@ class _ConnectionRow extends ConsumerWidget {
       MenuAction('打开', () => openBrowser(ref, c), icon: CupertinoIcons.folder),
       MenuAction(
         '编辑',
-        () => _edit(context, ref, c),
+        () => editConnection(context, ref, c),
         icon: CupertinoIcons.pencil,
       ),
       MenuAction(
         '复制为新连接',
-        () => _edit(context, ref, c, true),
+        () => editConnection(context, ref, c, true),
         icon: CupertinoIcons.doc_on_doc,
       ),
       MenuAction(
@@ -297,13 +360,19 @@ class _ConnectionRow extends ConsumerWidget {
               ),
               const SizedBox(width: 12),
               StatusPill(label: label, color: color, busy: value == null),
-              if (failed)
+              if (failed) ...[
+                IconButton(
+                  tooltip: '编辑',
+                  icon: const Icon(CupertinoIcons.pencil),
+                  onPressed: () => editConnection(context, ref, c),
+                ),
                 IconButton(
                   tooltip: '重新检测',
                   icon: const Icon(CupertinoIcons.arrow_clockwise),
                   onPressed: () =>
                       ref.invalidate(connectionStatusProvider(c.id)),
                 ),
+              ],
               AnimatedOpacity(
                 duration: const Duration(milliseconds: 120),
                 opacity: hover || failed ? 1 : 0.35,
@@ -410,7 +479,10 @@ class _RecentTask extends ConsumerWidget {
     final works = ref.watch(taskWorksProvider(task.id)).value ?? const [];
     final w = works.firstOrNull;
     final title = w == null
-        ? task.paths.first.split('/').where((s) => s.isNotEmpty).lastOrNull ??
+        ? task.paths.firstOrNull
+                  ?.split('/')
+                  .where((s) => s.isNotEmpty)
+                  .lastOrNull ??
               '根目录'
         : works.length > 1
         ? '${w.title} 等 ${works.length} 部'

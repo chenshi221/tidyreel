@@ -146,4 +146,7 @@ class MemoryStorageBackend implements StorageBackend {
 
   @override
   Future<void> ping() async {}
+
+  @override
+  Future<void> close() async {}
 }

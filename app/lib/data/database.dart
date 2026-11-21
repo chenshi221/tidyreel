@@ -107,6 +107,13 @@ class AppDatabase extends _$AppDatabase {
   MigrationStrategy get migration => MigrationStrategy(
     beforeOpen: (details) async {
       await customStatement('PRAGMA foreign_keys = ON');
+      await customStatement(
+        'CREATE INDEX IF NOT EXISTS idx_batches_conn ON batches(connection_id)',
+      );
+      await customStatement(
+        'CREATE INDEX IF NOT EXISTS idx_history_batch_phase '
+        'ON history_records(batch_id, phase, kind, status)',
+      );
     },
     onUpgrade: (m, from, to) async {
       if (from < 2) {

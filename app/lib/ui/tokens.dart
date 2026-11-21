@@ -124,7 +124,45 @@ class Palette extends ThemeExtension<Palette> {
       Theme.of(context).extension<Palette>() ?? light;
 
   @override
-  Palette copyWith() => this;
+  Palette copyWith({
+    Color? canvas,
+    Color? sidebar,
+    Color? panel,
+    Color? hover,
+    Color? selected,
+    Color? line,
+    Color? lineStrong,
+    Color? text,
+    Color? textMuted,
+    Color? textFaint,
+    Color? accent,
+    Color? accentSoft,
+    Color? onAccent,
+    Color? success,
+    Color? warning,
+    Color? danger,
+    List<Color>? tones,
+    Color? contour,
+  }) => Palette(
+    canvas: canvas ?? this.canvas,
+    sidebar: sidebar ?? this.sidebar,
+    panel: panel ?? this.panel,
+    hover: hover ?? this.hover,
+    selected: selected ?? this.selected,
+    line: line ?? this.line,
+    lineStrong: lineStrong ?? this.lineStrong,
+    text: text ?? this.text,
+    textMuted: textMuted ?? this.textMuted,
+    textFaint: textFaint ?? this.textFaint,
+    accent: accent ?? this.accent,
+    accentSoft: accentSoft ?? this.accentSoft,
+    onAccent: onAccent ?? this.onAccent,
+    success: success ?? this.success,
+    warning: warning ?? this.warning,
+    danger: danger ?? this.danger,
+    tones: tones ?? this.tones,
+    contour: contour ?? this.contour,
+  );
 
   /// Same palette with another accent; the soft tint is mixed from it and the
   /// text on it flips to stay readable (the 墨 accent is near-white in dark).

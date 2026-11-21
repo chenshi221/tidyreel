@@ -72,7 +72,9 @@ class _FolderPickerState extends State<_FolderPicker> {
                         color: p.textFaint,
                       ),
                     TextButton(
-                      onPressed: () => _go('/${segs.take(i).join('/')}'),
+                      onPressed: i == segs.length
+                          ? null
+                          : () => _go('/${segs.take(i).join('/')}'),
                       child: Text(i == 0 ? '根目录' : segs[i - 1]),
                     ),
                   ],
@@ -93,7 +95,7 @@ class _FolderPickerState extends State<_FolderPicker> {
                       }
                       final dirs = snap.data;
                       if (dirs == null) {
-                        return const Center(child: CircularProgressIndicator());
+                        return const Center(child: Spinner(size: 20));
                       }
                       if (dirs.isEmpty) {
                         return const EmptyState(

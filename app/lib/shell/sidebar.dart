@@ -8,7 +8,7 @@ import '../data/providers.dart';
 import '../data/settings.dart';
 import '../features/sources/sources_page.dart' show openBrowser;
 import '../features/sources/sources_providers.dart';
-import '../features/tasks/tasks_page.dart' show stageLabel;
+import '../features/tasks/tasks_page.dart' show isTmdbKeyError, stageLabel;
 import '../ui/tokens.dart';
 import '../ui/widgets.dart';
 import '../widgets/common.dart';
@@ -39,11 +39,22 @@ class Sidebar extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final p = Palette.of(context);
     final collapsed = ref.watch(sidebarCollapsedProvider);
-    final tasks = ref.watch(tasksProvider).value ?? const <TaskSummary>[];
-    final pending = tasks
-        .where((t) => t.stage == TaskStage.awaitingReview)
-        .length;
-    final active = tasks.where((t) => t.stage.isActive).toList();
+    final pending = ref.watch(
+      tasksProvider.select(
+        (a) =>
+            a.value?.where((t) => t.stage == TaskStage.awaitingReview).length ??
+            0,
+      ),
+    );
+    final hasRunning = ref.watch(
+      tasksProvider.select(
+        (a) =>
+            a.value?.any(
+              (t) => t.stage.isActive && t.stage != TaskStage.awaitingReview,
+            ) ??
+            false,
+      ),
+    );
     final location = GoRouterState.of(context).uri.path;
     final favorites = [
       for (final c in ref.watch(connectionsEditorProvider))
@@ -52,8 +63,8 @@ class Sidebar extends ConsumerWidget {
     // macOS: the traffic lights float over the sidebar's top-left corner.
     final mac = Theme.of(context).platform == TargetPlatform.macOS;
 
-    // Toast when a background task finishes recognizing or executing, unless
-    // that task's page is already open.
+    // Toast when a background task finishes recognizing, fails, or finishes
+    // executing, unless that task's page is already open.
     ref.listen(tasksProvider, (prev, next) {
       final before = {for (final t in prev?.value ?? const []) t.id: t.stage};
       for (final t in next.value ?? const <TaskSummary>[]) {
@@ -64,14 +75,23 @@ class Sidebar extends ConsumerWidget {
         if (was == null || was == t.stage || onTaskPage) {
           continue;
         }
-        final (msg, path) = switch (t.stage) {
+        final (msg, path, actionLabel) = switch (t.stage) {
           TaskStage.awaitingReview => (
             '识别完成，等你确认',
             '/tasks/${t.id.value}/review',
+            '查看',
           ),
-          TaskStage.done => ('整理完成', '/tasks/${t.id.value}'),
-          TaskStage.partiallyFailed => ('整理完成，但有失败项', '/tasks/${t.id.value}'),
-          _ => (null, null),
+          TaskStage.done => ('整理完成', '/tasks/${t.id.value}', '查看'),
+          TaskStage.partiallyFailed => (
+            '整理完成，但有失败项',
+            '/tasks/${t.id.value}',
+            '查看',
+          ),
+          TaskStage.failed =>
+            isTmdbKeyError(t.message)
+                ? ('识别失败：请先填写 TMDB API key', '/settings', '去设置')
+                : ('识别失败', '/tasks/${t.id.value}', '查看'),
+          _ => (null, null, null),
         };
         if (msg == null) continue;
         final s = ref.read(settingsProvider);
@@ -92,7 +112,7 @@ class Sidebar extends ConsumerWidget {
             SnackBar(
               content: Text('「$name」$msg'),
               action: SnackBarAction(
-                label: '查看',
+                label: actionLabel!,
                 onPressed: () => context.go(path!),
               ),
             ),
@@ -111,15 +131,16 @@ class Sidebar extends ConsumerWidget {
     Widget item(
       String path,
       IconData icon,
-      IconData selectedIcon,
       String label, {
       int badge = 0,
+      bool running = false,
     }) => _NavItem(
       key: ValueKey('nav-$label'),
-      icon: location.startsWith(path) ? selectedIcon : icon,
+      icon: icon,
       label: label,
       selected: location.startsWith(path),
       badge: badge,
+      running: running,
       collapsed: collapsed,
       onTap: () => go(path),
     );
@@ -173,25 +194,15 @@ class Sidebar extends ConsumerWidget {
                 if (collapsed && !mac) Center(child: toggle),
                 if (!collapsed) _Brand(trailing: mac ? null : toggle),
                 SizedBox(height: collapsed ? 12 : 26),
-                item(
-                  '/sources',
-                  CupertinoIcons.folder,
-                  CupertinoIcons.folder,
-                  '来源',
-                ),
+                item('/sources', CupertinoIcons.folder, '来源'),
                 item(
                   '/tasks',
                   CupertinoIcons.square_list,
-                  CupertinoIcons.square_list,
                   '任务',
                   badge: pending,
+                  running: hasRunning,
                 ),
-                item(
-                  '/naming',
-                  CupertinoIcons.textformat,
-                  CupertinoIcons.textformat,
-                  '命名规则',
-                ),
+                item('/naming', CupertinoIcons.textformat, '命名规则'),
                 if (collapsed)
                   const Spacer()
                 else
@@ -213,35 +224,82 @@ class Sidebar extends ConsumerWidget {
                                 context.go('/sources');
                               },
                             ),
-                        ],
-                        if (active.isNotEmpty) ...[
-                          sectionTitle('后台任务'),
-                          for (final t in active)
-                            _TaskItem(
-                              task: t,
-                              onTap: () => go(
-                                t.stage == TaskStage.awaitingReview
-                                    ? '/tasks/${t.id.value}/review'
-                                    : '/tasks',
+                          if (favorites.length > 6)
+                            Hoverable(
+                              key: const ValueKey('side-fav-more'),
+                              onTap: () => go('/sources'),
+                              builder: (context, hover) => Container(
+                                height: 28,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: hover ? p.hover : Colors.transparent,
+                                  borderRadius: BorderRadius.circular(Radii.lg),
+                                ),
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  '还有 ${favorites.length - 6} 个收藏…',
+                                  style: TextStyle(
+                                    fontSize: TypeScale.small,
+                                    color: p.textFaint,
+                                  ),
+                                ),
                               ),
                             ),
                         ],
+                        _ActiveTasksSection(onGo: go),
                       ],
                     ),
                   ),
                 if (!collapsed)
                   Divider(height: 17, thickness: hairline, color: p.line),
-                item(
-                  '/settings',
-                  CupertinoIcons.gear,
-                  CupertinoIcons.gear,
-                  '设置',
-                ),
+                item('/settings', CupertinoIcons.gear, '设置'),
               ],
             ),
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Isolated subscriber for active background tasks so 10Hz progress ticks don't
+/// rebuild the entire sidebar.
+class _ActiveTasksSection extends ConsumerWidget {
+  final void Function(String path) onGo;
+
+  const _ActiveTasksSection({required this.onGo});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final active = ref.watch(
+      tasksProvider.select(
+        (a) => [
+          for (final t in a.value ?? const <TaskSummary>[])
+            if (t.stage.isActive) t,
+        ],
+      ),
+    );
+    if (active.isEmpty) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 22, 10, 6),
+          child: Text('后台任务', style: Theme.of(context).textTheme.labelSmall),
+        ),
+        for (final t in active)
+          _TaskItem(
+            task: t,
+            onTap: () => onGo(
+              t.stage == TaskStage.awaitingReview
+                  ? '/tasks/${t.id.value}/review'
+                  : '/tasks/${t.id.value}',
+            ),
+          ),
+      ],
     );
   }
 }
@@ -290,6 +348,7 @@ class _NavItem extends StatelessWidget {
   final String label;
   final bool selected;
   final int badge;
+  final bool running;
   final bool collapsed;
   final VoidCallback onTap;
 
@@ -299,6 +358,7 @@ class _NavItem extends StatelessWidget {
     required this.label,
     required this.selected,
     required this.badge,
+    this.running = false,
     required this.collapsed,
     required this.onTap,
   });
@@ -320,9 +380,16 @@ class _NavItem extends StatelessWidget {
         ),
         child: collapsed
             ? Center(
-                child: badge == 0
-                    ? iconW
-                    : Badge(label: Text('$badge'), child: iconW),
+                child: badge > 0
+                    ? Badge(label: Text('$badge'), child: iconW)
+                    : running
+                    ? Badge(
+                        key: const ValueKey('nav-running-dot'),
+                        smallSize: 6,
+                        backgroundColor: p.accent,
+                        child: iconW,
+                      )
+                    : iconW,
               )
             : Row(
                 children: [

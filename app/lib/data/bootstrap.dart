@@ -88,7 +88,31 @@ class JsonStore {
 
   void write(String key, Object? value) {
     _data[key] = value;
-    _file?.writeAsStringSync(const JsonEncoder.withIndent('  ').convert(_data));
+    _flush();
+  }
+
+  void writeAll(Map<String, Object?> entries) {
+    if (entries.isEmpty) return;
+    _data.addAll(entries);
+    _flush();
+  }
+
+  void _flush() {
+    final file = _file;
+    if (file == null) return;
+    final encoded = const JsonEncoder.withIndent('  ').convert(_data);
+    final tmp = File('${file.path}.tmp');
+    try {
+      tmp.writeAsStringSync(encoded, flush: true);
+      tmp.renameSync(file.path);
+    } on Object {
+      try {
+        if (tmp.existsSync()) tmp.deleteSync();
+      } on Object {
+        // Ignore cleanup failure if locked or missing.
+      }
+      file.writeAsStringSync(encoded, flush: true);
+    }
   }
 }
 
@@ -111,7 +135,7 @@ class SecretStore {
       // One-time import of what earlier versions kept in the keychain.
       try {
         final old = await const FlutterSecureStorage().readAll();
-        old.forEach(s._store.write);
+        s._store.writeAll(old);
       } catch (_) {}
     }
     if (!file.existsSync()) file.writeAsStringSync('{}');

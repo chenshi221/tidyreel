@@ -1,6 +1,5 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
@@ -8,388 +7,15 @@ import '../../data/providers.dart';
 import '../../ui/tokens.dart';
 import '../../ui/widgets.dart';
 import '../../widgets/common.dart';
+import 'edit_row_sheet.dart';
 import 'review_logic.dart';
+import 'tmdb_search_dialog.dart';
 
-/// TMDB episodes of one season, keyed by (tmdbId, season). Cached by the
-/// provider for the life of the review page.
-final seasonEpisodesProvider = FutureProvider.autoDispose
-    .family<List<Episode>, (int, int)>(
-      (ref, k) => ref.watch(metadataProvider).season(k.$1, k.$2),
-    );
-
-/// Seasons of a show the user matched by hand; group.show only has the show
-/// the recognizer found.
-final showDetailProvider = FutureProvider.autoDispose.family<ShowDetail, int>(
-  (ref, id) => ref.watch(metadataProvider).show(id),
-);
-
-String _country(String? code) => switch (code) {
-  null => '',
-  'CN' => '中国大陆',
-  'HK' => '中国香港',
-  'TW' => '中国台湾',
-  'JP' => '日本',
-  'KR' => '韩国',
-  'US' => '美国',
-  'GB' => '英国',
-  'FR' => '法国',
-  'DE' => '德国',
-  'TH' => '泰国',
-  'IN' => '印度',
-  _ => code,
-};
-
-String _date(DateTime? d) => d == null
-    ? ''
-    : '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+export 'edit_row_sheet.dart';
+export 'merge_dialog.dart';
+export 'tmdb_search_dialog.dart';
 
 String _pad(int n) => n.toString().padLeft(2, '0');
-
-// ---------------------------------------------------------------- TMDB search
-
-class CandidateTile extends StatelessWidget {
-  final Candidate candidate;
-  final VoidCallback onTap;
-
-  const CandidateTile({
-    super.key,
-    required this.candidate,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final c = candidate;
-    final p = Palette.of(context);
-    return HoverRow(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-      borderRadius: BorderRadius.circular(Radii.sm),
-      leading: Poster(posterPath: c.posterPath, width: 34, height: 51),
-      title: Text(c.title),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            [
-              if (c.originalTitle != null && c.originalTitle != c.title)
-                c.originalTitle!,
-              if (c.year != null) '${c.year}',
-              c.kind == MediaKind.movie ? '电影' : '剧集',
-              if (c.originCountry != null) _country(c.originCountry),
-            ].join(' · '),
-          ),
-          if (c.overview != null)
-            Text(
-              c.overview!,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: p.textFaint),
-            ),
-        ],
-      ),
-      trailing: c.voteAverage == null || c.voteAverage == 0
-          ? null
-          : _Rating(c.voteAverage!),
-      onTap: onTap,
-    );
-  }
-}
-
-/// Search box + type / year filters + result list; shared by the 纠错 dialog
-/// and the inline box on unmatched groups.
-class TmdbSearchBox extends ConsumerStatefulWidget {
-  final String initial;
-  final ValueChanged<Candidate> onPick;
-  final bool autoSearch;
-
-  const TmdbSearchBox({
-    super.key,
-    required this.initial,
-    required this.onPick,
-    this.autoSearch = false,
-  });
-
-  @override
-  ConsumerState<TmdbSearchBox> createState() => _TmdbSearchBoxState();
-}
-
-class _TmdbSearchBoxState extends ConsumerState<TmdbSearchBox> {
-  late final _c = TextEditingController(text: widget.initial);
-  // Both filters start open: the guess being corrected may be what's wrong
-  // (a year taken from a wrong match hides the right one). MediaKind.unknown = 全部.
-  final _yearC = TextEditingController();
-  var _kind = MediaKind.unknown;
-  List<Candidate>? _results;
-  var _busy = false;
-  var _searchSeq = 0;
-  String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    if (widget.autoSearch) _search();
-  }
-
-  @override
-  void didUpdateWidget(TmdbSearchBox oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.initial != widget.initial) {
-      _c.text = widget.initial;
-      _yearC.text = '';
-      _kind = MediaKind.unknown;
-      _results = null;
-      _error = null;
-      if (widget.autoSearch) _search();
-    }
-  }
-
-  @override
-  void dispose() {
-    _c.dispose();
-    _yearC.dispose();
-    super.dispose();
-  }
-
-  int? get _year {
-    final y = int.tryParse(_yearC.text.trim());
-    return y != null && y >= 1870 && y <= 2100 ? y : null;
-  }
-
-  void _setYear(int? y) {
-    _yearC.text = y?.toString() ?? '';
-    _search();
-  }
-
-  Future<void> _search() async {
-    final q = _c.text.trim();
-    if (q.isEmpty) return;
-    final seq = ++_searchSeq;
-    setState(() {
-      _busy = true;
-      _error = null;
-    });
-    try {
-      final r = await ref
-          .read(metadataProvider)
-          .search(
-            q,
-            kind: _kind == MediaKind.unknown ? null : _kind,
-            year: _year,
-          );
-      if (mounted && seq == _searchSeq) setState(() => _results = r);
-    } catch (e) {
-      if (mounted && seq == _searchSeq) setState(() => _error = '搜索失败：$e');
-    } finally {
-      if (mounted && seq == _searchSeq) setState(() => _busy = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final p = Palette.of(context);
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        TextField(
-          controller: _c,
-          style: const TextStyle(fontSize: 13),
-          decoration: InputDecoration(
-            hintText: '搜索 TMDB',
-            prefixIcon: const Icon(CupertinoIcons.search, size: 14),
-            suffixIcon: _busy
-                ? const Padding(
-                    padding: EdgeInsets.all(9),
-                    child: CircularProgressIndicator(strokeWidth: 1.5),
-                  )
-                : IconButton(
-                    tooltip: '搜索',
-                    iconSize: 15,
-                    icon: const Icon(CupertinoIcons.arrow_right_circle_fill),
-                    onPressed: _search,
-                  ),
-          ),
-          onSubmitted: (_) => _search(),
-        ),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 6,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            Segmented<MediaKind>(
-              key: const ValueKey('search-kind'),
-              options: const {
-                MediaKind.unknown: '全部',
-                MediaKind.episode: '剧集',
-                MediaKind.movie: '电影',
-              },
-              value: _kind,
-              onChanged: (k) {
-                setState(() => _kind = k);
-                _search();
-              },
-            ),
-            SizedBox(
-              width: 120,
-              child: TextField(
-                key: const ValueKey('search-year'),
-                controller: _yearC,
-                style: const TextStyle(fontSize: 13),
-                keyboardType: TextInputType.number,
-                inputFormatters: [
-                  FilteringTextInputFormatter.digitsOnly,
-                  LengthLimitingTextInputFormatter(4),
-                ],
-                decoration: InputDecoration(
-                  hintText: '年份',
-                  suffixIcon: PopupMenuButton<int>(
-                    tooltip: '选择年份',
-                    iconSize: 14,
-                    icon: const Icon(CupertinoIcons.calendar),
-                    onSelected: (y) => _setYear(y == 0 ? null : y),
-                    itemBuilder: (_) => [
-                      const PopupMenuItem(
-                        value: 0,
-                        height: 28,
-                        child: Text('不限'),
-                      ),
-                      for (var y = DateTime.now().year + 1; y >= 1950; y--)
-                        PopupMenuItem(value: y, height: 28, child: Text('$y')),
-                    ],
-                  ),
-                ),
-                onSubmitted: (_) => _search(),
-              ),
-            ),
-          ],
-        ),
-        if (_error != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Text(
-              _error!,
-              style: TextStyle(color: p.danger, fontSize: 12),
-            ),
-          ),
-        if (_results != null && _results!.isEmpty)
-          Padding(
-            padding: const EdgeInsets.all(10),
-            child: Text('没有找到结果', style: Theme.of(context).textTheme.bodySmall),
-          ),
-        if (_results != null && _results!.isNotEmpty) const SizedBox(height: 4),
-        for (final c in _results ?? const <Candidate>[])
-          CandidateTile(candidate: c, onTap: () => widget.onPick(c)),
-      ],
-    );
-  }
-}
-
-/// Search TMDB and pick a work. With [pinKeyword], also offers
-/// 「以后都这样匹配」: the returned `pin` is the keyword to remember (片名规则).
-Future<({Candidate match, String? pin})?> showTmdbSearchDialog(
-  BuildContext context, {
-  required String initial,
-  String? pinKeyword,
-}) {
-  var pin = false;
-  final keyword = TextEditingController(text: pinKeyword);
-  return showDialog<({Candidate match, String? pin})>(
-    context: context,
-    builder: (ctx) => StatefulBuilder(
-      builder: (ctx, setState) => MacSheet(
-        child: SizedBox(
-          width: 520,
-          height: 520,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text('重新搜索 TMDB', style: Theme.of(ctx).textTheme.titleMedium),
-                const SizedBox(height: 12),
-                Expanded(
-                  child: SingleChildScrollView(
-                    child: TmdbSearchBox(
-                      initial: initial,
-                      autoSearch: true,
-                      onPick: (c) => Navigator.pop(ctx, (
-                        match: c,
-                        pin: pin && keyword.text.trim().isNotEmpty
-                            ? keyword.text.trim()
-                            : null,
-                      )),
-                    ),
-                  ),
-                ),
-                if (pinKeyword != null) ...[
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Checkbox(
-                        key: const ValueKey('pin-match'),
-                        value: pin,
-                        onChanged: (v) => setState(() => pin = v ?? false),
-                      ),
-                      const Text('以后文件夹名包含', style: TextStyle(fontSize: 13)),
-                      const SizedBox(width: 6),
-                      SizedBox(
-                        width: 150,
-                        child: TextField(
-                          key: const ValueKey('pin-keyword'),
-                          controller: keyword,
-                          enabled: pin,
-                          style: const TextStyle(fontSize: 13),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      const Text('时都匹配到选中的作品', style: TextStyle(fontSize: 13)),
-                    ],
-                  ),
-                ],
-                const SizedBox(height: 10),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: OutlinedButton(
-                    onPressed: () => Navigator.pop(ctx),
-                    child: const Text('取消'),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    ),
-  ).whenComplete(keyword.dispose);
-}
-
-class _Rating extends StatelessWidget {
-  final double value;
-
-  const _Rating(this.value);
-
-  @override
-  Widget build(BuildContext context) {
-    // Neutral star: the page's only colour stays the accent.
-    final c = Palette.of(context).textMuted;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(CupertinoIcons.star_fill, size: 11, color: c),
-        const SizedBox(width: 3),
-        Text(
-          value.toStringAsFixed(1),
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-            color: Palette.of(context).text,
-          ),
-        ),
-      ],
-    );
-  }
-}
 
 // ---------------------------------------------------------------- left pane
 
@@ -412,30 +38,36 @@ class GroupList extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) => groups.isEmpty
-      ? const EmptyState(icon: CupertinoIcons.tray, title: '这里没有作品')
-      : ListView.builder(
-          padding: const EdgeInsets.fromLTRB(10, 4, 10, 12),
-          itemCount: groups.length,
-          itemBuilder: (_, i) {
-            final g = groups[i];
-            final d = review.decisions[g.id];
-            return _GroupCard(
-              group: g,
-              decision: d,
-              selected: g.id == selected,
-              onSelect: () => onSelect(g.id),
-              onCheck: (v) => onCheck(g.id, v),
-              onPick: (c) => onPick(g, c),
-            );
-          },
+  Widget build(BuildContext context) {
+    if (groups.isEmpty) {
+      return const EmptyState(icon: CupertinoIcons.tray, title: '这里没有作品');
+    }
+    final conflicted = conflictGroups(review);
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(10, 4, 10, 12),
+      itemCount: groups.length,
+      itemBuilder: (_, i) {
+        final g = groups[i];
+        final d = review.decisions[g.id];
+        return _GroupCard(
+          group: g,
+          decision: d,
+          selected: g.id == selected,
+          hasConflict: conflicted.contains(g.id),
+          onSelect: () => onSelect(g.id),
+          onCheck: (v) => onCheck(g.id, v),
+          onPick: (c) => onPick(g, c),
         );
+      },
+    );
+  }
 }
 
 class _GroupCard extends StatelessWidget {
   final MediaGroup group;
   final GroupDecision? decision;
   final bool selected;
+  final bool hasConflict;
   final VoidCallback onSelect;
   final ValueChanged<bool> onCheck;
   final ValueChanged<Candidate> onPick;
@@ -444,6 +76,7 @@ class _GroupCard extends StatelessWidget {
     required this.group,
     required this.decision,
     required this.selected,
+    required this.hasConflict,
     required this.onSelect,
     required this.onCheck,
     required this.onPick,
@@ -520,18 +153,38 @@ class _GroupCard extends StatelessWidget {
                         ),
                       const SizedBox(height: 3),
                       if (m == null)
-                        Tag('未能识别', color: p.danger)
+                        Wrap(
+                          spacing: 4,
+                          runSpacing: 4,
+                          children: [
+                            Tag('未能识别', color: p.danger),
+                            if (hasConflict)
+                              Tag(
+                                '冲突',
+                                key: ValueKey('group-conflict-${g.id.value}'),
+                                color: p.danger,
+                              ),
+                          ],
+                        )
                       else
                         Row(
                           children: [
                             Tag(isTv ? '剧集' : '电影'),
+                            if (hasConflict) ...[
+                              const SizedBox(width: 4),
+                              Tag(
+                                '冲突',
+                                key: ValueKey('group-conflict-${g.id.value}'),
+                                color: p.danger,
+                              ),
+                            ],
                             const SizedBox(width: 6),
                             Flexible(
                               child: Text(
                                 [
                                   m.year?.toString() ?? '年份未知',
                                   if (m.originCountry != null)
-                                    _country(m.originCountry),
+                                    countryLabel(m.originCountry),
                                 ].join(' · '),
                                 style: theme.textTheme.bodySmall,
                                 overflow: TextOverflow.ellipsis,
@@ -651,455 +304,6 @@ class _ExpandableTextState extends State<ExpandableText> {
   );
 }
 
-String seasonTabLabel(int season) => season == 0 ? '特别篇' : '第 $season 季';
-
-enum _RowKind { main, special, extra, ignore }
-
-/// Returns the override for [row], or null when cancelled. For episodes the
-/// sheet lists the matched show's TMDB episodes to pick from; typing a season
-/// and episode is the fallback (手动填写).
-Future<FileOverride?> showEditRowDialog(
-  BuildContext context,
-  MediaGroup group,
-  ReviewRow row, {
-  GroupDecision? decision,
-  List<ReviewRow> rows = const [],
-}) => showDialog<FileOverride>(
-  context: context,
-  builder: (_) =>
-      _EditRowSheet(group: group, row: row, decision: decision, rows: rows),
-);
-
-class _EditRowSheet extends ConsumerStatefulWidget {
-  final MediaGroup group;
-  final ReviewRow row;
-  final GroupDecision? decision;
-  final List<ReviewRow> rows;
-
-  const _EditRowSheet({
-    required this.group,
-    required this.row,
-    required this.decision,
-    required this.rows,
-  });
-
-  @override
-  ConsumerState<_EditRowSheet> createState() => _EditRowSheetState();
-}
-
-class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
-  late final row = widget.row;
-  late final isTv = widget.group.kind == MediaKind.episode;
-  late final current = targetRef(row);
-  late final seasonC = TextEditingController(
-    text: '${row.season == noSeason ? 1 : row.season}',
-  );
-  late final epC = TextEditingController(
-    text: '${episodeOf(row.file, row.override) ?? ''}',
-  );
-  late var kind = row.override?.ignore ?? false
-      ? _RowKind.ignore
-      : switch (row.override?.kind) {
-          MediaKind.special => _RowKind.special,
-          MediaKind.extra => _RowKind.extra,
-          _ => _RowKind.main,
-        };
-  late var season = current?.season ?? 1;
-  EpisodeRef? picked;
-  var manual = false;
-
-  MediaKind? get _kind => switch (kind) {
-    _RowKind.main =>
-      widget.group.kind == MediaKind.movie
-          ? MediaKind.movie
-          : MediaKind.episode,
-    _RowKind.special => MediaKind.special,
-    _RowKind.extra => MediaKind.extra,
-    _RowKind.ignore => row.override?.kind,
-  };
-
-  String? _validationError(bool fields) {
-    if (!fields) return null;
-    final s = int.tryParse(seasonC.text.trim());
-    if (s == null || s < 0) return '季号需为不小于 0 的整数';
-    final e = int.tryParse(epC.text.trim());
-    if (e == null || e < 1) return '集号需为大于 0 的整数';
-    return null;
-  }
-
-  void _confirm(EpisodeRef e) => Navigator.pop(
-    context,
-    FileOverride(season: e.season, episode: e.episode, kind: _kind),
-  );
-
-  void _save() => Navigator.pop(
-    context,
-    FileOverride(
-      season: isTv ? int.tryParse(seasonC.text.trim()) : null,
-      episode: isTv ? int.tryParse(epC.text.trim()) : null,
-      kind: _kind,
-      ignore: kind == _RowKind.ignore,
-    ),
-  );
-
-  @override
-  void dispose() {
-    seasonC.dispose();
-    epC.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final match = effectiveMatch(widget.group, widget.decision);
-    final tmdbId = match?.tmdbId;
-    final fetch =
-        isTv &&
-        tmdbId != null &&
-        widget.group.show?.info.tmdbId != tmdbId &&
-        widget.decision?.episodeGroupId == null;
-    final fetched = fetch ? ref.watch(showDetailProvider(tmdbId)) : null;
-    final show = fetch ? fetched!.value : widget.group.show;
-    final sizes = fetch
-        ? {
-            for (final s in show?.seasons ?? const <SeasonInfo>[])
-              if (s.number > 0) s.number: s.episodeCount,
-          }
-        : seasonSizes(widget.group, widget.decision);
-    final hasSpecials = show?.seasons.any((s) => s.number == 0) ?? false;
-    final seasons = switch (kind) {
-      _RowKind.main => (sizes.keys.toList()..sort()),
-      _RowKind.special when hasSpecials && sizes.isNotEmpty => [0],
-      _ => const <int>[],
-    };
-    final picking = isTv && tmdbId != null && seasons.isNotEmpty && !manual;
-    if (picking && !seasons.contains(season)) season = seasons.first;
-    final waiting =
-        !manual &&
-        (fetched?.isLoading ?? false) &&
-        (kind == _RowKind.main || kind == _RowKind.special);
-    final fields =
-        isTv &&
-        !picking &&
-        !waiting &&
-        kind != _RowKind.ignore &&
-        kind != _RowKind.extra;
-    final error = _validationError(fields);
-    return MacSheet(
-      child: SizedBox(
-        width: picking ? 620 : 460,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text('修正这个文件', style: theme.textTheme.titleMedium),
-              const SizedBox(height: 4),
-              Text(
-                row.file.name,
-                style: theme.textTheme.bodySmall,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-              const SizedBox(height: 14),
-              Center(
-                child: Segmented<_RowKind>(
-                  options: const {
-                    _RowKind.main: '正片',
-                    _RowKind.special: '特别篇',
-                    _RowKind.extra: '花絮',
-                    _RowKind.ignore: '忽略',
-                  },
-                  value: kind,
-                  onChanged: (v) => setState(() {
-                    kind = v;
-                    picked = null;
-                  }),
-                ),
-              ),
-              if (waiting)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 40),
-                  child: Center(child: CircularProgressIndicator()),
-                ),
-              if (picking) ...[
-                const SizedBox(height: 14),
-                _showHeader(match!),
-                const SizedBox(height: 12),
-                Flexible(
-                  child: SizedBox(
-                    height: 300,
-                    child: Panel(
-                      framed: true,
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          SizedBox(width: 110, child: _seasonList(seasons)),
-                          Container(
-                            width: hairline,
-                            color: Palette.of(context).line,
-                          ),
-                          Expanded(child: _episodeList(tmdbId, season)),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-              if (fields) ...[
-                const SizedBox(height: 12),
-                FormRow(
-                  label: '季',
-                  labelWidth: 56,
-                  child: TextField(
-                    key: const ValueKey('edit-season'),
-                    controller: seasonC,
-                    keyboardType: TextInputType.number,
-                    onChanged: (_) => setState(() {}),
-                  ),
-                ),
-                FormRow(
-                  label: '集',
-                  labelWidth: 56,
-                  child: TextField(
-                    key: const ValueKey('edit-episode'),
-                    controller: epC,
-                    keyboardType: TextInputType.number,
-                    onChanged: (_) => setState(() {}),
-                  ),
-                ),
-                if (error != null) ...[
-                  const SizedBox(height: 6),
-                  Text(
-                    error,
-                    key: const ValueKey('edit-validation-error'),
-                    style: TextStyle(
-                      fontSize: TypeScale.small,
-                      color: Palette.of(context).danger,
-                    ),
-                  ),
-                ],
-              ],
-              const SizedBox(height: 14),
-              Row(
-                children: [
-                  if (isTv &&
-                      tmdbId != null &&
-                      seasons.isNotEmpty &&
-                      kind != _RowKind.ignore)
-                    TextButton(
-                      key: const ValueKey('edit-manual'),
-                      onPressed: () => setState(() => manual = !manual),
-                      child: Text(manual ? '从 TMDB 剧集里选' : '手动填写季和集'),
-                    ),
-                  const Spacer(),
-                  OutlinedButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('取消'),
-                  ),
-                  if (picking) ...[
-                    const SizedBox(width: 8),
-                    FilledButton(
-                      key: const ValueKey('pick-confirm'),
-                      onPressed: picked == null
-                          ? null
-                          : () => _confirm(picked!),
-                      child: const Text('确认'),
-                    ),
-                  ],
-                  if (!picking && !waiting) ...[
-                    const SizedBox(width: 8),
-                    FilledButton(
-                      key: const ValueKey('edit-save'),
-                      onPressed: error != null ? null : _save,
-                      child: const Text('保存'),
-                    ),
-                  ],
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _showHeader(Candidate m) {
-    final p = Palette.of(context);
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Poster(posterPath: m.posterPath, width: 46, height: 69),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                m.title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: TypeScale.body,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                [
-                  if (m.year != null) '${m.year}',
-                  if (m.overview != null) m.overview!,
-                ].join(' | '),
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 12, color: p.textMuted),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _seasonList(List<int> seasons) {
-    final p = Palette.of(context);
-    return ListView(
-      children: [
-        for (final s in seasons)
-          Hoverable(
-            key: ValueKey('pick-season-$s'),
-            onTap: () => setState(() => season = s),
-            builder: (context, hover) => Container(
-              height: 38,
-              alignment: Alignment.centerLeft,
-              padding: const EdgeInsets.only(left: 11),
-              decoration: BoxDecoration(
-                color: hover ? p.hover : Colors.transparent,
-                border: Border(
-                  left: BorderSide(
-                    width: 3,
-                    color: s == season ? p.text : Colors.transparent,
-                  ),
-                ),
-              ),
-              child: Text(
-                seasonTabLabel(s),
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: s == season ? FontWeight.w600 : FontWeight.w400,
-                  color: s == season ? null : p.textMuted,
-                ),
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-
-  Widget _episodeList(int tmdbId, int season) {
-    final p = Palette.of(context);
-    // Which file each episode already gets, so double-booking shows.
-    final taken = <EpisodeRef, String>{
-      for (final r in widget.rows)
-        // Later files follow this one when it moves, so they never clash.
-        if (r.file.path != row.file.path &&
-            r.file.role == FileRole.video &&
-            !r.ignored &&
-            (episodeOf(r.file, null) ?? 0) < (episodeOf(row.file, null) ?? 0))
-          ?targetRef(r): r.file.name,
-    };
-    return ref
-        .watch(seasonEpisodesProvider((tmdbId, season)))
-        .when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) => EmptyState(
-            icon: CupertinoIcons.exclamationmark_triangle,
-            title: '读不到这一季的剧集',
-            message: '可以用「手动填写季和集」',
-          ),
-          data: (eps) => ListView(
-            padding: const EdgeInsets.all(4),
-            children: [
-              for (final e in eps)
-                Hoverable(
-                  key: ValueKey('pick-ep-$season-${e.number}'),
-                  onTap: () =>
-                      setState(() => picked = EpisodeRef(season, e.number)),
-                  builder: (context, hover) {
-                    final ref = EpisodeRef(season, e.number);
-                    final isCurrent = ref == current;
-                    final other = taken[ref];
-                    return Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 7,
-                      ),
-                      decoration: BoxDecoration(
-                        color: ref == picked
-                            ? p.selected
-                            : hover
-                            ? p.hover
-                            : Colors.transparent,
-                        borderRadius: BorderRadius.circular(Radii.sm),
-                      ),
-                      child: Row(
-                        children: [
-                          SizedBox(
-                            width: 34,
-                            child: Text(
-                              'E${_pad(e.number)}',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: p.textMuted,
-                              ),
-                            ),
-                          ),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  [
-                                    e.title ?? '第 ${e.number} 集',
-                                    if (e.airDate != null) fmtDate(e.airDate),
-                                  ].join('  ·  '),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(fontSize: 13),
-                                ),
-                                if (other != null)
-                                  Text(
-                                    '已对应：$other',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontSize: TypeScale.small,
-                                      color: p.warning,
-                                    ),
-                                  ),
-                              ],
-                            ),
-                          ),
-                          if (isCurrent)
-                            Icon(
-                              CupertinoIcons.checkmark,
-                              size: 13,
-                              color: p.text,
-                            ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-            ],
-          ),
-        );
-  }
-}
-
 /// Artwork header: blurred backdrop (or warm gradient), poster, titles,
 /// metadata, synopsis and completeness.
 class WorkHeader extends StatelessWidget {
@@ -1108,12 +312,18 @@ class WorkHeader extends StatelessWidget {
 
   /// Season shown below: its poster replaces the show's when TMDB has one.
   final int? season;
+  final bool showActions;
+  final VoidCallback? onShowActions;
+  final VoidCallback? onCorrect;
 
   const WorkHeader({
     super.key,
     required this.group,
     required this.decision,
     this.season,
+    this.showActions = true,
+    this.onShowActions,
+    this.onCorrect,
   });
 
   @override
@@ -1132,13 +342,13 @@ class WorkHeader extends StatelessWidget {
     final isTv = g.kind == MediaKind.episode;
     final comp = completeness(g, decision);
     final onImage = backdrop != null;
-    // Artwork is only an ambient tint under a frosted panel; text stays dark.
+    // Artwork is only an ambient tint under a frosted panel; text stays readable.
     final fg = p.text;
     final fgMuted = p.textMuted;
 
     final meta = [
       if (m?.year != null) '${m!.year}',
-      if (m?.originCountry != null) _country(m!.originCountry),
+      if (m?.originCountry != null) countryLabel(m!.originCountry),
       if (genres.isNotEmpty) genres.take(3).join(' / '),
       isTv ? comp.label : '电影，${g.files.length} 个文件',
     ];
@@ -1223,23 +433,63 @@ class WorkHeader extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(
-                        crossAxisAlignment: CrossAxisAlignment.baseline,
-                        textBaseline: TextBaseline.alphabetic,
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Flexible(
-                            child: Text(
-                              detail?.title ?? m?.title ?? g.anchorTitle,
-                              style: theme.textTheme.headlineSmall?.copyWith(
-                                color: fg,
-                              ),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
+                          Expanded(
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.baseline,
+                              textBaseline: TextBaseline.alphabetic,
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    detail?.title ?? m?.title ?? g.anchorTitle,
+                                    style: theme.textTheme.headlineSmall
+                                        ?.copyWith(color: fg),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                if (m?.voteAverage != null &&
+                                    m!.voteAverage! > 0) ...[
+                                  const SizedBox(width: 10),
+                                  RatingBadge(m.voteAverage!),
+                                ],
+                              ],
                             ),
                           ),
-                          if (m?.voteAverage != null &&
-                              m!.voteAverage! > 0) ...[
-                            const SizedBox(width: 10),
-                            _Rating(m.voteAverage!),
+                          if (!showActions &&
+                              (onCorrect != null || onShowActions != null)) ...[
+                            const SizedBox(width: 8),
+                            Wrap(
+                              spacing: 6,
+                              runSpacing: 6,
+                              children: [
+                                if (onCorrect != null)
+                                  OutlinedButton.icon(
+                                    key: const ValueKey(
+                                      'header-correct-button',
+                                    ),
+                                    onPressed: onCorrect,
+                                    icon: const Icon(
+                                      CupertinoIcons.search,
+                                      size: 13,
+                                    ),
+                                    label: const Text('重新搜索 TMDB'),
+                                  ),
+                                if (onShowActions != null)
+                                  OutlinedButton.icon(
+                                    key: const ValueKey(
+                                      'expand-actions-button',
+                                    ),
+                                    onPressed: onShowActions,
+                                    icon: const Icon(
+                                      CupertinoIcons.sidebar_right,
+                                      size: 13,
+                                    ),
+                                    label: const Text('展开作品操作'),
+                                  ),
+                              ],
+                            ),
                           ],
                         ],
                       ),
@@ -1315,12 +565,29 @@ class WorkHeader extends StatelessWidget {
                       ],
                       if (m == null) ...[
                         const SizedBox(height: 10),
-                        Text(
-                          '还没有匹配到 TMDB 条目，在左侧搜索或点右侧「重新搜索」',
-                          style: TextStyle(
-                            fontSize: TypeScale.small,
-                            color: p.danger,
-                          ),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 6,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            Text(
+                              '还没有匹配到 TMDB 条目',
+                              style: TextStyle(
+                                fontSize: TypeScale.small,
+                                color: p.danger,
+                              ),
+                            ),
+                            if (showActions && onCorrect != null)
+                              OutlinedButton.icon(
+                                key: const ValueKey('header-correct-button'),
+                                onPressed: onCorrect,
+                                icon: const Icon(
+                                  CupertinoIcons.search,
+                                  size: 13,
+                                ),
+                                label: const Text('重新搜索 TMDB'),
+                              ),
+                          ],
                         ),
                       ],
                     ],
@@ -1346,6 +613,9 @@ class DetailPane extends StatelessWidget {
 
   /// Put the row at this episode and renumber the files after it.
   final void Function(ReviewRow, EpisodeRef) onShift;
+  final bool showActions;
+  final VoidCallback? onShowActions;
+  final VoidCallback? onCorrect;
 
   const DetailPane({
     super.key,
@@ -1357,10 +627,14 @@ class DetailPane extends StatelessWidget {
     required this.onEdit,
     required this.onCheck,
     required this.onShift,
+    this.showActions = true,
+    this.onShowActions,
+    this.onCorrect,
   });
 
   @override
   Widget build(BuildContext context) {
+    final brightness = Theme.of(context).brightness;
     final rows = rowsOf(group, decision, review);
     final seasons = ({for (final r in rows) r.season}.toList()..sort());
     final current = tab == folderTab || seasons.contains(tab)
@@ -1432,21 +706,48 @@ class DetailPane extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
       children: [
-        WorkHeader(group: group, decision: decision, season: current),
+        WorkHeader(
+          group: group,
+          decision: decision,
+          season: current,
+          showActions: showActions,
+          onShowActions: onShowActions,
+          onCorrect: onCorrect,
+        ),
         if (!(decision?.selected ?? true)) ...[
           const SizedBox(height: 10),
           Container(
             key: const ValueKey('unchecked-note'),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
             decoration: BoxDecoration(
               color: Palette.of(context).warning.withValues(alpha: 0.10),
               borderRadius: BorderRadius.circular(Radii.sm),
             ),
-            child: Text(
-              m == null
-                  ? '还没有匹配作品，整理时会跳过。在右侧「重新搜索 TMDB」选定作品即可。'
-                  : '这个作品没有勾选，整理时会跳过。在左侧列表勾选它即可。',
-              style: const TextStyle(fontSize: TypeScale.small),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    m == null
+                        ? '还没有匹配作品，整理时会跳过。请搜索并选定 TMDB 作品。'
+                        : '这个作品没有勾选，整理时会跳过。在左侧列表勾选它即可。',
+                    style: const TextStyle(fontSize: TypeScale.small),
+                  ),
+                ),
+                if (m == null && onCorrect != null) ...[
+                  const SizedBox(width: 8),
+                  TextButton(
+                    onPressed: onCorrect,
+                    child: const Text('重新搜索 TMDB'),
+                  ),
+                ],
+                if (!showActions && onShowActions != null) ...[
+                  const SizedBox(width: 4),
+                  TextButton(
+                    onPressed: onShowActions,
+                    child: const Text('展开作品操作'),
+                  ),
+                ],
+              ],
             ),
           ),
         ],
@@ -1496,7 +797,7 @@ class DetailPane extends StatelessWidget {
                     .where((x) => x.number == s)
                     .firstOrNull
                     ?.posterPath,
-                color: s == noSeason ? null : seasonColor(s),
+                color: s == noSeason ? null : seasonColor(s, brightness),
                 selected: current == s,
                 onTap: () => onTab(s),
               ),
@@ -1591,6 +892,7 @@ class DetailPane extends StatelessWidget {
       _Entry(:final row?, sidecar: false) => _EpisodeRow(
         row: row,
         tmdbId: group.kind == MediaKind.episode ? m?.tmdbId : null,
+        manuallyMatched: decision?.match != null,
         onEdit: () => onEdit(row),
         onCheck: (v) => onCheck(row, v),
       ),
@@ -1731,6 +1033,9 @@ class _SeasonChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
+    final selectedFg = color == null
+        ? p.canvas
+        : (color!.computeLuminance() > 0.45 ? p.canvas : Colors.white);
     return Hoverable(
       onTap: onTap,
       builder: (context, hover) => AnimatedContainer(
@@ -1766,7 +1071,7 @@ class _SeasonChip extends StatelessWidget {
               ),
               const SizedBox(width: 7),
             ] else if (icon != null) ...[
-              Icon(icon, size: 13, color: selected ? p.canvas : p.textMuted),
+              Icon(icon, size: 13, color: selected ? selectedFg : p.textMuted),
               const SizedBox(width: 5),
             ] else if (color != null) ...[
               Container(
@@ -1774,7 +1079,7 @@ class _SeasonChip extends StatelessWidget {
                 height: 7,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: selected ? Colors.white : color,
+                  color: selected ? selectedFg : color,
                 ),
               ),
               const SizedBox(width: 6),
@@ -1784,9 +1089,7 @@ class _SeasonChip extends StatelessWidget {
               style: TextStyle(
                 fontSize: TypeScale.small,
                 fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-                color: selected
-                    ? (color == null ? p.canvas : Colors.white)
-                    : p.text,
+                color: selected ? selectedFg : p.text,
               ),
             ),
           ],
@@ -1838,12 +1141,14 @@ class _EpBadge extends StatelessWidget {
 class _EpisodeRow extends ConsumerWidget {
   final ReviewRow row;
   final int? tmdbId;
+  final bool manuallyMatched;
   final VoidCallback onEdit;
   final ValueChanged<bool> onCheck;
 
   const _EpisodeRow({
     required this.row,
     required this.tmdbId,
+    required this.manuallyMatched,
     required this.onEdit,
     required this.onCheck,
   });
@@ -1851,6 +1156,7 @@ class _EpisodeRow extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final p = Palette.of(context);
+    final brightness = Theme.of(context).brightness;
     final r = row;
     final target = targetRef(r);
     Episode? ep;
@@ -1866,14 +1172,24 @@ class _EpisodeRow extends ConsumerWidget {
     final newName = r.newLabel;
     // The planner flags real guesses on the op ("识别置信度较低"); only a file
     // it skipped falls back to the parser's own confidence.
+    final missingEpisode =
+        !r.ignored &&
+        tmdbId != null &&
+        target == null &&
+        (r.override?.kind ?? r.file.parsed?.kind) != MediaKind.extra;
     final lowConfidence =
+        !manuallyMatched &&
+        !missingEpisode &&
         r.op == null &&
         r.file.parsed != null &&
         r.file.parsed!.confidence < 0.7;
 
     final issue = r.conflict
         ? p.danger
-        : (r.op?.warning != null || lowConfidence ? p.warning : null);
+        : (r.op?.warning != null || lowConfidence || missingEpisode
+              ? p.warning
+              : null);
+    final conflictDetail = r.conflictReason ?? '目标路径冲突';
     return Hoverable(
       onTap: onEdit,
       builder: (context, hover) => Container(
@@ -1900,12 +1216,12 @@ class _EpisodeRow extends ConsumerWidget {
             Padding(
               padding: const EdgeInsets.only(top: 1),
               child: tmdbId == null && target == null
-                  ? IconTile(CupertinoIcons.film, size: 26)
+                  ? const IconTile(CupertinoIcons.film, size: 26)
                   : _EpBadge(
                       badge,
                       color: target == null || r.ignored
                           ? null
-                          : seasonColor(target.season),
+                          : seasonColor(target.season, brightness),
                     ),
             ),
             const SizedBox(width: 12),
@@ -1934,7 +1250,7 @@ class _EpisodeRow extends ConsumerWidget {
                         if (ep?.airDate != null) ...[
                           const SizedBox(width: 8),
                           Text(
-                            _date(ep!.airDate),
+                            fmtDate(ep!.airDate),
                             style: TextStyle(
                               fontSize: TypeScale.small,
                               color: p.textFaint,
@@ -1948,6 +1264,7 @@ class _EpisodeRow extends ConsumerWidget {
                       '原：${r.file.path}',
                       if (r.op != null && r.op!.dst.isNotEmpty)
                         '新：${r.op!.dst}',
+                      if (r.conflict) '冲突：$conflictDetail',
                     ].join('\n'),
                     waitDuration: const Duration(milliseconds: 700),
                     // 原名 → 新名, reading order: what it is now, then what it becomes.
@@ -1992,11 +1309,29 @@ class _EpisodeRow extends ConsumerWidget {
                       ),
                     ],
                   ),
+                  if (r.conflict && r.conflictReason != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text(
+                        r.conflictReason!,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: TypeScale.small,
+                          color: p.danger,
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),
             if (r.conflict)
-              Tag('冲突', color: p.danger)
+              Tooltip(
+                message: conflictDetail,
+                child: Tag('冲突', color: p.danger),
+              )
+            else if (missingEpisode)
+              Tag('未识别到集号', color: p.warning)
             else if (r.op?.warning != null)
               Tag(r.op!.warning!, color: p.warning),
             if (lowConfidence) ...[
@@ -2039,6 +1374,7 @@ class _SidecarRow extends StatelessWidget {
         CupertinoIcons.music_note,
       _ => CupertinoIcons.doc,
     };
+    final conflictDetail = r.conflictReason ?? '目标路径冲突';
     return Hoverable(
       onTap: onEdit,
       builder: (context, hover) => Container(
@@ -2057,35 +1393,54 @@ class _SidecarRow extends StatelessWidget {
             Icon(icon, size: 14, color: p.textFaint),
             const SizedBox(width: 10),
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    r.file.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: TypeScale.small,
-                      color: p.textFaint,
+              child: Tooltip(
+                message: [
+                  '原：${r.file.path}',
+                  if (r.op != null && r.op!.dst.isNotEmpty) '新：${r.op!.dst}',
+                  if (r.conflict) '冲突：$conflictDetail',
+                ].join('\n'),
+                waitDuration: const Duration(milliseconds: 700),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      r.file.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: TypeScale.small,
+                        color: p.textFaint,
+                      ),
                     ),
-                  ),
-                  Text(
-                    '→ ${r.newLabel}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: r.ignored ? p.textFaint : p.textMuted,
-                      decoration: r.ignored ? TextDecoration.lineThrough : null,
+                    Text(
+                      '→ ${r.newLabel}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: r.ignored ? p.textFaint : p.textMuted,
+                        decoration: r.ignored
+                            ? TextDecoration.lineThrough
+                            : null,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
             if (r.conflict)
-              Tag('冲突', color: p.danger)
+              Tooltip(
+                message: conflictDetail,
+                child: Tag('冲突', color: p.danger),
+              )
             else if (r.op?.warning != null)
               Tag(r.op!.warning!, color: p.warning),
+            const SizedBox(width: 4),
+            AnimatedOpacity(
+              duration: const Duration(milliseconds: 120),
+              opacity: hover ? 1 : 0,
+              child: Icon(CupertinoIcons.pencil, size: 13, color: p.textMuted),
+            ),
           ],
         ),
       ),
@@ -2128,7 +1483,7 @@ class _MissingRow extends ConsumerWidget {
             child: Text(
               [
                 ep?.title ?? '第 $episode 集',
-                if (ep?.airDate != null) _date(ep!.airDate),
+                if (ep?.airDate != null) fmtDate(ep!.airDate),
               ].join('  ·  '),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
@@ -2325,6 +1680,13 @@ class ActionPane extends ConsumerWidget {
     required this.onCorrect,
   });
 
+  static String _offsetExample(int offset) {
+    if (offset == 0) return '例如 +1 时 E01 → E02';
+    final from = offset < 0 ? 1 - offset : 1;
+    final to = from + offset;
+    return '当前：E${_pad(from)} → E${_pad(to)}';
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final p = Palette.of(context);
@@ -2391,7 +1753,12 @@ class ActionPane extends ConsumerWidget {
           ),
         ),
         if (isTv) ...[
-          const SectionLabel('季集策略'),
+          SectionLabel(
+            '季集策略',
+            trailing: decision.strategy != SeasonStrategy.asParsed
+                ? Tag('已自定义', color: p.warning)
+                : null,
+          ),
           Panel(
             child: Rows(
               children: [
@@ -2406,7 +1773,12 @@ class ActionPane extends ConsumerWidget {
               ],
             ),
           ),
-          const SectionLabel('剧集组'),
+          SectionLabel(
+            '剧集组',
+            trailing: decision.episodeGroupId != null
+                ? Tag('已启用', color: p.warning)
+                : null,
+          ),
           Panel(
             child: m == null
                 ? note('匹配作品后可选')
@@ -2443,11 +1815,22 @@ class ActionPane extends ConsumerWidget {
                               ),
                       ),
           ),
-          const SectionLabel('集数偏移'),
+          SectionLabel(
+            '集数偏移',
+            trailing: decision.episodeOffset != 0
+                ? TextButton(
+                    key: const ValueKey('offset-reset'),
+                    onPressed: () =>
+                        onChange(decision.copyWith(episodeOffset: 0)),
+                    child: const Text('归零'),
+                  )
+                : null,
+          ),
           Panel(
             child: SettingRow(
               title: '偏移',
-              caption: '应用策略之前，给所有集号加上偏移',
+              caption:
+                  '应用策略前给集号加上偏移（${_offsetExample(decision.episodeOffset)}）',
               control: Container(
                 decoration: BoxDecoration(
                   border: Border.all(color: p.lineStrong, width: hairline),
@@ -2550,7 +1933,7 @@ class UnassignedPane extends StatelessWidget {
     final summary = deletedCount == 0
         ? '这些文件没归进任何作品，整理时原样保留。'
         : deletedCount == files.length
-        ? '这些文件没归进任何作品，且已开启「自动清理垃圾文件」，确认整理后将被永久删除。'
+        ? '这些文件没归进任何作品，且已开启「自动删除垃圾文件」，确认整理后将被永久删除。'
         : '共 ${files.length} 个未归类文件：其中 $deletedCount 个已计划在整理时永久删除，其余原样保留。';
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
@@ -2625,256 +2008,4 @@ class UnassignedPane extends StatelessWidget {
       ],
     );
   }
-}
-
-final _sxxeyy = RegExp(r'S(\d{1,2})E(\d{1,3})', caseSensitive: false);
-
-final _seasonDir = RegExp(
-  r'^(?:Season\s*(\d{1,2})|Specials)$',
-  caseSensitive: false,
-);
-
-/// Season → episodes found in show folder [dir] and its season folders.
-Future<Map<int, Set<int>>> episodesIn(StorageBackend be, String dir) async {
-  final out = <int, Set<int>>{};
-  Future<void> scan(String d, {required bool deeper}) async {
-    for (final e in await be.list(d)) {
-      if (e.isDir) {
-        if (!deeper) continue;
-        if (_seasonDir.firstMatch(e.name) case final m?) {
-          out.putIfAbsent(m[1] == null ? 0 : int.parse(m[1]!), () => {});
-        }
-        await scan(e.path, deeper: false);
-        continue;
-      }
-      for (final x in _sxxeyy.allMatches(e.name)) {
-        (out[int.parse(x[1]!)] ??= {}).add(int.parse(x[2]!));
-      }
-    }
-  }
-
-  await scan(dir, deeper: true);
-  return out;
-}
-
-/// 「Season 01 E01–E05、E07；Season 02」.
-String describeEpisodes(Map<int, Set<int>> bySeason) {
-  if (bySeason.isEmpty) return '（没有识别到剧集）';
-  String two(int n) => n.toString().padLeft(2, '0');
-  final parts = <String>[];
-  for (final s in bySeason.keys.toList()..sort()) {
-    final eps = bySeason[s]!.toList()..sort();
-    final runs = <String>[];
-    for (var i = 0; i < eps.length; i++) {
-      var j = i;
-      while (j + 1 < eps.length && eps[j + 1] == eps[j] + 1) {
-        j++;
-      }
-      runs.add(j == i ? 'E${two(eps[i])}' : 'E${two(eps[i])}–E${two(eps[j])}');
-      i = j;
-    }
-    final name = s == 0 ? 'Specials' : 'Season ${two(s)}';
-    parts.add(runs.isEmpty ? name : '$name ${runs.join('、')}');
-  }
-  return parts.join('；');
-}
-
-/// Asks about each [PlanMerge] before running: where the show goes, what is
-/// there already, what this task adds. Returns the groups to keep separate
-/// (分开保留), or null when cancelled.
-Future<Set<GroupId>?> showMergeDialog(
-  BuildContext context, {
-  required TaskReview review,
-  required List<PlanMerge> merges,
-  required StorageBackend backend,
-}) {
-  final separate = <GroupId>{};
-  final byId = {for (final g in review.scan.groups) g.id: g};
-  // Episodes this task puts into the merged folder, read off the plan.
-  Map<int, Set<int>> adding(PlanMerge m) {
-    final out = <int, Set<int>>{};
-    for (final o in review.preview.ops) {
-      if (o.group != m.group ||
-          o.kind != OpKind.relocate ||
-          o.phase != ExecPhase.files) {
-        continue;
-      }
-      for (final x in _sxxeyy.allMatches(o.dst.split('/').last)) {
-        (out[int.parse(x[1]!)] ??= {}).add(int.parse(x[2]!));
-      }
-    }
-    if (out.isEmpty) {
-      for (final s in m.seasons) {
-        out[s] = {};
-      }
-    }
-    return out;
-  }
-
-  return showDialog<Set<GroupId>>(
-    context: context,
-    builder: (ctx) => StatefulBuilder(
-      builder: (ctx, setState) {
-        final p = Palette.of(ctx);
-        final small = TextStyle(fontSize: 12, color: p.textMuted);
-        return MacSheet(
-          child: SizedBox(
-            width: 560,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    '合并到已有剧集文件夹？',
-                    style: Theme.of(ctx).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 4),
-                  Text('下面的作品会和已有的（或本次另一个文件夹里的）同一部作品放进同一个文件夹。', style: small),
-                  const SizedBox(height: 12),
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(maxHeight: 420),
-                    child: SingleChildScrollView(
-                      child: Column(
-                        children: [
-                          for (final m in merges)
-                            Builder(
-                              builder: (context) {
-                                final g = byId[m.group];
-                                final match = g == null
-                                    ? null
-                                    : review.decisions[g.id]?.match ?? g.match;
-                                final other = m.withGroup == null
-                                    ? null
-                                    : byId[m.withGroup];
-                                final keep = separate.contains(m.group);
-                                return Container(
-                                  key: ValueKey('merge-${m.group.value}'),
-                                  margin: const EdgeInsets.only(bottom: 10),
-                                  padding: const EdgeInsets.all(12),
-                                  decoration: BoxDecoration(
-                                    color: p.panel,
-                                    borderRadius: BorderRadius.circular(
-                                      Radii.lg,
-                                    ),
-                                    border: Border.all(
-                                      color: p.line,
-                                      width: hairline,
-                                    ),
-                                  ),
-                                  child: Row(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Poster(
-                                        posterPath: match?.posterPath,
-                                        width: 40,
-                                        height: 60,
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Text(
-                                              '《${match?.title ?? g?.anchorTitle ?? ''}》'
-                                              '${match?.year == null ? '' : ' (${match!.year})'}',
-                                              style: const TextStyle(
-                                                fontSize: TypeScale.body,
-                                                fontWeight: FontWeight.w500,
-                                              ),
-                                            ),
-                                            const SizedBox(height: 4),
-                                            SelectableText(
-                                              '合并到 ${m.into}',
-                                              style: TextStyle(
-                                                fontSize: TypeScale.small,
-                                                color: p.text,
-                                              ),
-                                            ),
-                                            const SizedBox(height: 2),
-                                            if (m.exists)
-                                              FutureBuilder<Map<int, Set<int>>>(
-                                                future: episodesIn(
-                                                  backend,
-                                                  m.into,
-                                                ),
-                                                builder: (context, snap) => Text(
-                                                  snap.hasError
-                                                      ? '已有文件夹（读取内容失败）'
-                                                      : !snap.hasData
-                                                      ? '已有：读取中…'
-                                                      : '已有：${describeEpisodes(snap.data!)}',
-                                                  style: small,
-                                                ),
-                                              )
-                                            else if (other != null)
-                                              Text(
-                                                '和本次的 ${other.rootDir} 放在一起',
-                                                style: small,
-                                              ),
-                                            Text(
-                                              '本次加入：${describeEpisodes(adding(m))}',
-                                              style: small,
-                                            ),
-                                            if (g != null)
-                                              Text(
-                                                '本次来源：${g.rootDir}',
-                                                style: small,
-                                              ),
-                                          ],
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Segmented<bool>(
-                                        key: ValueKey(
-                                          'merge-choice-${m.group.value}',
-                                        ),
-                                        options: const {
-                                          false: '合并',
-                                          true: '分开保留',
-                                        },
-                                        value: keep,
-                                        onChanged: (v) => setState(
-                                          () => v
-                                              ? separate.add(m.group)
-                                              : separate.remove(m.group),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                              },
-                            ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  Text('已有的集不会被覆盖：两边有相同的集时会标为冲突，由你决定保留哪个。', style: small),
-                  const SizedBox(height: 12),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      OutlinedButton(
-                        onPressed: () => Navigator.pop(ctx),
-                        child: const Text('取消'),
-                      ),
-                      const SizedBox(width: 8),
-                      FilledButton(
-                        key: const ValueKey('merge-continue'),
-                        onPressed: () => Navigator.pop(ctx, separate),
-                        child: const Text('继续'),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    ),
-  );
 }

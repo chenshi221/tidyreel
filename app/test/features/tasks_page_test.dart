@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tidyreel/features/tasks/task_detail_page.dart';
 import 'package:tidyreel/features/tasks/tasks_page.dart';
+import 'package:tidyreel_core/testing.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
 import 'helpers.dart';
@@ -161,7 +162,8 @@ void main() {
       final id = await submitAndWait(tester, tm);
       unawaited(tm.run(id));
       await waitForStage(tester, tm, id, TaskStage.done);
-      // TaskDetailPage also respects canUndo() (header action + embedded TaskCard).
+      // TaskDetailPage also respects canUndo() (header action only; summary
+      // header is non-interactive with no duplicate buttons).
       await pumpPage(tester, TaskDetailPage(taskId: id.value), tm: tm);
       expect(
         find.descendant(
@@ -170,7 +172,58 @@ void main() {
         ),
         findsOneWidget,
       );
-      expect(find.text('撤销'), findsNWidgets(2));
+      expect(find.text('撤销'), findsOneWidget);
     },
   );
+
+  testWidgets('TaskStage.failed shows 失败 badge, error, 重新识别 and 去设置', (
+    tester,
+  ) async {
+    final failedTask = TaskSummary(
+      id: const TaskId('failed-tmdb'),
+      connection: const ConnectionId('demo-alist'),
+      paths: const ['/下载/三体'],
+      mode: OrganizeMode.inPlace,
+      stage: TaskStage.failed,
+      message: '请先在「设置」里填写 TMDB API key',
+      createdAt: DateTime(2026),
+    );
+    await pumpPage(tester, TaskCard(task: failedTask));
+    expect(find.text('失败'), findsOneWidget);
+    expect(find.text('请先在「设置」里填写 TMDB API key'), findsOneWidget);
+    expect(find.byKey(const ValueKey('retry failed-tmdb')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('goto-settings failed-tmdb')),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('TaskDetailPage shows failure card with selectable error', (
+    tester,
+  ) async {
+    final failedTask = TaskSummary(
+      id: const TaskId('T-fail'),
+      connection: const ConnectionId('demo-alist'),
+      paths: const ['/下载/三体'],
+      mode: OrganizeMode.inPlace,
+      stage: TaskStage.failed,
+      message: '请先在「设置」里填写 TMDB API key',
+      createdAt: DateTime(2026),
+    );
+    final tm = _StaticTaskManager([failedTask]);
+    await pumpPage(tester, const TaskDetailPage(taskId: 'T-fail'), tm: tm);
+    expect(find.byKey(const ValueKey('task-stop-card')), findsOneWidget);
+    expect(find.text('识别失败'), findsOneWidget);
+    expect(find.text('请先在「设置」里填写 TMDB API key'), findsOneWidget);
+    expect(find.text('去设置'), findsOneWidget);
+    expect(find.text('重新识别'), findsWidgets);
+  });
+}
+
+class _StaticTaskManager extends FakeTaskManager {
+  final List<TaskSummary> _items;
+  _StaticTaskManager(this._items) : super(step: Duration.zero);
+
+  @override
+  Stream<List<TaskSummary>> watchAll() => Stream.value(_items);
 }

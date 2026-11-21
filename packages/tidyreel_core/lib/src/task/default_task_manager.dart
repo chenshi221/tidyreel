@@ -19,6 +19,11 @@ import '../storage/storage_backend.dart';
 import '../storage/walk.dart';
 import 'task_manager.dart';
 
+final _seasonArtRe = RegExp(
+  r'^season(?:\d+|-specials|-all)-(?:poster|banner|fanart|landscape)\.(?:jpe?g|png|webp)$',
+  caseSensitive: false,
+);
+
 /// Per-task mutable state. Only [DefaultTaskManager] touches it.
 class _Task {
   TaskSummary summary;
@@ -26,12 +31,14 @@ class _Task {
   Map<GroupId, GroupDecision> decisions;
   RenamePlan? plan;
   PlanOptions? planOptions;
+  ({int editGen, PlanOptions options, Future<RenamePlan> future})? inFlightPlan;
   Set<BatchId> priorBatches = const {};
   int pipelineGen = 0;
   int editGen = 0;
   int pendingEdits = 0;
   bool cancelled = false;
   bool busy = false;
+  Completer<void>? busyDone;
   StreamSubscription<ExecProgress>? exec;
   Completer<void>? execDone;
   Future<void> persistQueue = Future.value();
@@ -124,30 +131,41 @@ class DefaultTaskManager implements TaskManager {
     await _ready;
     final ids = List.of(_interrupted);
     _interrupted.clear();
-    await Future.wait(ids.map((id) => _resume(_tasks[id]!)));
+    await Future.wait(ids.map(_resume));
   }
 
-  Future<void> _resume(_Task t) async {
-    final batch =
-        t.summary.batch ?? await _batchOf(t.summary.id, includeUndone: false);
-    if (batch == null) {
-      // Died before the write-ahead log was written: nothing ran.
-      await _set(
+  Future<void> _resume(TaskId id) async {
+    final t = _tasks[id];
+    if (t == null || t.cancelled || t.busy) return;
+    await _withBusy(t, () async {
+      final batch = t.summary.batch ?? await _batchOf(id, includeUndone: false);
+      if (t.cancelled || _tasks[id] != t) return;
+      if (batch == null) {
+        // Died before the write-ahead log was written: nothing ran.
+        await _set(
+          t,
+          _with(
+            t.summary,
+            stage: TaskStage.awaitingReview,
+            message: '上次执行未开始，请重新确认',
+          ),
+        );
+        return;
+      }
+      _emit(t, _with(t.summary, batch: () => batch));
+      final hasWrites =
+          t.summary.scrape ||
+          (await history.records(batch)).any(
+            (r) => r.status == OpStatus.pending && r.op.kind == OpKind.write,
+          );
+      if (t.cancelled || _tasks[id] != t) return;
+      await _drive(
         t,
-        _with(
-          t.summary,
-          stage: TaskStage.awaitingReview,
-          message: '上次执行未开始，请重新确认',
-        ),
+        executor.resume(batch, backendFor(t.summary.connection)),
+        batch,
+        hasWrites: hasWrites,
       );
-      return;
-    }
-    _emit(t, _with(t.summary, batch: () => batch));
-    await _drive(
-      t,
-      executor.resume(batch, backendFor(t.summary.connection)),
-      batch,
-    );
+    });
   }
 
   // ---- TaskManager --------------------------------------------------------
@@ -187,10 +205,25 @@ class DefaultTaskManager implements TaskManager {
   }
 
   @override
-  Stream<List<TaskSummary>> watchAll() async* {
-    await _ready;
-    yield _snapshot();
-    yield* _changes.stream;
+  Stream<List<TaskSummary>> watchAll() {
+    late StreamController<List<TaskSummary>> out;
+    StreamSubscription<List<TaskSummary>>? sub;
+    out = StreamController<List<TaskSummary>>(
+      onListen: () async {
+        await _ready;
+        if (out.isClosed) return;
+        // Subscribe before emitting the initial snapshot so updates fired
+        // while delivering the snapshot are never missed.
+        sub = _changes.stream.listen(
+          out.add,
+          onError: out.addError,
+          onDone: out.close,
+        );
+        out.add(_snapshot());
+      },
+      onCancel: () => sub?.cancel(),
+    );
+    return out.stream;
   }
 
   @override
@@ -212,9 +245,6 @@ class DefaultTaskManager implements TaskManager {
     if (scan == null) throw StateError('任务尚未识别完成');
     final gen = ++t.editGen;
     final decisions = {...t.decisions, group: decision};
-    t.decisions = decisions;
-    t.plan = null;
-    t.planOptions = null;
     t.pendingEdits++;
     try {
       final (plan, opts) = await _buildPlanWithOptions(
@@ -225,9 +255,11 @@ class DefaultTaskManager implements TaskManager {
       if (t.editGen == gen &&
           t.summary.stage == TaskStage.awaitingReview &&
           _tasks[id] == t) {
+        t.decisions = decisions;
         t.plan = plan;
         t.planOptions = opts;
-        await store.saveReview(id, scan, decisions);
+        t.inFlightPlan = null;
+        await _saveReview(t, scan, decisions);
       }
       return await _review(t);
     } finally {
@@ -254,6 +286,7 @@ class DefaultTaskManager implements TaskManager {
           _tasks[id] == t) {
         t.plan = plan;
         t.planOptions = opts;
+        t.inFlightPlan = null;
         await _set(t, next);
       }
       return await _review(t);
@@ -268,9 +301,9 @@ class DefaultTaskManager implements TaskManager {
     _requireStage(t, TaskStage.awaitingReview);
     if (t.busy) throw StateError('任务正在处理中');
     if (t.pendingEdits > 0) throw StateError('正在更新整理计划，请稍后再试');
-    t.busy = true;
-    try {
+    await _withBusy(t, () async {
       var plan = await _ensurePlan(t);
+      if (t.cancelled || _tasks[id] != t) return;
       if (onlyConfident) plan = _confidentOnly(t, plan);
       if (!plan.canExecute) throw StateError('存在冲突，无法执行');
       // Never report "整理完成" for a run that would touch nothing.
@@ -281,6 +314,7 @@ class DefaultTaskManager implements TaskManager {
         for (final b in await history.batches())
           if (b.task == id) b.id,
       };
+      if (t.cancelled || _tasks[id] != t) return;
       await _set(
         t,
         _with(
@@ -290,7 +324,10 @@ class DefaultTaskManager implements TaskManager {
           progress: () => 0,
         ),
       );
-      if (t.cancelled) return;
+      if (t.cancelled || _tasks[id] != t) return;
+      final hasWrites = plan.ops.any(
+        (o) => o.selected && o.kind == OpKind.write,
+      );
       await _drive(
         t,
         executor.execute(
@@ -300,10 +337,9 @@ class DefaultTaskManager implements TaskManager {
           backendFor(t.summary.connection),
         ),
         null,
+        hasWrites: hasWrites,
       );
-    } finally {
-      t.busy = false;
-    }
+    });
   }
 
   @override
@@ -314,10 +350,11 @@ class DefaultTaskManager implements TaskManager {
       throw StateError('任务没有失败的操作');
     }
     if (t.busy) throw StateError('任务正在处理中');
-    t.busy = true;
-    try {
+    await _withBusy(t, () async {
+      var hasWrites = false;
       for (final r in await history.records(batch)) {
         if (r.status == OpStatus.failed || r.status == OpStatus.skipped) {
+          if (r.op.kind == OpKind.write) hasWrites = true;
           await history.mark(batch, r.op.id, OpStatus.pending);
         }
       }
@@ -332,21 +369,21 @@ class DefaultTaskManager implements TaskManager {
         ),
         force: true,
       );
+      if (t.cancelled || _tasks[id] != t) return;
       await _drive(
         t,
         executor.resume(batch, backendFor(t.summary.connection)),
         batch,
+        hasWrites: hasWrites,
       );
-    } finally {
-      t.busy = false;
-    }
+    });
   }
 
   @override
   Future<void> retry(TaskId id) async {
     final t = await _get(id);
     if (!canRetry(t.summary)) throw StateError('这个任务不能重试');
-    if (t.busy) throw StateError('任务正在处理中');
+    if (t.busy || t.pendingEdits > 0) throw StateError('任务正在处理中');
     final gen = ++t.pipelineGen;
     t.editGen++;
     t
@@ -355,7 +392,9 @@ class DefaultTaskManager implements TaskManager {
       ..decisions = const {}
       ..plan = null
       ..planOptions = null
+      ..inFlightPlan = null
       ..priorBatches = const {};
+    await _clearReview(t);
     await _set(
       t,
       _with(
@@ -377,6 +416,9 @@ class DefaultTaskManager implements TaskManager {
   @override
   Future<void> delete(TaskId id) async {
     final t = await _get(id);
+    if (t.pendingEdits > 0) {
+      throw StateError('正在更新整理计划，请稍后再试');
+    }
     if (t.busy ||
         (t.summary.stage.isActive &&
             t.summary.stage != TaskStage.awaitingReview)) {
@@ -384,9 +426,10 @@ class DefaultTaskManager implements TaskManager {
     }
     t.pipelineGen++;
     t.editGen++;
+    t.inFlightPlan = null;
     _tasks.remove(id);
     _changes.add(_snapshot());
-    // Let a pending summary write land first so it can't resurrect the row.
+    // Let any in-flight summary/review write finish before deleting the row.
     await t.persistQueue;
     await store.delete(id);
     await history.deleteTask(id);
@@ -403,9 +446,17 @@ class DefaultTaskManager implements TaskManager {
     t.pipelineGen++;
     t.editGen++;
     // Waits for in-flight ops to be recorded; finished ops stay in history.
-    await t.exec?.cancel();
-    final done = t.execDone;
-    if (done != null && !done.isCompleted) done.complete();
+    final exec = t.exec;
+    final execDone = t.execDone;
+    t.exec = null;
+    t.execDone = null;
+    await exec?.cancel();
+    if (execDone != null && !execDone.isCompleted) execDone.complete();
+    // Wait for run()/retryFailed()/_resume() to release t.busy before
+    // publishing cancelled so immediate delete()/retry() works cleanly.
+    final busyDone = t.busyDone;
+    if (busyDone != null) await busyDone.future;
+    if (_tasks[id] != t) return;
     final batch =
         t.summary.batch ??
         (wasExecuting ? await _batchOf(id, exclude: t.priorBatches) : null);
@@ -431,28 +482,52 @@ class DefaultTaskManager implements TaskManager {
       throw StateError('任务没有可撤销的操作');
     }
     if (t.busy) throw StateError('任务正在撤销中');
-    t.busy = true;
-    try {
-      var skipped = 0;
-      await for (final e in executor.undo(
+    await _withBusy(t, () async {
+      final beforeRecords = await history.records(batch);
+      final attemptedIds = {
+        for (final r in beforeRecords)
+          if (r.status == OpStatus.done &&
+              (only == null || only.contains(r.op.id)))
+            r.op.id,
+      };
+      final totalOps = attemptedIds.length;
+      var completed = 0;
+      await for (final _ in executor.undo(
         batch,
         backendFor(t.summary.connection),
         only: only,
       )) {
-        if (e.error != null) skipped++;
+        completed++;
+        final shownTotal = totalOps > 0 ? totalOps : completed;
+        final clamped = completed > shownTotal ? shownTotal : completed;
         _emit(
           t,
           _with(
             t.summary,
-            message: '正在撤销（${e.done}/${e.total}）',
-            progress: () => e.total == 0 ? 1 : e.done / e.total,
+            message: '正在撤销（$clamped/$shownTotal）',
+            progress: () => shownTotal == 0 ? 1 : clamped / shownTotal,
           ),
           force: true,
         );
       }
-      final remaining = (await history.records(batch))
-          .any((r) => r.status == OpStatus.done);
-      final note = skipped == 0 ? '' : '，$skipped 项已跳过';
+      final afterRecords = await history.records(batch);
+      final remaining = afterRecords.any((r) => r.status == OpStatus.done);
+      final failedCount = afterRecords
+          .where(
+            (r) => attemptedIds.contains(r.op.id) && r.status == OpStatus.done,
+          )
+          .length;
+      final skippedCount = afterRecords
+          .where(
+            (r) =>
+                attemptedIds.contains(r.op.id) && r.status == OpStatus.skipped,
+          )
+          .length;
+      final details = <String>[
+        if (failedCount > 0) '$failedCount 项失败',
+        if (skippedCount > 0) '$skippedCount 项已跳过',
+      ];
+      final note = details.isEmpty ? '' : '，${details.join('，')}';
       await _set(
         t,
         remaining
@@ -460,9 +535,7 @@ class DefaultTaskManager implements TaskManager {
             : _with(t.summary, stage: TaskStage.undone, message: '已撤销$note'),
         force: true,
       );
-    } finally {
-      t.busy = false;
-    }
+    });
   }
 
   // ---- background pipeline -----------------------------------------------
@@ -525,7 +598,7 @@ class DefaultTaskManager implements TaskManager {
         ..planOptions = opts;
 
       final all = [for (final g in scan.groups) ...g.files, ...scan.unassigned];
-      await store.saveReview(s.id, scan, decisions);
+      await _saveReview(t, scan, decisions);
       if (stale()) return;
       await _set(
         t,
@@ -541,10 +614,13 @@ class DefaultTaskManager implements TaskManager {
       );
     } on Object catch (e) {
       if (stale()) return;
-      t.cancelled = true;
       await _set(
         t,
-        _with(t.summary, stage: TaskStage.cancelled, message: '$step失败：$e'),
+        _with(
+          t.summary,
+          stage: TaskStage.failed,
+          message: '$step失败：${_friendlyError(e)}',
+        ),
         force: true,
       );
     }
@@ -581,9 +657,11 @@ class DefaultTaskManager implements TaskManager {
     // listing per parent, shared when several roots sit side by side).
     final dirs = <String>[];
     final parents = <String, Future<List<RemoteEntry>>>{};
+    var foundAny = false;
     for (final root in t.summary.paths) {
       if (stale()) break;
       if (root == '/') {
+        foundAny = true;
         dirs.add(root);
         continue;
       }
@@ -595,7 +673,15 @@ class DefaultTaskManager implements TaskManager {
       if (stale()) break;
       final entry = siblings.where((e) => e.path == root).firstOrNull;
       if (entry == null) continue;
+      foundAny = true;
       entry.isDir ? dirs.add(root) : add(entry);
+    }
+    if (stale()) return out;
+    if (t.summary.paths.isNotEmpty && !foundAny) {
+      throw StorageException(
+        StorageErrorCode.notFound,
+        '所选路径不存在：${t.summary.paths.join('、')}',
+      );
     }
     if (!stale()) {
       await walkDirs(dirs, (dir) async {
@@ -677,25 +763,40 @@ class DefaultTaskManager implements TaskManager {
     return (plan, opts);
   }
 
-  Future<RenamePlan> _ensurePlan(_Task t) async {
+  Future<RenamePlan> _ensurePlan(_Task t) {
     final scan = t.scan!;
     final opts = _effectiveOptions(t.summary);
-    if (t.plan != null && t.planOptions == opts) return t.plan!;
+    if (t.plan != null && t.planOptions == opts) return Future.value(t.plan!);
     final gen = t.editGen;
+    final pending = t.inFlightPlan;
+    if (pending != null && pending.editGen == gen && pending.options == opts) {
+      return pending.future;
+    }
     final decisions = t.decisions;
     final summary = t.summary;
-    final (plan, builtOpts) = await _buildPlanWithOptions(
-      summary,
-      scan,
-      decisions,
-    );
-    if (t.editGen == gen &&
-        t.summary.mode == summary.mode &&
-        _tasks[t.summary.id] == t) {
-      t.plan = plan;
-      t.planOptions = builtOpts;
-    }
-    return plan;
+    late final Future<RenamePlan> future;
+    future = () async {
+      try {
+        final (plan, builtOpts) = await _buildPlanWithOptions(
+          summary,
+          scan,
+          decisions,
+        );
+        if (t.editGen == gen &&
+            t.summary.mode == summary.mode &&
+            _tasks[t.summary.id] == t) {
+          t.plan = plan;
+          t.planOptions = builtOpts;
+        }
+        return plan;
+      } finally {
+        if (identical(t.inFlightPlan?.future, future)) {
+          t.inFlightPlan = null;
+        }
+      }
+    }();
+    t.inFlightPlan = (editGen: gen, options: opts, future: future);
+    return future;
   }
 
   Future<TaskReview> _review(_Task t) async {
@@ -760,6 +861,31 @@ class DefaultTaskManager implements TaskManager {
       }
     }
 
+    // Precompute per-group video lists (matching planner.dart: planned videos
+    // first, falling back to all videos).
+    final allVideosByGroup = <GroupId, List<ScanFile>>{};
+    final plannedVideosByGroup = <GroupId, List<ScanFile>>{};
+    final plannedSrcsByGroup = <GroupId, Set<String>>{};
+    for (final o in plan.ops) {
+      if (o.phase == ExecPhase.files &&
+          o.kind == OpKind.relocate &&
+          o.group != null) {
+        (plannedSrcsByGroup[o.group!] ??= <String>{}).add(o.src);
+      }
+    }
+    for (final g in t.scan!.groups) {
+      final allVideos = [
+        for (final x in g.files)
+          if (x.role == FileRole.video) x,
+      ];
+      allVideosByGroup[g.id] = allVideos;
+      final plannedSrcs = plannedSrcsByGroup[g.id] ?? const <String>{};
+      plannedVideosByGroup[g.id] = [
+        for (final x in allVideos)
+          if (plannedSrcs.contains(x.path)) x,
+      ];
+    }
+
     // Pass 2: subtitles / sidecars and any non-video file relocates.
     for (final o in plan.ops) {
       if (o.phase != ExecPhase.files ||
@@ -786,22 +912,32 @@ class DefaultTaskManager implements TaskManager {
               ov.episode != null ||
               ov.kind == MediaKind.extra ||
               ov.kind == MediaKind.special);
-      final allVideos = [
-        for (final x in g.files)
-          if (x.role == FileRole.video) x,
-      ];
-      var m = f == null ? null : matchVideo(f, allVideos);
-      if (m == null && allVideos.length == 1 && f?.role == FileRole.subtitle) {
-        m = FollowMatch(allVideos.first, '');
+      final plannedVideos = plannedVideosByGroup[g.id] ?? const <ScanFile>[];
+      final allVideos = allVideosByGroup[g.id] ?? const <ScanFile>[];
+      var mItem = f == null ? null : matchVideo(f, plannedVideos);
+      if (mItem == null &&
+          plannedVideos.length == 1 &&
+          f?.role == FileRole.subtitle) {
+        mItem = FollowMatch(plannedVideos.first, '');
+      }
+      var mAll = mItem ?? (f == null ? null : matchVideo(f, allVideos));
+      if (mAll == null &&
+          allVideos.length == 1 &&
+          f?.role == FileRole.subtitle) {
+        mAll = FollowMatch(allVideos.first, '');
       }
       final bool keep;
       if (hasExplicit) {
         keep = allowedWarning(o.warning, confirmed: true);
-      } else if (m != null) {
-        final videoIgnored = d.overrides[m.video.path]?.ignore ?? false;
+      } else if (mItem != null) {
+        keep =
+            keptVideoSrcs.contains(mItem.video.path) &&
+            allowedWarning(o.warning, confirmed: confirmed);
+      } else if (mAll != null) {
+        final videoIgnored = d.overrides[mAll.video.path]?.ignore ?? false;
         keep = videoIgnored
             ? confirmed && allowedWarning(o.warning, confirmed: true)
-            : keptVideoSrcs.contains(m.video.path) &&
+            : keptVideoSrcs.contains(mAll.video.path) &&
                   allowedWarning(o.warning, confirmed: confirmed);
       } else {
         final groupOk =
@@ -815,37 +951,39 @@ class DefaultTaskManager implements TaskManager {
       }
     }
 
-    // Pass 3: folder relocates needed by kept file ops.
+    // Pass 3: folder relocates needed by ANY kept file op (including merged
+    // groups whose files land inside another group's renamed folder).
+    final allFolderOps = [
+      for (final o in plan.ops)
+        if (o.phase == ExecPhase.folders &&
+            o.kind == OpKind.relocate &&
+            o.selected)
+          o,
+    ];
     final keptFolderOps = <RenameOp>[];
-    for (final o in plan.ops) {
-      if (o.phase != ExecPhase.folders ||
-          o.kind != OpKind.relocate ||
-          !o.selected) {
-        continue;
-      }
-      final groupFiles = [
-        for (final f in keptFileOps)
-          if (o.group == null || f.group == o.group) f,
-      ];
-      if (groupFiles.isEmpty) continue;
+    for (final o in allFolderOps) {
       final isSeasonRename = o.id.value.startsWith('s-');
-      final used =
-          !isSeasonRename ||
-          groupFiles.any(
-            (f) =>
-                f.src.startsWith('${o.src}/') ||
-                f.dst.startsWith('${o.src}/') ||
-                f.dst.startsWith('${o.dst}/'),
-          );
+      final usedByAnyFile = keptFileOps.any(
+        (f) =>
+            f.dst.startsWith('${o.src}/') ||
+            f.dst.startsWith('${o.dst}/') ||
+            (isSeasonRename && f.src.startsWith('${o.src}/')),
+      );
+      final used = isSeasonRename
+          ? usedByAnyFile
+          : usedByAnyFile ||
+                (o.group == null
+                    ? keptFileOps.isNotEmpty
+                    : keptGroups.contains(o.group));
       if (used) {
         keptIds.add(o.id);
         keptFolderOps.add(o);
       }
     }
 
-    String postFolder(String path) {
+    String applyFolders(String path, List<RenameOp> folders) {
       var cur = path;
-      for (final f in keptFolderOps) {
+      for (final f in folders) {
         if (cur == f.src) {
           cur = f.dst;
         } else if (cur.startsWith('${f.src}/')) {
@@ -855,10 +993,16 @@ class DefaultTaskManager implements TaskManager {
       return cur;
     }
 
+    String postFolder(String path) => applyFolders(path, keptFolderOps);
+
     final keptVideoFinalTargets = <String>{
       for (final o in keptFileOps)
         if (keptVideoSrcs.contains(o.src))
           '${dirOf(postFolder(o.dst))}/${stem(baseOf(o.dst))}',
+    };
+    final keptMergeDirs = <String>{
+      for (final m in plan.merges)
+        if (keptGroups.contains(m.group)) m.into,
     };
 
     // Pass 4: scrape writes tied to kept videos / groups.
@@ -866,15 +1010,20 @@ class DefaultTaskManager implements TaskManager {
     for (final o in plan.ops) {
       if (o.kind != OpKind.write || !o.selected) continue;
       if (!allowedWarning(o.warning, confirmed: false)) continue;
-      if (o.group != null && !keptGroups.contains(o.group)) continue;
       final name = baseOf(o.dst);
-      final isGroupArt =
-          name == 'tvshow.nfo' ||
-          name == 'poster.jpg' ||
-          name == 'fanart.jpg' ||
-          name.startsWith('season');
+      final lowerName = name.toLowerCase();
+      final isShowArt =
+          lowerName == 'tvshow.nfo' ||
+          lowerName == 'poster.jpg' ||
+          lowerName == 'fanart.jpg';
+      final isGroupArt = isShowArt || _seasonArtRe.hasMatch(lowerName);
+      final belongsToKept =
+          o.group == null ||
+          keptGroups.contains(o.group) ||
+          (isShowArt && keptMergeDirs.contains(dirOf(o.dst)));
+      if (!belongsToKept) continue;
       if (!isGroupArt) {
-        final targetStem = name.endsWith('-thumb.jpg')
+        final targetStem = lowerName.endsWith('-thumb.jpg')
             ? name.substring(0, name.length - '-thumb.jpg'.length)
             : stem(name);
         final key = '${dirOf(o.dst)}/$targetStem';
@@ -898,12 +1047,23 @@ class DefaultTaskManager implements TaskManager {
       if (needed) keptIds.add(o.id);
     }
 
-    // Pass 6: delete ops (do not delete junk inside a dropped group root).
+    // Pass 6: delete ops (do not delete junk inside a dropped group root,
+    // matching both pre-rename and post-rename folder paths).
+    final droppedFolderOps = [
+      for (final f in allFolderOps)
+        if (!keptIds.contains(f.id)) f,
+    ];
     for (final o in plan.ops) {
       if (o.kind != OpKind.delete || !o.selected) continue;
+      final underDroppedRename = droppedFolderOps.any(
+        (f) => o.src.startsWith('${f.dst}/'),
+      );
+      if (underDroppedRename) continue;
       final insideDropped = t.scan!.groups.any((g) {
         if (keptGroups.contains(g.id)) return false;
-        return o.src.startsWith('${g.rootDir}/');
+        final plannedRoot = applyFolders(g.rootDir, allFolderOps);
+        return o.src.startsWith('${g.rootDir}/') ||
+            o.src.startsWith('$plannedRoot/');
       });
       final insideKept = t.scan!.groups.any((g) {
         if (!keptGroups.contains(g.id)) return false;
@@ -934,7 +1094,19 @@ class DefaultTaskManager implements TaskManager {
       merges: plan.merges,
       conflicts: [
         for (final c in plan.conflicts)
-          if (c.ops.isEmpty || c.ops.any(keptIds.contains)) c,
+          if (c.ops.isEmpty)
+            c
+          else if (c.ops.length == 1) ...[
+            if (keptIds.contains(c.ops.single)) c,
+          ] else if (c.ops.where(keptIds.contains).length > 1)
+            PlanConflict(
+              ops: [
+                for (final id in c.ops)
+                  if (keptIds.contains(id)) id,
+              ],
+              path: c.path,
+              reason: c.reason,
+            ),
       ],
     );
   }
@@ -945,8 +1117,9 @@ class DefaultTaskManager implements TaskManager {
   Future<void> _drive(
     _Task t,
     Stream<ExecProgress> stream,
-    BatchId? batch,
-  ) async {
+    BatchId? batch, {
+    bool hasWrites = false,
+  }) async {
     final done = t.execDone = Completer<void>();
     Object? failure;
     var stage = t.summary.stage;
@@ -958,7 +1131,7 @@ class DefaultTaskManager implements TaskManager {
         final label = switch (e.phase) {
           ExecPhase.files => '正在重命名文件',
           ExecPhase.folders => '正在整理文件夹',
-          ExecPhase.cleanup => '正在清理',
+          ExecPhase.cleanup => hasWrites ? '正在刮削（写入元数据和海报）' : '正在清理',
         };
         _emit(
           t,
@@ -984,20 +1157,22 @@ class DefaultTaskManager implements TaskManager {
     );
     await done.future;
     t.exec = null;
-    if (t.cancelled) return; // cancel() settles the state
+    if (identical(t.execDone, done)) t.execDone = null;
+    if (t.cancelled || _tasks[t.summary.id] != t) return; // cancel() settles
     final b = batch ?? await _batchOf(t.summary.id, exclude: t.priorBatches);
     final failed = b == null
         ? 0
         : (await history.records(b))
               .where((r) => r.status == OpStatus.failed)
               .length;
+    if (t.cancelled || _tasks[t.summary.id] != t) return;
     if (failure != null) {
       await _set(
         t,
         _with(
           t.summary,
           stage: TaskStage.partiallyFailed,
-          message: '执行出错：$failure',
+          message: '执行出错：${_friendlyError(failure!)}',
           batch: () => b,
         ),
       );
@@ -1044,14 +1219,68 @@ class DefaultTaskManager implements TaskManager {
 
   // ---- plumbing ----------------------------------------------------------
 
+  Future<void> _withBusy(_Task t, Future<void> Function() fn) async {
+    t.busy = true;
+    final done = Completer<void>();
+    t.busyDone = done;
+    try {
+      await fn();
+    } finally {
+      t.busy = false;
+      if (identical(t.busyDone, done)) t.busyDone = null;
+      if (!done.isCompleted) done.complete();
+    }
+  }
+
   Future<_Task> _get(TaskId id) async {
     await _ready;
-    return _tasks[id] ?? (throw ArgumentError('unknown task ${id.value}'));
+    return _tasks[id] ?? (throw ArgumentError('未找到任务：${id.value}'));
+  }
+
+  static String _stageLabel(TaskStage stage) => switch (stage) {
+    TaskStage.importing => '导入中',
+    TaskStage.recognizing => '识别中',
+    TaskStage.awaitingReview => '待确认',
+    TaskStage.renamingFiles => '重命名文件中',
+    TaskStage.renamingFolders => '整理文件夹中',
+    TaskStage.done => '已完成',
+    TaskStage.partiallyFailed => '部分失败',
+    TaskStage.cancelled => '已取消',
+    TaskStage.undone => '已撤销',
+    TaskStage.failed => '已失败',
+  };
+
+  static String _friendlyError(Object e) {
+    if (e is StorageException) {
+      if (e.message.isNotEmpty) return e.message;
+      return switch (e.code) {
+        StorageErrorCode.notFound => '文件或目录不存在',
+        StorageErrorCode.alreadyExists => '目标位置已存在同名文件或目录',
+        StorageErrorCode.unauthorized => '认证失败，请检查账号或密码',
+        StorageErrorCode.rateLimited => '请求过于频繁，请稍后重试',
+        StorageErrorCode.network => '网络连接失败',
+        StorageErrorCode.busy => '文件或目录正被占用',
+        StorageErrorCode.other => '存储访问出错',
+      };
+    }
+    if (e is StateError) return e.message;
+    if (e is ArgumentError) {
+      return e.message?.toString() ?? '参数无效';
+    }
+    final s = e.toString();
+    for (final prefix in const [
+      'Exception: ',
+      'Bad state: ',
+      'FormatException: ',
+    ]) {
+      if (s.startsWith(prefix)) return s.substring(prefix.length);
+    }
+    return s;
   }
 
   void _requireStage(_Task t, TaskStage stage) {
     if (t.summary.stage != stage) {
-      throw StateError('任务当前状态不允许此操作：${t.summary.stage.name}');
+      throw StateError('任务当前状态不允许此操作（${_stageLabel(t.summary.stage)}）');
     }
   }
 
@@ -1061,22 +1290,55 @@ class DefaultTaskManager implements TaskManager {
 
   /// Updates in-memory state and notifies watchers. Late updates from a task
   /// that was cancelled meanwhile are dropped unless [force]d.
-  void _emit(_Task t, TaskSummary s, {bool force = false}) {
-    if ((t.cancelled && !force) || _tasks[t.summary.id] != t) return;
+  bool _emit(_Task t, TaskSummary s, {bool force = false}) {
+    if ((t.cancelled && !force) || _tasks[t.summary.id] != t) return false;
     t.summary = s;
     if (!_changes.isClosed) _changes.add(_snapshot());
+    return true;
   }
 
   Future<void> _set(_Task t, TaskSummary s, {bool force = false}) {
-    _emit(t, s, force: force);
+    if (!_emit(t, s, force: force)) return Future.value();
     return _persist(t);
   }
 
-  Future<void> _persist(_Task t) {
-    final s = t.summary;
-    final f = t.persistQueue.then((_) => store.saveSummary(s));
+  Future<void> _enqueuePersist(_Task t, Future<void> Function() action) {
+    final f = t.persistQueue.then((_) => action());
     t.persistQueue = f.then((_) {}, onError: (_) {});
     return f;
+  }
+
+  Future<void> _persist(_Task t) {
+    final id = t.summary.id;
+    if (_tasks[id] != t) return Future.value();
+    final s = t.summary;
+    return _enqueuePersist(t, () async {
+      if (_tasks[id] != t) return;
+      await store.saveSummary(s);
+    });
+  }
+
+  Future<void> _saveReview(
+    _Task t,
+    ScanResult scan,
+    Map<GroupId, GroupDecision> decisions,
+  ) {
+    final id = t.summary.id;
+    if (_tasks[id] != t) return Future.value();
+    final snapshot = Map<GroupId, GroupDecision>.of(decisions);
+    return _enqueuePersist(t, () async {
+      if (_tasks[id] != t) return;
+      await store.saveReview(id, scan, snapshot);
+    });
+  }
+
+  Future<void> _clearReview(_Task t) {
+    final id = t.summary.id;
+    if (_tasks[id] != t) return Future.value();
+    return _enqueuePersist(t, () async {
+      if (_tasks[id] != t) return;
+      await store.clearReview(id);
+    });
   }
 
   TaskSummary _with(

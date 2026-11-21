@@ -150,11 +150,16 @@ class SizeScanner extends ChangeNotifier {
 
   final _listings = <String, List<RemoteEntry>>{};
   final _organized = <String>{};
+  final _checkedOrganized = <String>{};
   final _complete = <String>{};
   final _memo = <String, FolderStats>{};
 
+  static const _organizedBatchSize = 200;
+
   String? _running;
   var _stop = false;
+  var _gen = 0;
+  Future<void>? _activeRun;
   var _dirsListed = 0;
   Object? _error;
   final _skipped = <String, String>{};
@@ -181,10 +186,17 @@ class SizeScanner extends ChangeNotifier {
   /// returns at once unless [fresh], which recounts from the server; a call
   /// while another count runs stops that one first.
   Future<void> scan(String root, {bool fresh = false}) async {
+    if (_disposed) return;
     if (!fresh && isComplete(root)) return;
+    final myGen = ++_gen;
     // No await when idle: the count must be running as soon as this returns.
-    if (_running != null) await _stopRunning();
+    if (_activeRun != null) {
+      await _stopRunning();
+      if (_disposed || myGen != _gen) return;
+    }
     if (fresh) _drop(root);
+    final done = Completer<void>();
+    _activeRun = done.future;
     _running = root;
     _stop = false;
     _error = null;
@@ -192,6 +204,20 @@ class SizeScanner extends ChangeNotifier {
     _skipped.clear();
     // Callers start a count from initState / didUpdateWidget, mid-build.
     scheduleMicrotask(_notify);
+
+    final pendingAsk = <String>[];
+    Future<void> flushOrganized() async {
+      if (pendingAsk.isEmpty || _disposed) return;
+      final batch = List<String>.of(pendingAsk);
+      pendingAsk.clear();
+      _checkedOrganized.addAll(batch);
+      final found = await organizedOf(batch);
+      if (found.isNotEmpty) {
+        _organized.addAll(found);
+        _memo.clear();
+      }
+    }
+
     try {
       await walkDirs(
         [root],
@@ -214,12 +240,15 @@ class SizeScanner extends ChangeNotifier {
           }
           if (cached == null) {
             _listings[dir] = list;
-            final ask = [
-              for (final e in list)
-                if (e.isDir || parser.classify(e.name) == FileRole.video)
-                  e.path,
-            ];
-            if (ask.isNotEmpty) _organized.addAll(await organizedOf(ask));
+            for (final e in list) {
+              if ((e.isDir || parser.classify(e.name) == FileRole.video) &&
+                  !_checkedOrganized.contains(e.path)) {
+                pendingAsk.add(e.path);
+              }
+            }
+            if (pendingAsk.length >= _organizedBatchSize) {
+              await flushOrganized();
+            }
             _memo.clear();
           }
           _dirsListed++;
@@ -230,20 +259,33 @@ class SizeScanner extends ChangeNotifier {
           ];
         },
         parallel: parallel,
-        stop: () => _stop,
+        stop: () => _stop || _disposed || myGen != _gen,
       );
-      if (!_stop) _complete.add(root);
+      await flushOrganized();
+      if (!_stop && !_disposed && myGen == _gen) _complete.add(root);
     } catch (e) {
-      _error = e;
+      if (!_disposed && myGen == _gen) _error = e;
     } finally {
-      _running = null;
+      if (pendingAsk.isNotEmpty && !_disposed && myGen == _gen) {
+        try {
+          await flushOrganized();
+        } on Object {
+          // Best-effort flush on error/cancel.
+        }
+      }
+      if (myGen == _gen) _running = null;
+      if (identical(_activeRun, done.future)) _activeRun = null;
+      done.complete();
       _notify();
     }
   }
 
   /// Forgets what's known below [root]; the next count lists it again.
   Future<void> forget(String root) async {
+    if (_disposed) return;
+    final myGen = ++_gen;
     await _stopRunning();
+    if (_disposed || myGen != _gen) return;
     _drop(root);
     _notify();
   }
@@ -255,17 +297,17 @@ class SizeScanner extends ChangeNotifier {
   }
 
   Future<void> _stopRunning() async {
-    if (_running == null) return;
+    final run = _activeRun;
+    if (run == null) return;
     _stop = true;
-    while (_running != null) {
-      await Future<void>.delayed(const Duration(milliseconds: 10));
-    }
+    await run;
   }
 
   void _drop(String root) {
     bool below(String p) => p == root || p.startsWith('$root/') || root == '/';
     _listings.removeWhere((k, _) => below(k));
     _organized.removeWhere(below);
+    _checkedOrganized.removeWhere(below);
     // Parents aren't complete any more either; recounting them reuses the
     // listings kept for their other children.
     _complete.removeWhere(
@@ -280,11 +322,15 @@ class SizeScanner extends ChangeNotifier {
   }
 
   /// Totals for [path] (a folder or a file) from what has been listed so far.
-  FolderStats statsOf(RemoteEntry e) =>
-      e.isDir ? _dir(e.path, _inherited(e.path)) : _file(e, _inherited(e.path));
+  FolderStats statsOf(RemoteEntry e) {
+    final currentMarks = marks();
+    return e.isDir
+        ? _dir(e.path, _inherited(e.path), currentMarks)
+        : _file(e, _inherited(e.path), currentMarks);
+  }
 
   /// Totals for the folder [dir] itself.
-  FolderStats statsOfDir(String dir) => _dir(dir, _inherited(dir));
+  FolderStats statsOfDir(String dir) => _dir(dir, _inherited(dir), marks());
 
   /// Whether a done op produced [path] or a folder above it.
   bool _inherited(String path) {
@@ -297,23 +343,27 @@ class SizeScanner extends ChangeNotifier {
     }
   }
 
-  FolderStats _file(RemoteEntry e, bool organized) {
+  FolderStats _file(
+    RemoteEntry e,
+    bool organized,
+    Map<String, bool> currentMarks,
+  ) {
     final video = parser.classify(e.name) == FileRole.video;
     if (!video) return FolderStats(other: e.size, files: 1);
-    return markFor(marks(), e.path) ??
+    return markFor(currentMarks, e.path) ??
             (organized || _organized.contains(e.path) || looksOrganized(e))
         ? FolderStats(organized: e.size, files: 1)
         : FolderStats(unorganized: e.size, files: 1);
   }
 
-  FolderStats _dir(String dir, bool organized) {
+  FolderStats _dir(String dir, bool organized, Map<String, bool> currentMarks) {
     final key = '$organized$dir';
     final hit = _memo[key];
     if (hit != null) return hit;
     var s = FolderStats.zero;
     for (final e in _listings[dir] ?? const <RemoteEntry>[]) {
       final o = organized || _organized.contains(e.path);
-      s += e.isDir ? _dir(e.path, o) : _file(e, o);
+      s += e.isDir ? _dir(e.path, o, currentMarks) : _file(e, o, currentMarks);
     }
     return _memo[key] = s;
   }

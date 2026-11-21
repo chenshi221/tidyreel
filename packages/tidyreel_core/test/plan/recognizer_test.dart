@@ -244,6 +244,10 @@ void main() {
     });
     test('langFromRemainder', () {
       expect(langFromRemainder('.chs'), 'zh-Hans');
+      expect(langFromRemainder('-chs'), 'zh-Hans');
+      expect(langFromRemainder('-zh-TW'), 'zh-Hant');
+      expect(langFromRemainder('-chs-forced'), 'zh-Hans');
+      expect(langFromRemainder('-zh-TW-forced'), 'zh-Hant');
       expect(langFromRemainder('.zh-TW.forced'), 'zh-Hant');
       expect(langFromRemainder('-poster'), isNull);
       expect(langFromRemainder(''), isNull);
@@ -296,5 +300,60 @@ void main() {
       ).recognize(conn, ['/下载'], entriesOf(romaji));
       expect(r.groups.single.kind, MediaKind.movie);
     });
+
+    test('AniList failure does not fail recognition', () async {
+      final r = await AnchorRecognizer(
+        const RuleBasedParser(),
+        FakeMetadataProvider(),
+        altTitles: _FailingAlt(),
+      ).recognize(conn, ['/下载'], entriesOf(romaji));
+      expect(r.groups, hasLength(1));
+      expect(r.groups.single.match, isNull);
+    });
+
+    test('transient metadata.search failure is evicted from cache', () async {
+      final meta = _FailOnceSearch();
+      await expectLater(
+        AnchorRecognizer(const RuleBasedParser(), meta).recognize(conn, [
+          '/下载',
+        ], entriesOf(['/下载/A/Inception.2010.mkv', '/下载/B/Inception.2010.mkv'])),
+        throwsA(isA<StorageException>()),
+      );
+      // Group A failed on 'A' (or 'Inception') and evicted the rejected future;
+      // Group B later queried 'Inception' fresh rather than hitting a poisoned entry.
+      expect(meta.inceptionCalls, 2);
+    });
   });
+}
+
+class _FailingAlt implements AltTitleSource {
+  @override
+  Future<List<String>> altTitles(String query) async =>
+      throw StateError('AniList 503');
+}
+
+class _FailOnceSearch extends FakeMetadataProvider {
+  var inceptionCalls = 0;
+
+  @override
+  Future<List<Candidate>> search(
+    String query, {
+    MediaKind? kind,
+    int? year,
+  }) async {
+    // Delay group B's folder-title lookup so it reaches 'Inception' after
+    // group A's 'Inception' lookup has already failed and evicted from cache.
+    if (query == 'B') {
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      return const [];
+    }
+    if (query == 'A') return const [];
+    if (query == 'Inception' && year == 2010) {
+      inceptionCalls++;
+      if (inceptionCalls == 1) {
+        throw const StorageException(StorageErrorCode.network, 'transient');
+      }
+    }
+    return super.search(query, kind: kind, year: year);
+  }
 }

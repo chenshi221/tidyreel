@@ -92,6 +92,84 @@ void main() {
     expect(p.canExecute, isTrue);
   });
 
+  test('in-place rename keeps pre-rename existing nfo and artwork', () async {
+    final p = await plan(existing: {'$root/poster.jpg', '$root/tvshow.nfo'});
+    final poster = p.ops.singleWhere((o) => o.dst == '$out/poster.jpg');
+    final nfo = p.ops.singleWhere((o) => o.dst == '$out/tvshow.nfo');
+    expect(poster.selected, isFalse);
+    expect(poster.warning, '已存在，保留原文件');
+    expect(nfo.selected, isFalse);
+    expect(nfo.warning, '已存在，保留原文件');
+    expect(p.canExecute, isTrue);
+  });
+
+  test(
+    'scrape passes episode group title to episodeNfo and shares caches',
+    () async {
+      final meta = _CountingMeta();
+      final epGroup = EpisodeGroup(
+        id: 'eg1',
+        name: 'DVD',
+        type: 3,
+        seasons: [
+          const EpisodeGroupSeason(
+            order: 0,
+            name: 'Specials',
+            episodes: [EpisodeRef(0, 1)],
+          ),
+          const EpisodeGroupSeason(
+            order: 1,
+            name: 'S1',
+            episodes: [EpisodeRef(1, 1)],
+          ),
+        ],
+      );
+      final p = await DefaultPlanner(meta).build(
+        scanOf([
+          tvGroup(
+            [video('$root/E01.mkv', season: 1, episode: 1)],
+            rootDir: root,
+            show: null,
+          ),
+        ]),
+        {const GroupId('g1'): GroupDecision(episodeGroupId: epGroup.id)},
+        const PlanOptions(scrape: true),
+      );
+      final epNfo = p.ops.singleWhere(
+        (o) => o.kind == OpKind.write && o.dst.endsWith('S01E01.nfo'),
+      );
+      expect(epNfo.src, contains('<title>洞窟</title>'));
+      expect(meta.seasonCalls, 1);
+
+      // Movie scrape + non-Chinese title lookup calls metadata.movie() at most once.
+      final movieMeta = _CountingMeta();
+      await DefaultPlanner(movieMeta).build(
+        scanOf([
+          MediaGroup(
+            id: const GroupId('m1'),
+            kind: MediaKind.movie,
+            anchorTitle: 'Inception',
+            rootDir: '/d/Inception',
+            files: [
+              video('/d/Inception/Inception.2010.mkv', kind: MediaKind.movie),
+            ],
+            match: const Candidate(
+              tmdbId: 27205,
+              kind: MediaKind.movie,
+              title: 'Inception',
+              year: 2010,
+              posterPath: '/mp.jpg',
+            ),
+            matchScore: 0.95,
+          ),
+        ]),
+        const {},
+        const PlanOptions(scrape: true),
+      );
+      expect(movieMeta.movieCalls, 1);
+    },
+  );
+
   test('scrape off writes nothing', () async {
     final p = await DefaultPlanner(_Meta()).build(
       scanOf([
@@ -106,4 +184,47 @@ void main() {
     );
     expect(p.ops.where((o) => o.kind == OpKind.write), isEmpty);
   });
+}
+
+class _CountingMeta extends _Meta {
+  var seasonCalls = 0;
+  var movieCalls = 0;
+
+  @override
+  Future<List<Episode>> season(int tmdbId, int season) {
+    seasonCalls++;
+    return super.season(tmdbId, season);
+  }
+
+  @override
+  Future<List<EpisodeGroup>> episodeGroups(int tmdbId) async => const [
+    EpisodeGroup(
+      id: 'eg1',
+      name: 'DVD',
+      type: 3,
+      seasons: [
+        EpisodeGroupSeason(
+          order: 0,
+          name: 'Specials',
+          episodes: [EpisodeRef(0, 1)],
+        ),
+        EpisodeGroupSeason(order: 1, name: 'S1', episodes: [EpisodeRef(1, 1)]),
+      ],
+    ),
+  ];
+
+  @override
+  Future<MovieDetail> movie(int tmdbId) async {
+    movieCalls++;
+    return const MovieDetail(
+      info: Candidate(
+        tmdbId: 27205,
+        kind: MediaKind.movie,
+        title: '盗梦空间',
+        englishTitle: 'Inception',
+        year: 2010,
+        posterPath: '/mp.jpg',
+      ),
+    );
+  }
 }

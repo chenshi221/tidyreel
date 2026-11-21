@@ -347,7 +347,7 @@ void main() {
     final rig = Rig(MemoryStorageBackend(library()));
     rig.recognizer.failOnce = StateError('请先在「设置」里填写 TMDB API key');
     final id = await rig.tm.submit(conn, ['/in/Good'], OrganizeMode.inPlace);
-    final failed = await rig.waitFor(id, (t) => t.stage == TaskStage.cancelled);
+    final failed = await rig.waitFor(id, (t) => t.stage == TaskStage.failed);
     expect(canRetry(failed), isTrue);
     await rig.tm.retry(id);
     await rig.waitFor(id, (t) => t.stage == TaskStage.awaitingReview);
@@ -1013,7 +1013,505 @@ void main() {
         contains('CHANGED.S01E01'),
       );
     });
+
+    test('pipeline error sets TaskStage.failed with clean Chinese message, and missing path fails', () async {
+      final rig = Rig(MemoryStorageBackend(library()));
+      rig.recognizer.failOnce = const StorageException(
+        StorageErrorCode.network,
+        '网络超时',
+      );
+      final id = await rig.tm.submit(conn, ['/in/Good'], OrganizeMode.inPlace);
+      final failed = await rig.waitFor(id, (t) => t.stage == TaskStage.failed);
+      expect(failed.message, '识别失败：网络超时');
+      expect(failed.message, isNot(contains('StorageException')));
+
+      final missingId = await rig.tm.submit(conn, [
+        '/in/does_not_exist',
+      ], OrganizeMode.inPlace);
+      final missing = await rig.waitFor(
+        missingId,
+        (t) => t.stage == TaskStage.failed,
+      );
+      expect(missing.message, contains('导入失败：所选路径不存在'));
+    });
+
+    test('failed updateDecision keeps memory and store decisions in sync, and delete rejects pending edits', () async {
+      final fs = MemoryStorageBackend({'/in/Good/a.mkv': 1});
+      final rig = Rig(fs);
+      final failingPlanner = _FailingOncePlanner();
+      rig.tm = DefaultTaskManager(
+        backendFor: (_) => fs,
+        recognizer: rig.recognizer,
+        planner: failingPlanner,
+        executor: DefaultExecutor(rig.history, minInterval: Duration.zero),
+        history: rig.history,
+        store: rig.store,
+        options: (_, mode) => PlanOptions(mode: mode),
+        importUpdateInterval: Duration.zero,
+      );
+      final id = await rig.submitReady(['/in/Good']);
+      final gid = const GroupId('g:/in/Good');
+      failingPlanner.gate = Completer<void>();
+      failingPlanner.throwOnNext = true;
+      final pending = rig.tm.updateDecision(
+        id,
+        gid,
+        const GroupDecision(selected: false),
+      );
+      await failingPlanner.entered.future;
+      await expectLater(rig.tm.delete(id), throwsStateError);
+      failingPlanner.gate!.complete();
+      await expectLater(pending, throwsStateError);
+      final rev = await rig.tm.review(id);
+      expect(rev.decisions[gid]!.selected, isTrue);
+      expect(
+        (await rig.store.loadAll()).single.decisions[gid]!.selected,
+        isTrue,
+      );
+    });
+
+    test(
+      'retry calls store.clearReview so stale decisions are not reloaded',
+      () async {
+        final rig = Rig(MemoryStorageBackend({'/in/Good/a.mkv': 1}));
+        final id = await rig.submitReady(['/in/Good']);
+        await rig.tm.updateDecision(
+          id,
+          const GroupId('g:/in/Good'),
+          const GroupDecision(selected: false),
+        );
+        await rig.tm.cancel(id);
+        rig.recognizer.gate = Completer<void>();
+        await rig.tm.retry(id);
+        final stored = (await rig.store.loadAll()).single;
+        expect(stored.scan, isNull);
+        expect(stored.decisions, isEmpty);
+        rig.recognizer.gate!.complete();
+      },
+    );
+
+    test('cancel waits for busy release so immediate delete works, and resumeInterrupted skips deleted tasks', () async {
+      final fs = MemoryStorageBackend({'/in/Good/a.mkv': 1});
+      final history = _GatedBatchHistory();
+      final rig = Rig(fs);
+      rig.tm = DefaultTaskManager(
+        backendFor: (_) => fs,
+        recognizer: rig.recognizer,
+        planner: rig.planner,
+        executor: DefaultExecutor(history, minInterval: Duration.zero),
+        history: history,
+        store: rig.store,
+        options: (_, mode) => PlanOptions(mode: mode),
+      );
+      final id = await rig.submitReady(['/in/Good']);
+      history.hold = true;
+      final running = rig.tm.run(id);
+      await history.entered.future;
+      final cancelling = rig.tm.cancel(id);
+      history.release.complete();
+      await Future.wait([cancelling, running]);
+      // Must succeed immediately without throwing '任务正在进行' / '任务正在处理中'.
+      await rig.tm.delete(id);
+      expect(await rig.tm.watchAll().first, isEmpty);
+    });
+
+    test('concurrent review calls coalesce _ensurePlan', () async {
+      const root = '/d/异兽魔都 2020';
+      const gid = GroupId('g1');
+      const tid = TaskId('t-coalesce');
+      final fs = MemoryStorageBackend({'$root/a.mkv': 1});
+      final scan = ScanResult(
+        connection: conn,
+        roots: const ['/d'],
+        groups: const [
+          MediaGroup(
+            id: gid,
+            kind: MediaKind.episode,
+            anchorTitle: '异兽魔都',
+            rootDir: root,
+            match: Demo.dorohedoro,
+            matchScore: 0.9,
+            files: [
+              ScanFile(
+                path: '$root/a.mkv',
+                name: 'a.mkv',
+                size: 1,
+                role: FileRole.video,
+                parsed: ParsedName(season: 1, episodes: [1], confidence: 0.9),
+              ),
+            ],
+          ),
+        ],
+      );
+      final store = MemoryTaskStore();
+      await store.saveSummary(
+        TaskSummary(
+          id: tid,
+          connection: conn,
+          paths: const ['/d'],
+          mode: OrganizeMode.inPlace,
+          stage: TaskStage.awaitingReview,
+          createdAt: DateTime(2026),
+        ),
+      );
+      await store.saveReview(tid, scan, {gid: const GroupDecision()});
+      final planner = _CountingPlanner();
+      final h = MemoryHistoryStore();
+      final tm = DefaultTaskManager(
+        backendFor: (_) => fs,
+        recognizer: FakeRecognizer(),
+        planner: planner,
+        executor: DefaultExecutor(h, minInterval: Duration.zero),
+        history: h,
+        store: store,
+        options: (_, mode) => PlanOptions(mode: mode),
+      );
+      final results = await Future.wait([
+        tm.review(tid),
+        tm.review(tid),
+        tm.review(tid),
+      ]);
+      expect(results, hasLength(3));
+      expect(planner.calls, 1);
+    });
+
+    test('_confidentOnly fixes: merged folder rename, rewritten dropped junk, resolved multi-op conflict, and strict season art', () async {
+      const s1 = '/d/Show S01';
+      const s2 = '/d/Show S02';
+      const out = '/d/异兽魔都 (2020)';
+      const g1 = GroupId('g1');
+      const g2 = GroupId('g2');
+      final fs = MemoryStorageBackend({
+        '$s1/a.mkv': 1,
+        '$s1/ad.txt': 1,
+        '$s2/b.mkv': 1,
+      });
+      final scan = ScanResult(
+        connection: conn,
+        roots: const ['/d'],
+        groups: const [
+          MediaGroup(
+            id: g1,
+            kind: MediaKind.episode,
+            anchorTitle: '异兽魔都',
+            rootDir: s1,
+            match: Demo.dorohedoro,
+            matchScore: 0.2, // low confidence -> dropped!
+            files: [
+              ScanFile(
+                path: '$s1/a.mkv',
+                name: 'a.mkv',
+                size: 1,
+                role: FileRole.video,
+                parsed: ParsedName(season: 1, episodes: [1], confidence: 0.2),
+              ),
+            ],
+          ),
+          MediaGroup(
+            id: g2,
+            kind: MediaKind.episode,
+            anchorTitle: '异兽魔都',
+            rootDir: s2,
+            match: Demo.dorohedoro,
+            matchScore: 0.95, // high confidence -> kept!
+            files: [
+              ScanFile(
+                path: '$s2/b.mkv',
+                name: 'b.mkv',
+                size: 1,
+                role: FileRole.video,
+                parsed: ParsedName(season: 2, episodes: [1], confidence: 0.95),
+              ),
+            ],
+          ),
+        ],
+        unassigned: const [
+          ScanFile(
+            path: '$s1/ad.txt',
+            name: 'ad.txt',
+            size: 1,
+            role: FileRole.junk,
+          ),
+        ],
+      );
+      final plan = RenamePlan(
+        ops: [
+          const RenameOp(
+            id: OpId('r1'),
+            kind: OpKind.relocate,
+            phase: ExecPhase.files,
+            src: '$s1/a.mkv',
+            dst: '$s1/Season 01/Show.S01E01.mkv',
+            group: g1,
+            warning: '片名匹配置信度较低',
+          ),
+          const RenameOp(
+            id: OpId('r2'),
+            kind: OpKind.relocate,
+            phase: ExecPhase.files,
+            src: '$s2/b.mkv',
+            dst: '$s1/Season 02/Show.S02E01.mkv',
+            group: g2,
+          ),
+          const RenameOp(
+            id: OpId('f1'),
+            kind: OpKind.relocate,
+            phase: ExecPhase.folders,
+            src: s1,
+            dst: out,
+            group: g1,
+          ),
+          const RenameOp(
+            id: OpId('d1'),
+            kind: OpKind.delete,
+            phase: ExecPhase.cleanup,
+            src:
+                '$out/ad.txt', // rewritten post-rename path of dropped group g1
+            dst: '',
+          ),
+          const RenameOp(
+            id: OpId('w-bad'),
+            kind: OpKind.write,
+            phase: ExecPhase.cleanup,
+            src: 'text:<episodedetails/>',
+            dst: '$out/Season 01/season_pilot.nfo',
+            group: g2,
+          ),
+          const RenameOp(
+            id: OpId('w-art'),
+            kind: OpKind.write,
+            phase: ExecPhase.cleanup,
+            src: 'text:<tvshow/>',
+            dst: '$out/tvshow.nfo',
+            group: g1,
+          ),
+        ],
+        merges: const [
+          PlanMerge(
+            group: g2,
+            into: out,
+            exists: false,
+            withGroup: g1,
+            seasons: [2],
+          ),
+        ],
+        conflicts: const [
+          // r1 is dropped and r2 is kept -> only 1 op remains, so conflict is cleared.
+          PlanConflict(
+            ops: [OpId('r1'), OpId('r2')],
+            path: '$s1/dup.mkv',
+            reason: 'dup',
+          ),
+        ],
+      );
+      final store = MemoryTaskStore();
+      const tid = TaskId('t-conf');
+      await store.saveSummary(
+        TaskSummary(
+          id: tid,
+          connection: conn,
+          paths: const ['/d'],
+          mode: OrganizeMode.inPlace,
+          stage: TaskStage.awaitingReview,
+          createdAt: DateTime(2026),
+        ),
+      );
+      await store.saveReview(tid, scan, {
+        g1: const GroupDecision(),
+        g2: const GroupDecision(),
+      });
+      final h = MemoryHistoryStore();
+      final tm = DefaultTaskManager(
+        backendFor: (_) => fs,
+        recognizer: FakeRecognizer(),
+        planner: _FixedPlanner(plan),
+        executor: DefaultExecutor(h, minInterval: Duration.zero),
+        history: h,
+        store: store,
+        options: (_, mode) => PlanOptions(mode: mode, deleteJunk: true),
+      );
+      await tm.run(tid, onlyConfident: true);
+      expect((await tm.watchAll().first).single.stage, TaskStage.done);
+      // Shared folder rename was kept so g2 landed under /d/异兽魔都 (2020).
+      expect(fs.files, contains('$out/Season 02/Show.S02E01.mkv'));
+      // Dropped group's junk was NOT deleted despite post-rename path rewriting.
+      expect(fs.files, contains('$out/ad.txt'));
+      // Non-artwork file starting with "season" was NOT treated as group art.
+      expect(fs.files, isNot(contains('$out/Season 01/season_pilot.nfo')));
+      // Shared show-level tvshow.nfo WAS kept for the merged kept group.
+      expect(fs.files, contains('$out/tvshow.nfo'));
+    });
+
+    test('status messages: Chinese stage labels, monotonic undo progress, and scrape label', () async {
+      final fs = MemoryStorageBackend({
+        '/in/Good/a.mkv': 1,
+        '/in/Good/b.mkv': 1,
+      });
+      final rig = Rig(fs);
+      final id = await rig.submitReady(['/in/Good']);
+      await rig.tm.run(id);
+      await rig.waitFor(id, (t) => t.stage == TaskStage.done);
+
+      // _requireStage must use Chinese label, never raw enum name.
+      await expectLater(
+        rig.tm.run(id),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            allOf(contains('已完成'), isNot(contains('done'))),
+          ),
+        ),
+      );
+
+      // Undo emits monotonic progress across folders + files phases.
+      final progress = <double>[];
+      final sub = rig.tm.watchAll().listen((l) {
+        final p = l.firstOrNull?.progress;
+        if (p != null) progress.add(p);
+      });
+      await rig.tm.undo(id);
+      await sub.cancel();
+      expect(progress, isNotEmpty);
+      for (var i = 1; i < progress.length; i++) {
+        expect(progress[i], greaterThanOrEqualTo(progress[i - 1]));
+      }
+
+      // Blocked folder undo reports failure count (not skipped).
+      await rig.tm.retry(id);
+      await rig.waitFor(id, (t) => t.stage == TaskStage.awaitingReview);
+      await rig.tm.run(id);
+      await rig.waitFor(id, (t) => t.stage == TaskStage.done);
+      fs.addFile('/in/Good/blocker.txt');
+      await rig.tm.undo(id);
+      final afterUndo = (await rig.tm.watchAll().first).single;
+      expect(afterUndo.message, contains('1 项失败'));
+      expect(afterUndo.message, isNot(contains('已跳过')));
+
+      // Scrape cleanup phase reports '正在刮削（写入元数据和海报）'.
+      final fs2 = MemoryStorageBackend({'/s/a.mkv': 1});
+      final store2 = MemoryTaskStore();
+      final h2 = MemoryHistoryStore();
+      const tid2 = TaskId('t-scrape-msg');
+      final scan2 = ScanResult(
+        connection: conn,
+        roots: const ['/s'],
+        groups: const [
+          MediaGroup(
+            id: GroupId('g'),
+            kind: MediaKind.movie,
+            anchorTitle: 'a',
+            rootDir: '/s',
+            match: Demo.inception,
+            matchScore: 0.95,
+            files: [
+              ScanFile(
+                path: '/s/a.mkv',
+                name: 'a.mkv',
+                size: 1,
+                role: FileRole.video,
+              ),
+            ],
+          ),
+        ],
+      );
+      await store2.saveSummary(
+        TaskSummary(
+          id: tid2,
+          connection: conn,
+          paths: const ['/s'],
+          mode: OrganizeMode.inPlace,
+          scrape: true,
+          stage: TaskStage.awaitingReview,
+          createdAt: DateTime(2026),
+        ),
+      );
+      await store2.saveReview(tid2, scan2, {
+        const GroupId('g'): const GroupDecision(),
+      });
+      final tm2 = DefaultTaskManager(
+        backendFor: (_) => fs2,
+        recognizer: FakeRecognizer(),
+        planner: _FixedPlanner(
+          const RenamePlan(
+            ops: [
+              RenameOp(
+                id: OpId('w1'),
+                kind: OpKind.write,
+                phase: ExecPhase.cleanup,
+                src: 'text:<movie/>',
+                dst: '/s/a.nfo',
+              ),
+            ],
+          ),
+        ),
+        executor: DefaultExecutor(h2, minInterval: Duration.zero),
+        history: h2,
+        store: store2,
+        options: (_, mode) => PlanOptions(mode: mode, scrape: true),
+      );
+      final msgs = <String>[];
+      final sub2 = tm2.watchAll().listen((l) {
+        if (l.isNotEmpty) msgs.add(l.first.message);
+      });
+      await tm2.run(tid2);
+      await sub2.cancel();
+      expect(msgs.any((m) => m.startsWith('正在刮削（写入元数据和海报）')), isTrue);
+    });
   });
+}
+
+class _FailingOncePlanner extends FakePlanner {
+  Completer<void>? gate;
+  final entered = Completer<void>();
+  bool throwOnNext = false;
+
+  @override
+  Future<RenamePlan> build(
+    ScanResult scan,
+    Map<GroupId, GroupDecision> decisions,
+    PlanOptions options, {
+    Set<String> existing = const {},
+  }) async {
+    if (gate != null && !entered.isCompleted) {
+      entered.complete();
+      await gate!.future;
+    }
+    if (throwOnNext) {
+      throwOnNext = false;
+      throw StateError('plan boom');
+    }
+    return super.build(scan, decisions, options, existing: existing);
+  }
+}
+
+class _CountingPlanner extends FakePlanner {
+  var calls = 0;
+
+  @override
+  Future<RenamePlan> build(
+    ScanResult scan,
+    Map<GroupId, GroupDecision> decisions,
+    PlanOptions options, {
+    Set<String> existing = const {},
+  }) async {
+    if (existing.isEmpty) calls++;
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    return super.build(scan, decisions, options, existing: existing);
+  }
+}
+
+class _FixedPlanner implements Planner {
+  final RenamePlan plan;
+  _FixedPlanner(this.plan);
+
+  @override
+  Future<RenamePlan> build(
+    ScanResult scan,
+    Map<GroupId, GroupDecision> decisions,
+    PlanOptions options, {
+    Set<String> existing = const {},
+  }) async => plan;
 }
 
 class _GatedPlanner implements Planner {

@@ -7,12 +7,18 @@ import 'package:tidyreel_core/tidyreel_core.dart';
 /// Counts listings that reach the server.
 class _Counting extends MemoryStorageBackend {
   final lists = <String>[];
+  var closed = false;
   _Counting(super.files);
 
   @override
   Future<List<RemoteEntry>> list(String dir, {bool refresh = false}) {
     lists.add(dir);
     return super.list(dir, refresh: refresh);
+  }
+
+  @override
+  Future<void> close() async {
+    closed = true;
   }
 }
 
@@ -95,5 +101,83 @@ void main() {
       return dir == '/a' ? ['/b', '/a'] : const [];
     });
     expect(visited, ['/a', '/b']);
+  });
+
+  test(
+    'walkDirs guards parallel <= 0 and catches synchronous throws',
+    () async {
+      final visited = <String>[];
+      await walkDirs(['/a'], (dir) async {
+        visited.add(dir);
+        return const [];
+      }, parallel: 0);
+      expect(visited, ['/a']);
+
+      await expectLater(
+        walkDirs(['/a'], (_) => throw StateError('sync boom')),
+        throwsStateError,
+      );
+    },
+  );
+
+  test('normalizes keys, returns defensive copies, and exposes inner/isCached/close', () async {
+    expect(be.inner, same(inner));
+    expect(be.isCached('/a'), isFalse);
+    final first = await be.list('/a/');
+    expect(be.isCached('/a'), isTrue);
+    expect(be.isCached('/a/'), isTrue);
+    first.clear();
+    final second = await be.list('/a');
+    expect(second, hasLength(2));
+    expect(inner.lists, ['/a']);
+    await be.close();
+    expect(inner.closed, isTrue);
+  });
+
+  test('invalidate("/") clears the entire cache', () async {
+    await be.list('/');
+    await be.list('/a');
+    await be.list('/a/b');
+    be.invalidate('/');
+    expect(be.isCached('/'), isFalse);
+    expect(be.isCached('/a'), isFalse);
+    expect(be.isCached('/a/b'), isFalse);
+  });
+
+  test('mkdirs/write invalidate missing ancestors up to first cached parent; file mutations preserve parent', () async {
+    await be.list('/');
+    await be.list('/a');
+    await be.list('/a/b');
+
+    // File write inside already-cached /a/b invalidates only /a/b, not /a or /.
+    await be.write('/a/b/new.nfo', [1, 2]);
+    expect(be.isCached('/a/b'), isFalse);
+    expect(be.isCached('/a'), isTrue);
+    expect(be.isCached('/'), isTrue);
+
+    // File rename inside /a/b invalidates only /a/b, not /a.
+    await be.list('/a/b');
+    await be.rename('/a/b/y.mkv', 'z.mkv');
+    expect(be.isCached('/a/b'), isFalse);
+    expect(be.isCached('/a'), isTrue);
+
+    // Nested mkdirs under /a invalidates up to first cached parent (/a), keeping / cached.
+    await be.mkdirs('/a/newdir/deep');
+    expect(be.isCached('/a'), isFalse);
+    expect(be.isCached('/'), isTrue);
+  });
+
+  test('cache evicts entries when maxEntries cap is exceeded', () async {
+    final files = {for (var i = 0; i < 6; i++) '/d$i/f.mkv': 1};
+    final smallInner = _Counting(files);
+    final capped = CachedBackend(smallInner, maxEntries: 3, now: () => clock);
+    for (var i = 0; i < 5; i++) {
+      await capped.list('/d$i');
+    }
+    expect(capped.isCached('/d0'), isFalse);
+    expect(capped.isCached('/d1'), isFalse);
+    expect(capped.isCached('/d2'), isTrue);
+    expect(capped.isCached('/d3'), isTrue);
+    expect(capped.isCached('/d4'), isTrue);
   });
 }

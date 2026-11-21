@@ -42,6 +42,25 @@ List<EpisodeRef> applyStrategy(
     );
   }
 
+  Map<int, int>? overflowOffset;
+  if (strategy == SeasonStrategy.mergeIntoOne) {
+    final extraMax = <int, int>{};
+    for (final r in shifted) {
+      if (r.season > last) {
+        final ep = r.episode > 0 ? r.episode : 0;
+        extraMax.update(r.season, (m) => ep > m ? ep : m, ifAbsent: () => ep);
+      }
+    }
+    if (extraMax.isNotEmpty) {
+      overflowOffset = {};
+      var acc = cum[last];
+      for (final s in extraMax.keys.toList()..sort()) {
+        overflowOffset[s] = acc;
+        acc += extraMax[s]!;
+      }
+    }
+  }
+
   return [
     for (final r in shifted)
       strategy == SeasonStrategy.mergeIntoOne
@@ -50,7 +69,10 @@ List<EpisodeRef> applyStrategy(
                 ? r
                 : EpisodeRef(
                     1,
-                    cum[r.season - 1 > last ? last : r.season - 1] + r.episode,
+                    (r.season <= last
+                            ? cum[r.season - 1]
+                            : overflowOffset![r.season]!) +
+                        r.episode,
                   ))
           : split(r),
   ];

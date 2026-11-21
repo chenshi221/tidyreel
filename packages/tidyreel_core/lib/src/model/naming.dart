@@ -211,6 +211,63 @@ class NamingProfile {
   /// VidHub defaults (PLAN §3.2): "老友记.Friends.1994.S02E03.mkv".
   static const vidhub = NamingProfile();
 
+  /// Recommended defaults for each target media player.
+  static NamingProfile forPlayer(TargetPlayer player) => switch (player) {
+    TargetPlayer.vidhub => vidhub,
+    TargetPlayer.infuse => const NamingProfile(
+      player: TargetPlayer.infuse,
+      movie: NamingOptions(
+        bilingual: false,
+        separator: '.',
+        yearInParens: false,
+      ),
+      tv: NamingOptions(bilingual: false, separator: '.', yearInParens: false),
+      movieDir: '电影',
+      tvDir: '剧集',
+    ),
+    TargetPlayer.plex => const NamingProfile(
+      player: TargetPlayer.plex,
+      movie: NamingOptions(
+        bilingual: false,
+        separator: ' ',
+        yearInParens: true,
+        tmdbIdTag: true,
+        folderTemplate: '{title} ({year})',
+      ),
+      tv: NamingOptions(
+        bilingual: false,
+        separator: ' ',
+        yearInParens: true,
+        episodeTitle: true,
+        tmdbIdTag: true,
+        folderTemplate: '{title} ({year})',
+        seasonFolderTemplate: 'Season {season:02}',
+      ),
+      movieDir: 'Movies',
+      tvDir: 'TV Shows',
+    ),
+    TargetPlayer.jellyfin => const NamingProfile(
+      player: TargetPlayer.jellyfin,
+      movie: NamingOptions(
+        bilingual: false,
+        separator: ' ',
+        yearInParens: true,
+        tmdbIdTag: true,
+        folderTemplate: '{title} ({year})',
+      ),
+      tv: NamingOptions(
+        bilingual: false,
+        separator: ' ',
+        yearInParens: true,
+        tmdbIdTag: true,
+        folderTemplate: '{title} ({year})',
+        seasonFolderTemplate: 'Season {season:02}',
+      ),
+      movieDir: 'Movies',
+      tvDir: 'Shows',
+    ),
+  };
+
   NamingProfile copyWith({
     TargetPlayer? player,
     NamingOptions? movie,

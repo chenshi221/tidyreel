@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:dio/dio.dart';
 
@@ -8,6 +9,7 @@ import 'package:path/path.dart' as p;
 import '../model/history.dart';
 import '../model/ids.dart';
 import '../model/plan.dart';
+import '../storage/cached_backend.dart';
 import '../storage/storage_backend.dart';
 import 'throttled_backend.dart';
 
@@ -100,18 +102,55 @@ class DefaultExecutor implements Executor {
       final r = await _dio.getUri<List<int>>(url);
       return r.data ?? const [];
     } on DioException catch (e) {
-      throw StorageException(StorageErrorCode.network, '下载 $url：${e.message}');
+      final status = e.response?.statusCode;
+      final code = switch (status) {
+        404 => StorageErrorCode.notFound,
+        429 => StorageErrorCode.rateLimited,
+        _ => StorageErrorCode.network,
+      };
+      throw StorageException(code, '下载 $url：${e.message}');
+    }
+  }
+
+  Future<List<int>> _fetchWithRetry(Uri url) async {
+    for (var attempt = 0; ; attempt++) {
+      try {
+        return await fetch(url);
+      } on StorageException catch (e) {
+        final retryable =
+            e.code == StorageErrorCode.network ||
+            e.code == StorageErrorCode.rateLimited ||
+            e.code == StorageErrorCode.busy;
+        if (!retryable || attempt >= backoff.length) rethrow;
+        await delay(backoff[attempt]);
+      } on DioException catch (e) {
+        if (attempt >= backoff.length) {
+          throw StorageException(
+            StorageErrorCode.network,
+            '下载 $url：${e.message}',
+          );
+        }
+        await delay(backoff[attempt]);
+      }
     }
   }
 
   static Future<void> _defaultDelay(Duration d) => Future<void>.delayed(d);
 
-  StorageBackend _wrap(StorageBackend be) => ThrottledBackend(
-    be,
-    minInterval: minInterval,
-    backoff: backoff,
-    delay: delay,
-  );
+  static bool _isThrottled(StorageBackend b) => switch (b) {
+    ThrottledBackend() => true,
+    CachedBackend(:final inner) => _isThrottled(inner),
+    _ => false,
+  };
+
+  StorageBackend _wrap(StorageBackend be) => _isThrottled(be)
+      ? be
+      : ThrottledBackend(
+          be,
+          minInterval: minInterval,
+          backoff: backoff,
+          delay: delay,
+        );
 
   @override
   Stream<ExecProgress> execute(
@@ -212,8 +251,9 @@ class DefaultExecutor implements Executor {
     Set<OpId>? only,
   }) => _stream((emit, cancelled) async {
     final be = _wrap(backend);
+    final records = await history.records(batch);
     final todo = [
-      for (final r in (await history.records(batch)).reversed)
+      for (final r in records.reversed)
         if (r.status == OpStatus.done &&
             (only == null || only.contains(r.op.id)))
           r.op,
@@ -257,19 +297,25 @@ class DefaultExecutor implements Executor {
       return failure == null;
     }
 
-    // Folder renames first and one by one (they nest, and the file ops'
-    // paths are from before them); then files, batched per folder and in
-    // parallel; created folders last, once they are empty again.
+    // Cleanup ops (deleting scraped .nfo/artwork) first with bounded
+    // concurrency while folders are still at their post-rename paths; then
+    // folder renames one by one (they nest, and the file ops' paths are from
+    // before them); then files, batched per folder and in parallel; created
+    // folders last, once they are empty again.
     final activeFolders = [
-      for (final r in await history.records(batch))
+      for (final r in records)
         if (r.status == OpStatus.done &&
             r.op.phase == ExecPhase.folders &&
             r.op.kind == OpKind.relocate)
           r.op,
     ];
+    final cleanup = [
+      for (final o in todo)
+        if (o.phase == ExecPhase.cleanup) o,
+    ];
     final folders = [
       for (final o in todo)
-        if (o.phase != ExecPhase.files) o,
+        if (o.phase == ExecPhase.folders) o,
     ];
     final files = [
       for (final o in todo)
@@ -279,6 +325,20 @@ class DefaultExecutor implements Executor {
       for (final o in todo)
         if (o.phase == ExecPhase.files && o.kind == OpKind.mkdir) o,
     ];
+    if (cleanup.isNotEmpty) {
+      var nextCleanup = 0;
+      final cleanupWidth = min(min(concurrency, 4), cleanup.length);
+      Future<void> cleanupWorker() async {
+        while (!cancelled() && nextCleanup < cleanup.length) {
+          await undoOne(cleanup[nextCleanup++]);
+        }
+      }
+
+      await Future.wait([
+        for (var i = 0; i < cleanupWidth; i++) cleanupWorker(),
+      ]);
+      if (cancelled()) return;
+    }
     for (final op in folders) {
       if (cancelled()) return;
       final idx = activeFolders.indexWhere((f) => f.id == op.id);
@@ -291,7 +351,8 @@ class DefaultExecutor implements Executor {
     final mappedFiles = [for (final o in files) _mapOp(o, activeFolders)];
     final mappedMkdirs = [for (final o in mkdirs) _mapOp(o, activeFolders)];
 
-    // One fresh listing per folder stands in for two exists() per file.
+    // One fresh listing per folder stands in for two exists() per file and is
+    // reused by _batched below.
     final dirs = {
       for (final o in mappedFiles)
         if (o.kind == OpKind.relocate) ...[
@@ -300,10 +361,13 @@ class DefaultExecutor implements Executor {
         ],
     };
     final present = <String>{};
+    final listedNames = <String, Set<String>>{};
     for (final d in dirs) {
       if (cancelled()) return;
       try {
-        present.addAll((await be.list(d, refresh: true)).map((e) => e.path));
+        final entries = await be.list(d, refresh: true);
+        present.addAll(entries.map((e) => e.path));
+        listedNames[d] = {for (final e in entries) e.name};
       } on StorageException catch (e) {
         if (e.code != StorageErrorCode.notFound) rethrow;
       }
@@ -375,13 +439,29 @@ class DefaultExecutor implements Executor {
       await landed(inv);
     }
 
+    Future<void> invStagedRetry(List<RenameOp> ops) => _runStaged(
+      ops,
+      be,
+      width: concurrency,
+      stage: true,
+      resuming: true,
+      taken: taken,
+      blocked: (_) => false,
+      one: (inv, {bool retry = false}) => invOne(inv, retry: true),
+      parkFailed: (inv, e) => finish(byId[inv.id]!, null, e.toString()),
+      cancelled: cancelled,
+    );
+
     final left = await _batched(
       inverse,
       be,
       (_) => null,
       (inv, status, error) => landed(inv),
       invOne,
+      (inv, e) => finish(byId[inv.id]!, null, e.toString()),
+      invStagedRetry,
       cancelled,
+      prelisted: listedNames,
     );
     if (cancelled()) return;
     await _runStaged(
@@ -520,19 +600,63 @@ class DefaultExecutor implements Executor {
         await record(op, status, error);
       }
 
-      // mkdirs finish before anything that may move into them.
-      for (var group in [
-        inPhase.where((o) => o.kind == OpKind.mkdir).toList(),
-        inPhase.where((o) => o.kind != OpKind.mkdir).toList(),
-      ]) {
+      Future<void> failOp(RenameOp op, Object e) async {
+        failed.add(op);
+        await record(op, OpStatus.failed, e.toString());
+      }
+
+      Future<void> retryStaged(List<RenameOp> ops) => _runStaged(
+        ops,
+        be,
+        width: concurrency,
+        stage: true,
+        resuming: true,
+        taken: taken,
+        blocked: (o) => blockerOf(o) != null,
+        one: (o, {bool retry = false}) => one(o, retry: true),
+        parkFailed: failOp,
+        cancelled: cancelled,
+      );
+
+      // mkdirs finish before anything that may move into them; cleanup writes
+      // run with bounded concurrency while folder renames stay sequential.
+      final writeWidth = min(concurrency, 4);
+      final groups = phase == ExecPhase.cleanup
+          ? [
+              (
+                inPhase.where((o) => o.kind == OpKind.write).toList(),
+                writeWidth,
+              ),
+              (inPhase.where((o) => o.kind != OpKind.write).toList(), 1),
+            ]
+          : [
+              (
+                inPhase.where((o) => o.kind == OpKind.mkdir).toList(),
+                phase == ExecPhase.files ? concurrency : 1,
+              ),
+              (
+                inPhase.where((o) => o.kind != OpKind.mkdir).toList(),
+                phase == ExecPhase.files ? concurrency : 1,
+              ),
+            ];
+      for (var (group, width) in groups) {
+        if (group.isEmpty) continue;
         if (phase == ExecPhase.files && !resuming) {
-          group = await _batched(group, be, blockerOf, record, one, cancelled);
+          group = await _batched(
+            group,
+            be,
+            blockerOf,
+            record,
+            one,
+            failOp,
+            retryStaged,
+            cancelled,
+          );
         }
         await _runStaged(
           group,
           be,
-          // Folder renames can be nested (parent + child): one by one.
-          width: phase == ExecPhase.files ? concurrency : 1,
+          width: width,
           // Resume mode never runs _batched, so this is what keeps a retried
           // EP01 <-> EP02 from colliding.
           stage: phase == ExecPhase.files,
@@ -540,10 +664,7 @@ class DefaultExecutor implements Executor {
           taken: taken,
           blocked: (o) => blockerOf(o) != null,
           one: one,
-          parkFailed: (o, e) async {
-            failed.add(o);
-            await record(o, OpStatus.failed, e.toString());
-          },
+          parkFailed: failOp,
           cancelled: cancelled,
         );
       }
@@ -631,27 +752,34 @@ class DefaultExecutor implements Executor {
     ];
   }
 
-  /// Is [op]'s file parked under its tmp name (by a swap or a crash)?
-  Future<bool> _parked(StorageBackend be, RenameOp op) async {
+  /// Where [op]'s file is parked under its tmp name (by a swap or a crash).
+  Future<_ParkedAt> _findParked(StorageBackend be, RenameOp op) async {
     final srcDir = p.posix.dirname(op.src);
     final dstDir = p.posix.dirname(op.dst);
     final tmp = _tmpName(op.id);
-    if (await be.exists(p.posix.join(srcDir, tmp))) return true;
-    return srcDir != dstDir && await be.exists(p.posix.join(dstDir, tmp));
+    if (await be.exists(p.posix.join(srcDir, tmp))) return _ParkedAt.srcTmp;
+    if (srcDir != dstDir && await be.exists(p.posix.join(dstDir, tmp))) {
+      return _ParkedAt.dstTmp;
+    }
+    return _ParkedAt.none;
   }
 
   /// Runs the file relocates of each source folder as one batch rename plus one
   /// move per target folder (a few requests instead of ~4 per file). Returns
   /// the ops left for one-by-one execution; when a batch step fails its ops are
-  /// retried one by one in resume mode, which picks up wherever each file got to.
+  /// retried one by one in resume mode (or through [_runStaged] for swaps and
+  /// chains), which picks up wherever each file got to.
   Future<List<RenameOp>> _batched(
     List<RenameOp> group,
     StorageBackend be,
     RenameOp? Function(RenameOp) blockerOf,
     Future<void> Function(RenameOp, OpStatus, String?) record,
     Future<void> Function(RenameOp, {bool retry}) one,
-    bool Function() cancelled,
-  ) async {
+    Future<void> Function(RenameOp, Object error) failOp,
+    Future<void> Function(List<RenameOp> ops) retryStaged,
+    bool Function() cancelled, {
+    Map<String, Set<String>>? prelisted,
+  }) async {
     final rest = <RenameOp>[];
     final bySrcDir = <String, List<RenameOp>>{};
     for (final op in group) {
@@ -669,7 +797,21 @@ class DefaultExecutor implements Executor {
         rest.addAll(ops);
         continue;
       }
-      final taken = {for (final e in await be.list(dir, refresh: true)) e.name};
+      final Set<String> taken;
+      final cached = prelisted?.remove(dir);
+      if (cached != null) {
+        taken = cached;
+      } else {
+        try {
+          taken = {for (final e in await be.list(dir, refresh: true)) e.name};
+        } on Object catch (e) {
+          for (final o in ops) {
+            if (cancelled()) return const [];
+            await failOp(o, e);
+          }
+          continue;
+        }
+      }
       final targets = <String, int>{};
       for (final o in ops) {
         final n = p.posix.basename(o.dst);
@@ -699,7 +841,9 @@ class DefaultExecutor implements Executor {
           rest.add(o);
         }
       }
-      final retry = <RenameOp>[], fresh = <RenameOp>[];
+      final retry = <RenameOp>[],
+          fresh = <RenameOp>[],
+          stagedRetry = <RenameOp>[];
       final renames = {
         for (final o in batch)
           if (p.posix.basename(o.src) != p.posix.basename(o.dst))
@@ -709,42 +853,58 @@ class DefaultExecutor implements Executor {
       try {
         if (renames.isNotEmpty) await be.renameMany(dir, renames);
       } on Object {
-        retry.addAll([...batch, ...viaTmp]);
+        if (viaTmp.isNotEmpty) {
+          stagedRetry.addAll([...batch, ...viaTmp]);
+        } else {
+          retry.addAll(batch);
+        }
         batch.clear();
         viaTmp.clear();
       }
+      final viaTmpTargets = {for (final o in viaTmp) p.posix.basename(o.dst)};
       final byDstDir = <String, List<RenameOp>>{};
       for (final o in batch) {
         final d = p.posix.dirname(o.dst);
         if (d != dir) (byDstDir[d] ??= []).add(o);
       }
       for (final MapEntry(key: dst, value: moving) in byDstDir.entries) {
+        prelisted?.remove(dst);
         try {
           await be.mkdirs(dst);
           await be.move(dir, dst, [
             for (final o in moving) p.posix.basename(o.dst),
           ]);
         } on Object {
-          batch.removeWhere(moving.contains);
-          // Put the names back so each file can fail (or work) on its own.
+          final movingSet = moving.toSet();
+          batch.removeWhere(movingSet.contains);
+          // Put the names back (skipping any name a viaTmp op is about to
+          // occupy) so each file can fail or succeed on its own.
           try {
             final nowInDir = {
               for (final e in await be.list(dir, refresh: true)) e.name,
             };
-            final back = {
-              for (final o in moving)
-                if (renames.containsKey(p.posix.basename(o.src)) &&
-                    nowInDir.contains(p.posix.basename(o.dst)))
-                  p.posix.basename(o.dst): p.posix.basename(o.src),
-            };
-            if (back.isNotEmpty) await be.renameMany(dir, back);
-            if (moving.every(
-              (o) => nowInDir.contains(p.posix.basename(o.dst)),
-            )) {
-              fresh.addAll(moving);
-            } else {
-              retry.addAll(moving);
+            final back = <String, String>{};
+            final rolled = <RenameOp>[];
+            final notRolled = <RenameOp>[];
+            for (final o in moving) {
+              final srcName = p.posix.basename(o.src);
+              final dstName = p.posix.basename(o.dst);
+              if (renames.containsKey(srcName) &&
+                  nowInDir.contains(dstName) &&
+                  !nowInDir.contains(srcName) &&
+                  !viaTmpTargets.contains(srcName)) {
+                back[dstName] = srcName;
+                rolled.add(o);
+              } else if (!renames.containsKey(srcName) &&
+                  nowInDir.contains(dstName)) {
+                rolled.add(o);
+              } else {
+                notRolled.add(o);
+              }
             }
+            if (back.isNotEmpty) await be.renameMany(dir, back);
+            fresh.addAll(rolled);
+            retry.addAll(notRolled);
           } on Object {
             retry.addAll(moving);
           }
@@ -763,9 +923,17 @@ class DefaultExecutor implements Executor {
       for (final o in batch) {
         await record(o, OpStatus.done, null);
       }
-      for (final o in [...fresh, ...retry]) {
+      for (final o in fresh) {
         if (cancelled()) return const [];
-        await one(o, retry: retry.contains(o));
+        await one(o, retry: false);
+      }
+      for (final o in retry) {
+        if (cancelled()) return const [];
+        await one(o, retry: true);
+      }
+      if (stagedRetry.isNotEmpty) {
+        if (cancelled()) return const [];
+        await retryStaged(stagedRetry);
       }
     }
     return rest;
@@ -777,7 +945,15 @@ class DefaultExecutor implements Executor {
       return op.kind != OpKind.delete &&
           (op.dst == f.dst || op.dst.startsWith('${f.dst}/'));
     }
-    if (f.kind != OpKind.relocate || op.src.isEmpty) return false;
+    if (f.kind != OpKind.relocate) return false;
+    if (op.kind == OpKind.write) {
+      if (f.phase != ExecPhase.folders) return false;
+      return (f.dst.isNotEmpty &&
+              (op.dst == f.dst || op.dst.startsWith('${f.dst}/'))) ||
+          (f.src.isNotEmpty &&
+              (op.dst == f.src || op.dst.startsWith('${f.src}/')));
+    }
+    if (op.src.isEmpty) return false;
     if (op.src.startsWith('${f.src}/')) return true;
     return f.phase == ExecPhase.folders &&
         f.dst.isNotEmpty &&
@@ -807,12 +983,13 @@ class DefaultExecutor implements Executor {
         }
         final bytes = op.src.startsWith(writeTextPrefix)
             ? utf8.encode(op.src.substring(writeTextPrefix.length))
-            : await fetch(Uri.parse(op.src));
+            : await _fetchWithRetry(Uri.parse(op.src));
         await be.write(op.dst, bytes);
       case OpKind.relocate:
         // The tmp name carries this op's id, so a file there is ours whatever
         // sits at src or dst (another op's file may have landed on either).
-        final parked = resuming && await _parked(be, op);
+        final parkedAt = resuming ? await _findParked(be, op) : _ParkedAt.none;
+        final parked = parkedAt != _ParkedAt.none;
         final srcGone =
             parked || (resuming && (srcTaken || !await be.exists(op.src)));
         // After a crash the op may have finished without being marked.
@@ -824,6 +1001,7 @@ class DefaultExecutor implements Executor {
           op.id,
           resuming: resuming,
           srcGone: srcGone,
+          parkedAt: parkedAt,
         );
     }
   }
@@ -838,6 +1016,7 @@ class DefaultExecutor implements Executor {
     OpId id, {
     required bool resuming,
     bool srcGone = false,
+    _ParkedAt parkedAt = _ParkedAt.none,
   }) async {
     final srcDir = p.posix.dirname(src);
     final dstDir = p.posix.dirname(dst);
@@ -846,9 +1025,8 @@ class DefaultExecutor implements Executor {
     final tmp = _tmpName(id);
     if (srcDir == dstDir) {
       if (resuming && srcGone) {
-        final tmpPath = p.posix.join(srcDir, tmp);
-        if (await be.exists(tmpPath)) {
-          return be.rename(tmpPath, name);
+        if (parkedAt == _ParkedAt.srcTmp) {
+          return be.rename(p.posix.join(srcDir, tmp), name);
         }
         throw StorageException(StorageErrorCode.notFound, src);
       }
@@ -858,12 +1036,12 @@ class DefaultExecutor implements Executor {
     if (resuming && srcGone) {
       // Crashed between steps: continue from wherever the file got to.
       final dstTmp = p.posix.join(dstDir, tmp);
-      final srcTmp = p.posix.join(srcDir, tmp);
       final srcNamed = p.posix.join(srcDir, name);
-      if (await be.exists(dstTmp)) {
+      if (parkedAt == _ParkedAt.dstTmp) {
         return be.rename(dstTmp, name);
       }
-      if (await be.exists(srcTmp)) {
+      if (parkedAt == _ParkedAt.srcTmp) {
+        await be.mkdirs(dstDir);
         await be.move(srcDir, dstDir, [tmp]);
         return be.rename(dstTmp, name);
       }
@@ -927,3 +1105,5 @@ class DefaultExecutor implements Executor {
     return c.stream;
   }
 }
+
+enum _ParkedAt { none, srcTmp, dstTmp }

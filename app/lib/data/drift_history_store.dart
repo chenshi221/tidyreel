@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:drift/drift.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
+import 'codec.dart' show enumByName;
 import 'database.dart';
 
 /// [HistoryStore] on drift. Ops are written as `pending` in one transaction.
@@ -84,15 +85,15 @@ class DriftHistoryStore implements HistoryStore {
     batch: BatchId(r.batchId),
     op: RenameOp(
       id: OpId(r.opId),
-      kind: OpKind.values.byName(r.kind),
-      phase: ExecPhase.values.byName(r.phase),
+      kind: enumByName(OpKind.values, r.kind, OpKind.relocate),
+      phase: enumByName(ExecPhase.values, r.phase, ExecPhase.files),
       src: r.src,
       dst: r.dst,
       group: r.groupId == null ? null : GroupId(r.groupId!),
       selected: r.selected,
       warning: r.warning,
     ),
-    status: OpStatus.values.byName(r.status),
+    status: enumByName(OpStatus.values, r.status, OpStatus.pending),
     error: r.error,
     updatedAt: r.updatedAt,
   );

@@ -11,13 +11,11 @@ import 'template.dart';
 import 'scrape.dart';
 import 'text.dart';
 
-final _punct = RegExp(r'[^\p{L}\p{N}]', unicode: true);
 const _overflowWarning = '超出 TMDB 总集数';
 
 /// Owner: Agent D. Turns a recognized scan + user decisions into ops, with conflict
 /// detection (PLAN §4.3 rule 1). Subtitles follow their video, specials go to
 /// Season 00, extras to Extras/, junk becomes unselected delete ops.
-final _han = RegExp(r'[\u4e00-\u9fff]');
 
 abstract interface class Planner {
   /// [existing] lists paths already present at the targets (for conflict checks);
@@ -110,6 +108,11 @@ class _PlanBuilder {
   final showFolders = <String, ({GroupId group, String base})>{};
   final merges = <PlanMerge>[];
   final knownDirs = <String>{};
+  final _scanFilePaths = <String>{};
+  final _movedSrcs = <String>{};
+  final _plannedFinalDsts = <String>{};
+  final _seasonCache = <(int, int), Future<List<Episode>>>{};
+  final _movieCache = <int, Future<MovieDetail?>>{};
 
   _PlanBuilder(
     this.metadata,
@@ -119,14 +122,45 @@ class _PlanBuilder {
     this.existing,
   );
 
+  Future<List<Episode>> _fetchSeason(int tmdbId, int season) =>
+      _seasonCache.putIfAbsent((tmdbId, season), () async {
+        try {
+          return await metadata.season(tmdbId, season);
+        } on Object {
+          return const <Episode>[];
+        }
+      });
+
+  Future<Map<int, List<Episode>>> _fetchSeasons(
+    int tmdbId,
+    Iterable<int> seasons,
+  ) async {
+    final unique = seasons.toSet().toList();
+    if (unique.isEmpty) return const {};
+    final results = await Future.wait([
+      for (final s in unique) _fetchSeason(tmdbId, s),
+    ]);
+    return {for (var i = 0; i < unique.length; i++) unique[i]: results[i]};
+  }
+
+  Future<MovieDetail?> _fetchMovie(int tmdbId) =>
+      _movieCache.putIfAbsent(tmdbId, () async {
+        try {
+          return await metadata.movie(tmdbId);
+        } on Object {
+          return null;
+        }
+      });
+
   Future<RenamePlan> run() async {
     knownDirs
-      ..addAll(existing)
+      ..addAll(existing.where((p) => !_fileLike.hasMatch(baseOf(p))))
       ..addAll(scan.roots);
     for (final f in [
       ...scan.groups.expand((g) => g.files),
       ...scan.unassigned,
     ]) {
+      _scanFilePaths.add(f.path);
       for (var d = dirOf(f.path); d != '/' && knownDirs.add(d); d = dirOf(d)) {}
     }
 
@@ -179,14 +213,19 @@ class _PlanBuilder {
     int tmdbId,
     ShowDetail show,
   ) async {
+    final regular = [
+      for (final s in show.seasons)
+        if (s.number > 0) s.number,
+    ];
+    final bySeason = await _fetchSeasons(tmdbId, regular);
     final out = <DateTime, EpisodeRef>{};
-    for (final s in show.seasons.where((s) => s.number > 0)) {
-      for (final e in await metadata.season(tmdbId, s.number)) {
+    for (final s in regular) {
+      for (final e in bySeason[s] ?? const <Episode>[]) {
         final d = e.airDate;
         if (d == null) continue;
         out.putIfAbsent(
           DateTime.utc(d.year, d.month, d.day),
-          () => EpisodeRef(s.number, e.number),
+          () => EpisodeRef(s, e.number),
         );
       }
     }
@@ -263,6 +302,7 @@ class _PlanBuilder {
       final kind = ov?.kind ?? p?.kind ?? MediaKind.unknown;
       final it = _Item(v);
       final lowParse =
+          d.match == null &&
           (p == null || p.confidence < opts.confidenceThreshold) &&
           !(bareRun && p != null && p.episodes.isEmpty && p.absolute != null);
       if (kind == MediaKind.extra) {
@@ -349,6 +389,7 @@ class _PlanBuilder {
 
     // --- resolve subtitles and sidecars (either following a video or explicit)
     final byPath = {for (final it in items) it.file.path: it};
+    final itemFiles = [for (final it in items) it.file];
     final companions = <_Companion>[];
     for (final f in g.files) {
       if (f.role != FileRole.subtitle && f.role != FileRole.sidecar) continue;
@@ -360,9 +401,11 @@ class _PlanBuilder {
               ov.episode != null ||
               ov.kind == MediaKind.extra ||
               ov.kind == MediaKind.special);
-      var mItem = matchVideo(f, [for (final it in items) it.file]);
-      if (mItem == null && items.length == 1 && f.role == FileRole.subtitle) {
-        mItem = FollowMatch(items.first.file, '');
+      var mItem = matchVideo(f, itemFiles);
+      if (mItem == null &&
+          itemFiles.length == 1 &&
+          f.role == FileRole.subtitle) {
+        mItem = FollowMatch(itemFiles.first, '');
       }
       var mAll = mItem ?? matchVideo(f, allVideos);
       if (mAll == null &&
@@ -444,9 +487,10 @@ class _PlanBuilder {
     final wantTitles =
         isTv &&
         (naming.episodeTitle ||
-            (naming.customTemplate?.contains('episode_title') ?? false));
+            (naming.customTemplate?.contains('episode_title') ?? false) ||
+            (opts.scrape && epGroup != null));
     final titles = wantTitles
-        ? await _episodeTitles(match.tmdbId, epGroup, d.strategy, [
+        ? await _episodeTitles(match.tmdbId, epGroup, d.strategy, tmdbCounts, [
             for (final it in items) ?it.ref,
             for (final c in companions) ?c.ref,
           ])
@@ -463,12 +507,8 @@ class _PlanBuilder {
     ];
     // A movie without a zh-CN title: movie() may find a Chinese one.
     Candidate? movieInfo;
-    if (!isTv && !_han.hasMatch(match.title)) {
-      try {
-        movieInfo = (await metadata.movie(match.tmdbId)).info;
-      } on Object {
-        // Keep the search title.
-      }
+    if (!isTv && !hasHan(match.title)) {
+      movieInfo = (await _fetchMovie(match.tmdbId))?.info;
     }
     final titleVars = _titleVars(
       chineseNamed(match, show?.info ?? movieInfo),
@@ -500,7 +540,10 @@ class _PlanBuilder {
             ? there
             : joinPath(dirOf(g.rootDir), folderName);
         final claimed = showFolders[finalBase];
-        final onDisk = finalBase != g.rootDir && existing.contains(finalBase);
+        final onDisk =
+            finalBase != g.rootDir &&
+            existing.contains(finalBase) &&
+            !_fileLike.hasMatch(baseOf(finalBase));
         if ((claimed != null || onDisk) && !d.separate) {
           // Files go under the other group's old root (renamed later) or
           // straight into the existing folder; this root keeps its name.
@@ -545,7 +588,8 @@ class _PlanBuilder {
           _onDiskShow(base.isEmpty ? '/' : base, folderName, match) ??
           '$base/$folderName';
       final claimed = showFolders[curBase];
-      final onDisk = existing.contains(curBase);
+      final onDisk =
+          existing.contains(curBase) && !_fileLike.hasMatch(baseOf(curBase));
       if ((claimed != null || onDisk) && d.separate) {
         // 分开保留 in the library: the next free "名称 (2)".
         var n = 2;
@@ -656,6 +700,7 @@ class _PlanBuilder {
     if (isTv && opts.mode == OrganizeMode.inPlace) {
       _reuseSeasonFolders(g, items, curBase);
     }
+    final groupFileOpsStart = fileOps.length;
     for (final it in items) {
       _mkdir(it.dstDir, g.id, selected: it.selected);
       final ext = extOf(it.file.name);
@@ -671,6 +716,9 @@ class _PlanBuilder {
     }
 
     // --- emit subtitles and sidecars
+    final seasonByDst = {
+      for (final e in renamedSeasons.entries) e.value: e.key,
+    };
     final subTargets = <String, int>{};
     for (final c in companions) {
       final f = c.file;
@@ -707,11 +755,7 @@ class _PlanBuilder {
           manual: true,
           metaSource: c.fallbackVideo,
         );
-        final reusedSrc = renamedSeasons.entries
-            .where((e) => e.value == rendered.dstDir)
-            .firstOrNull
-            ?.key;
-        dstDir = reusedSrc ?? rendered.dstDir;
+        dstDir = seasonByDst[rendered.dstDir] ?? rendered.dstDir;
         if (f.role == FileRole.subtitle) {
           final lang = langFromRemainder(c.remainder) ?? _parsedLang(f);
           final prefix = '${rendered.newBase}${lang == null ? '' : '.$lang'}';
@@ -724,13 +768,15 @@ class _PlanBuilder {
         }
       }
       _mkdir(dstDir, g.id, selected: c.selected);
+      final dst = joinPath(dstDir, name);
+      if (c.selected && f.path != dst) _movedSrcs.add(f.path);
       fileOps.add(
         RenameOp(
           id: OpId('r-${stableHash(f.path)}'),
           kind: OpKind.relocate,
           phase: ExecPhase.files,
           src: f.path,
-          dst: joinPath(dstDir, name),
+          dst: dst,
           group: g.id,
           selected: c.selected,
           warning: c.warnings.isNotEmpty ? c.warnings.join('；') : null,
@@ -750,13 +796,63 @@ class _PlanBuilder {
             : d;
       }
 
-      await _scrape(g, match, show, epGroup, items, showDir, finalDir);
+      for (var i = groupFileOpsStart; i < fileOps.length; i++) {
+        final o = fileOps[i];
+        if (o.selected) {
+          _plannedFinalDsts.add(
+            joinPath(finalDir(dirOf(o.dst)), baseOf(o.dst)),
+          );
+        }
+      }
+      await _scrape(
+        g,
+        match,
+        show,
+        epGroup,
+        d.strategy,
+        tmdbCounts,
+        titles,
+        items,
+        showDir,
+        finalDir,
+      );
     }
   }
 
   /// Paths [_scrape] already wrote this plan (two groups merging into one
   /// show folder share its tvshow.nfo).
   final scraped = <String>{};
+
+  String? _preRenamePath(String dst) {
+    String? cur;
+    for (final e in renamedRoots.entries) {
+      if (dst == e.value) {
+        cur = e.key;
+        break;
+      } else if (dst.startsWith('${e.value}/')) {
+        cur = '${e.key}${dst.substring(e.value.length)}';
+        break;
+      }
+    }
+    final base = cur ?? dst;
+    for (final e in renamedSeasons.entries) {
+      if (base == e.value) {
+        return e.key;
+      } else if (base.startsWith('${e.value}/')) {
+        return '${e.key}${base.substring(e.value.length)}';
+      }
+    }
+    return cur;
+  }
+
+  bool _alreadyThere(String dst) {
+    bool has(String path) =>
+        existing.contains(path) ||
+        (_scanFilePaths.contains(path) && !_movedSrcs.contains(path));
+    if (has(dst) || _plannedFinalDsts.contains(dst)) return true;
+    final pre = _preRenamePath(dst);
+    return pre != null && has(pre);
+  }
 
   void _writeOp(
     String dst,
@@ -765,7 +861,7 @@ class _PlanBuilder {
     required bool selected,
   }) {
     if (!scraped.add(dst)) return;
-    final there = existing.contains(dst);
+    final there = _alreadyThere(dst);
     deleteOps.add(
       RenameOp(
         id: OpId('w-${stableHash(dst)}'),
@@ -787,6 +883,9 @@ class _PlanBuilder {
     Candidate match,
     ShowDetail? show,
     EpisodeGroup? epGroup,
+    SeasonStrategy strategy,
+    List<int> tmdbCounts,
+    Map<EpisodeRef, String> titles,
     List<_Item> items,
     String showDir,
     String Function(String dir) finalDir,
@@ -814,12 +913,7 @@ class _PlanBuilder {
     }
 
     if (match.kind == MediaKind.movie) {
-      Candidate info = match;
-      try {
-        info = (await metadata.movie(match.tmdbId)).info;
-      } on Object {
-        // Search data is enough for an nfo.
-      }
+      final info = (await _fetchMovie(match.tmdbId))?.info ?? match;
       final main = items.where((it) => !it.extra).toList();
       if (main.isEmpty) return;
       final dir = finalDir(main.first.dstDir);
@@ -843,34 +937,42 @@ class _PlanBuilder {
       selected: on,
     );
     art(showDir, s.info);
-    final episodes = <int, Map<int, Episode>>{};
-    Future<Episode?> episode(int season, int n) async {
-      // Episode-group numbering isn't TMDB's: no per-episode details then.
-      if (epGroup != null) return null;
-      if (!episodes.containsKey(season)) {
-        try {
-          episodes[season] = {
-            for (final e in await metadata.season(match.tmdbId, season))
-              e.number: e,
-          };
-        } on Object {
-          episodes[season] = const {};
-        }
+
+    final episodeItems = [
+      for (final it in items)
+        if (!it.extra && it.ref != null) it,
+    ];
+    final tmdbRefs = <EpisodeRef, EpisodeRef>{};
+    if (epGroup == null) {
+      for (final it in episodeItems) {
+        final orig = _resolveTmdbRef(it.ref!, strategy, tmdbCounts, null);
+        if (orig != null) tmdbRefs[it.ref!] = orig;
       }
-      return episodes[season]![n];
     }
+    final fetchedSeasons = epGroup == null
+        ? await _fetchSeasons(
+            match.tmdbId,
+            tmdbRefs.values.map((r) => r.season),
+          )
+        : const <int, List<Episode>>{};
+    final episodesBySeason = <int, Map<int, Episode>>{
+      for (final e in fetchedSeasons.entries)
+        e.key: {for (final ep in e.value) ep.number: ep},
+    };
 
     final seasons = <int>{};
-    for (final it in items) {
-      final r = it.ref;
-      if (it.extra || r == null) continue;
+    for (final it in episodeItems) {
+      final r = it.ref!;
       seasons.add(r.season);
       final dir = finalDir(it.dstDir);
-      final e = await episode(r.season, r.episode);
+      final orig = tmdbRefs[r];
+      final e = orig == null
+          ? null
+          : episodesBySeason[orig.season]?[orig.episode];
       final base = stem(it.outName);
       _writeOp(
         '$dir/$base.nfo',
-        '$writeTextPrefix${episodeNfo(show: s.info, season: r.season, episode: r.episode, info: e)}',
+        '$writeTextPrefix${episodeNfo(show: s.info, season: r.season, episode: r.episode, info: e, title: titles[r])}',
         g.id,
         selected: it.selected,
       );
@@ -902,7 +1004,9 @@ class _PlanBuilder {
   /// count). Lets a later season or the rest of a season join it.
   String? _onDiskShow(String dir, String folderName, Candidate match) {
     final exact = joinPath(dir, folderName);
-    if (existing.contains(exact)) return exact;
+    if (existing.contains(exact) && !_fileLike.hasMatch(folderName)) {
+      return exact;
+    }
     final tag = RegExp(
       'tmdb(?:id)?[-=]${match.tmdbId}(?![0-9])',
       caseSensitive: false,
@@ -964,6 +1068,7 @@ class _PlanBuilder {
       if (dirs.length != 1) continue;
       final src = dirs.single;
       final inside = '$src/';
+      final itPaths = {for (final it in its) it.file.path};
       final ok =
           dirOf(src) == curBase &&
           src.startsWith('${g.rootDir}/') &&
@@ -977,7 +1082,7 @@ class _PlanBuilder {
             (f) =>
                 f.role != FileRole.video ||
                 dirOf(f.path) != src ||
-                its.any((it) => it.file.path == f.path),
+                itPaths.contains(f.path),
           ) &&
           !scan.unassigned.any(
             (f) => f.role != FileRole.junk && f.path.startsWith(inside),
@@ -1019,6 +1124,8 @@ class _PlanBuilder {
     // Same name still gets an op: running it records the file as organized
     // (the executor treats src == dst as done, and undo as a no-op).
     final dst = joinPath(it.dstDir, name);
+    final sel = selected ?? it.selected;
+    if (sel && src.path != dst) _movedSrcs.add(src.path);
     fileOps.add(
       RenameOp(
         id: OpId('r-${stableHash(src.path)}'),
@@ -1027,7 +1134,7 @@ class _PlanBuilder {
         src: src.path,
         dst: dst,
         group: gid,
-        selected: selected ?? it.selected,
+        selected: sel,
         warning: source == null && it.warnings.isNotEmpty
             ? it.warnings.join('；')
             : null,
@@ -1122,9 +1229,10 @@ class _PlanBuilder {
         normTitle(en) == normTitle(c.title)) {
       en = null;
     }
-    String bare(String s) => s.replaceAll(_punct, '');
     final keepLocal =
-        local != null && local != c.title && bare(local) == bare(c.title);
+        local != null &&
+        local != c.title &&
+        stripPunct(local) == stripPunct(c.title);
     return {
       'title': keepLocal ? local : c.title,
       'en_title': en,
@@ -1150,45 +1258,79 @@ class _PlanBuilder {
     };
   }
 
+  /// Maps an output [EpisodeRef] back to its TMDB `(season, episode)`.
+  EpisodeRef? _resolveTmdbRef(
+    EpisodeRef r,
+    SeasonStrategy strategy,
+    List<int> tmdbCounts,
+    EpisodeGroup? epGroup,
+  ) {
+    if (epGroup != null) {
+      if (strategy == SeasonStrategy.mergeIntoOne && r.season == 1) {
+        final regular = [
+          for (final s in epGroup.seasons)
+            if (s.order > 0) s,
+        ]..sort((a, b) => a.order.compareTo(b.order));
+        var rem = r.episode;
+        for (final s in regular) {
+          if (rem <= s.episodes.length) {
+            return rem >= 1 ? s.episodes[rem - 1] : null;
+          }
+          rem -= s.episodes.length;
+        }
+        return null;
+      }
+      final s = epGroup.seasons.where((s) => s.order == r.season).firstOrNull;
+      if (s == null) return null;
+      var idx = r.episode - 1;
+      if (strategy == SeasonStrategy.splitKeepEpisode && r.season > 0) {
+        for (final prev in epGroup.seasons) {
+          if (prev.order <= 0 || prev.order >= r.season) continue;
+          idx -= prev.episodes.length;
+        }
+      }
+      if (idx < 0 || idx >= s.episodes.length) return null;
+      return s.episodes[idx];
+    }
+    if (strategy == SeasonStrategy.mergeIntoOne &&
+        r.season == 1 &&
+        tmdbCounts.isNotEmpty) {
+      var rem = r.episode;
+      if (rem < 1) return null;
+      for (var s = 1; s <= tmdbCounts.length; s++) {
+        final c = tmdbCounts[s - 1];
+        if (rem <= c) return EpisodeRef(s, rem);
+        rem -= c;
+      }
+      return null;
+    }
+    return r;
+  }
+
   /// Titles by (output season, episode); failures just mean no title.
   Future<Map<EpisodeRef, String>> _episodeTitles(
     int id,
     EpisodeGroup? epGroup,
     SeasonStrategy strategy,
+    List<int> tmdbCounts,
     List<EpisodeRef> targetRefs,
   ) async {
-    final seasonCache = <int, Map<int, String?>>{};
-    Future<String?> titleOf(int season, int ep) async {
-      if (!seasonCache.containsKey(season)) {
-        try {
-          seasonCache[season] = {
-            for (final e in await metadata.season(id, season))
-              e.number: e.title,
-          };
-        } catch (_) {
-          seasonCache[season] = {};
-        }
-      }
-      return seasonCache[season]![ep];
-    }
-
-    final out = <EpisodeRef, String>{};
+    final mapped = <EpisodeRef, EpisodeRef>{};
     for (final r in targetRefs.toSet()) {
-      var orig = r;
-      if (epGroup != null) {
-        final s = epGroup.seasons.where((s) => s.order == r.season).firstOrNull;
-        if (s == null) continue;
-        var idx = r.episode - 1;
-        if (strategy == SeasonStrategy.splitKeepEpisode) {
-          for (final prev in epGroup.seasons) {
-            if (prev.order >= r.season) break;
-            idx -= prev.episodes.length;
-          }
-        }
-        if (idx < 0 || idx >= s.episodes.length) continue;
-        orig = s.episodes[idx];
-      }
-      final t = await titleOf(orig.season, orig.episode);
+      final orig = _resolveTmdbRef(r, strategy, tmdbCounts, epGroup);
+      if (orig != null) mapped[r] = orig;
+    }
+    final fetched = await _fetchSeasons(
+      id,
+      mapped.values.map((orig) => orig.season),
+    );
+    final bySeason = <int, Map<int, String?>>{
+      for (final e in fetched.entries)
+        e.key: {for (final ep in e.value) ep.number: ep.title},
+    };
+    final out = <EpisodeRef, String>{};
+    for (final MapEntry(key: r, value: orig) in mapped.entries) {
+      final t = bySeason[orig.season]?[orig.episode];
       if (t != null && t.isNotEmpty) out[r] = t;
     }
     return out;

@@ -3,7 +3,7 @@ import 'numerals.dart';
 
 // ---------------------------------------------------------------- classify
 
-const _videoExt = {
+const videoExtensions = {
   'mkv',
   'mp4',
   'avi',
@@ -18,7 +18,19 @@ const _videoExt = {
   'webm', 'iso', 'm4v', 'mpg', 'mpeg', 'vob', '3gp', 'asf', 'divx', 'ogm',
   'strm', 'bdmv', 'f4v',
 };
-const _subExt = {'srt', 'ass', 'ssa', 'sub', 'idx', 'sup', 'vtt', 'smi', 'lrc'};
+const subtitleExtensions = {
+  'srt',
+  'ass',
+  'ssa',
+  'sub',
+  'idx',
+  'sup',
+  'vtt',
+  'smi',
+  'lrc',
+};
+const _videoExt = videoExtensions;
+const _subExt = subtitleExtensions;
 const _sidecarExt = {
   'nfo', 'jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'tbn', 'xml', 'svg', //
   // External audio tracks follow their video like subtitles do.
@@ -43,31 +55,45 @@ const _knownExt = {..._videoExt, ..._subExt, ..._sidecarExt, ..._junkExt};
 final _adKw = RegExp(
   '更多资源|更多精彩|更多电影|最新地址|最新网址|获取更多|公众号|扫码|发布页|永久地址|永久网址|免费下载|点击进入|关注微信',
 );
-const _tld =
-    'com|net|org|cn|cc|xyz|top|vip|club|info|tv|me|io|la|pw|co|in|us|uk|jp|kr|tw|hk|site|fun';
+// Unambiguous TLDs that may appear as bare domains (dytt8.com, bbs.xxx.com).
+// Common English words (.in, .us, .me, .tv, .co, .la, .fun, .top, .club) are
+// excluded here so titles like All.In.mkv / About.Us.mkv / Love.Me.mkv /
+// Apple.TV.mkv / Stand.By.Me.srt are never misclassified as ad URLs.
+const _bareTld = 'com|net|org|cn|cc|xyz|vip|pw|site';
+const _bareDomainPat =
+    '[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*\\.(?:$_bareTld)(?:\\.(?:cn|uk|jp|tw|hk))?(?![A-Za-z0-9])';
+const _schemeOrWwwPat =
+    'https?://\\S+|www\\.[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*(?![A-Za-z0-9])';
 final _urlRe = RegExp(
-  '(?:https?://\\S+|www\\.[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*|[A-Za-z0-9-]+\\.(?:$_tld)(?![A-Za-z0-9]))',
+  '(?:$_schemeOrWwwPat|$_bareDomainPat)',
+  caseSensitive: false,
+);
+final _wwwRe = RegExp('(?:$_schemeOrWwwPat)', caseSensitive: false);
+final _leadDomainRe = RegExp(
+  '^\\s*$_bareDomainPat[\\s._-]*',
   caseSensitive: false,
 );
 final _anyBracket = RegExp(r'\[[^\]]*\]|\([^)]*\)');
-final _httpUrlRe = RegExp(r'www\.|https?://', caseSensitive: false);
-final _tldDomainRe = RegExp(
-  '\\.(?:$_tld)(?![A-Za-z0-9])',
-  caseSensitive: false,
-);
-final _urlCheckRe = RegExp(
-  r'www\.|https?://|^[^ ]*\.(?:com|net|org|cn|cc)$',
-  caseSensitive: false,
-);
 final _letterOrDigitRe = RegExp(r'[\p{L}\p{N}]', unicode: true);
 final _sampleRe = RegExp(r'^sample$|[-._ \[(]sample[\])]?$|^sample[-._ ]');
 final _extRe = RegExp(r'^[a-z0-9!]+$');
 
-bool _isAd(String c) =>
-    _adKw.hasMatch(c) || _httpUrlRe.hasMatch(c) || _tldDomainRe.hasMatch(c);
+bool _isAd(String c) => _adKw.hasMatch(c) || _urlRe.hasMatch(c);
+
+final _schemeRe = RegExp(r'https?://', caseSensitive: false);
+
+String _basename(String fileName) {
+  final s = fileName.replaceAll('\\', '/');
+  final m = _schemeRe.firstMatch(s);
+  if (m != null) {
+    final slashBefore = s.lastIndexOf('/', m.start);
+    return slashBefore < 0 ? s : s.substring(slashBefore + 1);
+  }
+  return s.split('/').last;
+}
 
 FileRole classifyFile(String fileName) {
-  final base = fold(fileName.split('/').last.split('\\').last);
+  final base = fold(_basename(fileName));
   final lower = base.toLowerCase();
   if (base.startsWith('._') ||
       lower == '.ds_store' ||
@@ -85,8 +111,7 @@ FileRole classifyFile(String fileName) {
     _anyBracket,
     (m) => _isAd(m[0]!) ? ' ' : m[0]!,
   );
-  final hadUrl = _urlRe.hasMatch(rest) && _urlCheckRe.hasMatch(rest);
-  final hadAd = hadUrl || _adKw.hasMatch(rest) || rest != stem;
+  final hadAd = _urlRe.hasMatch(rest) || _adKw.hasMatch(rest) || rest != stem;
   rest = rest.replaceAll(_urlRe, ' ').replaceAll(_adKw, ' ');
   final empty = !_letterOrDigitRe.hasMatch(rest);
 
@@ -167,16 +192,8 @@ String fold(String s) {
   return b.toString();
 }
 
-const _cnNum = r'[0-9]+|[零〇一二三四五六七八九十百千两]+';
+const _cnNum = r'[0-9]+|[零〇一二三四五六七八九十百千两兩]+';
 
-final _wwwRe = RegExp(
-  'www\\.[A-Za-z0-9-]+\\.(?:$_tld)(?:\\.(?:cn|uk|jp|tw|hk))?(?![A-Za-z0-9])',
-  caseSensitive: false,
-);
-final _leadDomainRe = RegExp(
-  r'^\s*[A-Za-z0-9-]+\.(?:com|net|org|cn|cc|xyz|top|vip|club|info)(?![A-Za-z0-9])[\s._-]*',
-  caseSensitive: false,
-);
 final _dateRe = RegExp(
   r'(?<![0-9])(?:(?:19|20)\d\d[-._ ](?:0[1-9]|1[0-2])[-._ ](?:0[1-9]|[12]\d|3[01])|(?:19|20)\d\d(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01]))(?![0-9])',
 );
@@ -187,7 +204,7 @@ final _crcRe = RegExp(r'^[0-9A-Fa-f]{8}$');
 const _techWords =
     r'webdl|webrip|webhd|bluray|bdrip|brrip|bdremux|remux|hdtv|pdtv|dvdrip|dvdscr|dvd|hdrip|hdcam|bd|'
     r'amzn|nf|dsnp|hmax|atvp|hulu|x26[45]|h26[45]|hevc|avc|xvid|divx|av1|vc1|10bits?|8bits?|hi10p?|'
-    r'(?:ddp?|ddplus|aac|ac3|eac3|dts|dtshd|flac|truehd|atmos|opus|lpcm|mp3)\d*|ch\d\d|'
+    r'(?:ddp?|ddplus|aac|ac3|eac3|dts|dtshd|dtsx|flac|truehd|atmos|opus|lpcm|mp3)\d*|ch\d\d|'
     r'hdr10(?:plus)?|hdr|dv|dovi|hlg|sdr|imax|proper|repack|rerip|extended|unrated|remastered|'
     r'internal|multi|dual|dubbed|subbed|complete|batch|limited|hybrid|mkv|mp4|avi';
 final _techRe = RegExp(
@@ -208,7 +225,10 @@ final _seRe = RegExp(
   r'(?<![A-Za-z0-9])S(\d{1,2}) ?E(\d{1,4})((?: ?- ?E?\d{1,4}| ?~ ?E?\d{1,4}| ?E\d{1,4})*)(?![A-Za-z0-9])',
   caseSensitive: false,
 );
-final _xRe = RegExp(r'(?<![A-Za-z0-9])(\d{1,2})x(\d{2,3})(?![A-Za-z0-9])');
+final _xRe = RegExp(
+  r'(?<![A-Za-z0-9])(\d{1,2})x(\d{2,3})(?![A-Za-z0-9])',
+  caseSensitive: false,
+);
 // "第01集", "第01-02集"
 final _cnEpRe = RegExp('第 ?($_cnNum)(?: ?[-~] ?($_cnNum))? ?[集话話期回]');
 final _batchRe = RegExp(r'[全共] ?\d+ ?[集话期]|更新?至 ?\d+ ?[集话期]');
@@ -237,13 +257,20 @@ final _specialRe = RegExp(
   r'(?<![A-Za-z0-9])(?:OVA|OAD|SPs?|Specials?) ?(\d{1,3})?(?![A-Za-z0-9])|(?:特别篇|特別篇|番外篇?) ?(\d{1,3})?',
   caseSensitive: false,
 );
-final _extraRe = RegExp(
-  r'(?<![A-Za-z0-9])(?:NCOP|NCED|Creditless ?(?:Opening|Ending)|Trailers?|Teaser|PV|CM|Menu|Making(?: of)?|Featurettes?|Interviews?|Behind The Scenes|Deleted Scenes?|Extras?|Bonus) ?\d{0,2}(?![A-Za-z0-9])|(?<![A-Za-z0-9])(?:OP|ED) ?\d{1,2}(?![A-Za-z0-9])|花絮|幕后|特典|预告片?|宣传片|访谈|片头曲|片尾曲|特辑|彩蛋',
+// Case-sensitive acronyms (PV/CM/OP/ED) and CJK extra words.
+final _extraCsRe = RegExp(
+  r'(?<![A-Za-z0-9])(?:PV|CM) ?\d{0,2}(?![A-Za-z0-9])|(?<![A-Za-z0-9])(?:OP|ED) ?\d{1,2}(?![A-Za-z0-9])|花絮|幕后|特典|预告片?|宣传片|访谈|片头曲|片尾曲|特辑|彩蛋',
 );
-final _extraCi = RegExp(
+// Case-insensitive extra words (consolidated once; not duplicated in _extraCsRe).
+final _extraCiRe = RegExp(
   r'(?<![A-Za-z0-9])(?:NCOP|NCED|Creditless ?(?:Opening|Ending)|Trailers?|Teaser|Menu|Making(?: of)?|Featurettes?|Interviews?|Behind The Scenes|Deleted Scenes?|Extras?|Bonus) ?\d{0,2}(?![A-Za-z0-9])',
   caseSensitive: false,
 );
+// Unambiguous extra markers that are never standalone English movie titles.
+final _strictExtraRe = RegExp(
+  r'^(?:NCOP|NCED|PV|CM|OP|ED|花絮|幕后|特典|预告|宣传片|访谈|片头曲|片尾曲|特辑|彩蛋)',
+);
+final _theTitlePrefixRe = RegExp(r'^\s*the\s+$', caseSensitive: false);
 final _movieRe = RegExp(
   r'剧场版|劇場版|电影版|Gekijouban|(?<![A-Za-z])The Movie(?![A-Za-z])',
   caseSensitive: false,
@@ -275,13 +302,24 @@ bool _noiseBracket(String c) {
   return toks.every((t) => _techOnlyRe.hasMatch(t));
 }
 
+bool _hasExtraMarker(String c) =>
+    _extraCsRe.hasMatch(c) || _extraCiRe.hasMatch(c);
+
+RegExpMatch? _firstExtraMatch(String s) {
+  final a = _extraCsRe.firstMatch(s);
+  final b = _extraCiRe.firstMatch(s);
+  if (a == null) return b;
+  if (b == null) return a;
+  return a.start <= b.start ? a : b;
+}
+
 bool _hasEpisodeMarker(String c) =>
     _seRe.hasMatch(c) ||
     _xRe.hasMatch(c) ||
     _cnEpRe.hasMatch(c) ||
     _epRe.hasMatch(c) ||
     _specialRe.hasMatch(c) ||
-    _extraRe.hasMatch(c) ||
+    _hasExtraMarker(c) ||
     _seasonRes.any((r) => r.hasMatch(c));
 
 final _webdlRe = RegExp(r'web[-. _]?dl', caseSensitive: false);
@@ -319,12 +357,23 @@ List<int> _range(int first, int? last) =>
     ? [first]
     : [for (var i = first; i <= last; i++) i];
 
+/// Parses an 8-digit YYYYMMDD string, returning null when the calendar date
+/// does not exist (e.g. 20240231 where DateTime.utc would silently roll over).
+DateTime? _tryParseCalendarDate(String digits) {
+  final y = int.parse(digits.substring(0, 4));
+  final mo = int.parse(digits.substring(4, 6));
+  final d = int.parse(digits.substring(6, 8));
+  final dt = DateTime.utc(y, mo, d);
+  if (dt.year != y || dt.month != mo || dt.day != d) return null;
+  return dt;
+}
+
 final _dashDateRe = RegExp(r'[-._ ]');
 final _numWithVRe = RegExp(r'^\d{1,4}(?:v\d)?$');
 final _trailerGroupRe = RegExp(r'-([A-Za-z0-9]{2,16}) *(?:\[[^\]]*\] *)*$');
 final _eNumRe = RegExp(r'^E?\d+$', caseSensitive: false);
 final _multiSpaceRe = RegExp(r' {2,}');
-final _multiEpRe = RegExp(r'( ?[-~] ?)?E?(\d+)');
+final _multiEpRe = RegExp(r'( ?[-~] ?)?E?(\d+)', caseSensitive: false);
 final _leadLowerRe = RegExp(r'^ [a-z]');
 final _bareRegionRe = RegExp(
   r'(?<![A-Za-z0-9])(\d{1,3})(?:v\d)?(?![A-Za-z0-9])',
@@ -340,7 +389,7 @@ final _resKRe = RegExp(
   caseSensitive: false,
 );
 final _hdrAudioRe = RegExp(
-  r'(?<![A-Za-z0-9])(hdr10plus|hdr10|hdr|dovi|dv|hlg|imax|atmos|truehd|dts-?hd|dts-?x)\d*(?![A-Za-z0-9])',
+  r'(?<![A-Za-z0-9])(hdr10plus|hdr10|hdr|dovi|dv|hlg|imax|atmos|truehd|dts[- ]?hd|dts[- ]?x)\d*(?![A-Za-z0-9])',
   caseSensitive: false,
 );
 
@@ -356,16 +405,12 @@ Info analyze(String raw, {required bool file}) {
     }
   }
   s = s.replaceAll(_wwwRe, ' ').replaceFirst(_leadDomainRe, '');
-  final dm = _dateRe.firstMatch(s);
-  if (dm != null) {
-    final d = dm[0]!.replaceAll(_dashDateRe, '');
-    a.airDate = DateTime.utc(
-      int.parse(d.substring(0, 4)),
-      int.parse(d.substring(4, 6)),
-      int.parse(d.substring(6, 8)),
-    );
-  }
-  s = s.replaceAll(_dateRe, ' \u0001 ');
+  s = s.replaceAllMapped(_dateRe, (dm) {
+    final dt = _tryParseCalendarDate(dm[0]!.replaceAll(_dashDateRe, ''));
+    if (dt == null) return dm[0]!;
+    a.airDate ??= dt;
+    return ' \u0001 ';
+  });
 
   // Leading brackets: first non-noise one is the group; noise is kept for
   // resolution / extra-info parsing.
@@ -402,9 +447,12 @@ Info analyze(String raw, {required bool file}) {
     if (gm != null) {
       final cand = gm[1]!;
       final before = _normalize(s.substring(0, gm.start));
+      // Do not swallow trailing subtitle language codes ("-CHS", "-ENG") as group.
+      final isSubLang = isSub && _langRe.hasMatch(cand);
       if (_techRe.hasMatch(before) &&
           !_techRe.hasMatch(cand) &&
-          !_eNumRe.hasMatch(cand)) {
+          !_eNumRe.hasMatch(cand) &&
+          !isSubLang) {
         a.group = cand;
         s = s.substring(0, gm.start) + s.substring(gm.start + 1 + cand.length);
       }
@@ -498,14 +546,31 @@ Info analyze(String raw, {required bool file}) {
     }
   }
 
+  // ---- year: last candidate that is not the very first token
+  final yrs = _yearRe.allMatches(s).toList();
+  RegExpMatch? ym;
+  for (final y in yrs) {
+    if (y.start > 0) ym = y;
+  }
+
   // ---- special / extra / movie keywords
-  final em = _extraRe.firstMatch(s) ?? _extraCi.firstMatch(s);
-  // A keyword before an explicit episode, or one running on into more words
-  // ("Today's Menu for the Emiya Family S01E01"), is part of the title.
+  final em = _firstExtraMatch(s);
+  // A keyword before an explicit episode, running on into lowercase words
+  // ("Today's Menu for the Emiya Family"), preceded by "The " ("The Menu",
+  // "The Interview"), or appearing as the main title before a release year
+  // ("The Menu (2022)", "Interview (2007)") is part of the title, not an extra.
+  final beforeEm = em == null ? '' : s.substring(0, em.start);
   final inTitle =
       em != null &&
       ((a.explicitEp && em.start < cut) ||
-          _leadLowerRe.hasMatch(s.substring(em.end)));
+          _leadLowerRe.hasMatch(s.substring(em.end)) ||
+          (_theTitlePrefixRe.hasMatch(beforeEm) &&
+              !_strictExtraRe.hasMatch(em[0]!)) ||
+          (ym != null &&
+              em.start < ym.start &&
+              !beforeEm.contains('\u0001') &&
+              !beforeEm.contains(' - ') &&
+              !_strictExtraRe.hasMatch(em[0]!)));
   if (em != null && !inTitle) {
     a.extraKw = true;
     mark(em.start);
@@ -518,12 +583,6 @@ Info analyze(String raw, {required bool file}) {
     mark(sp.start);
   }
 
-  // ---- year: last candidate that is not the very first token
-  final yrs = _yearRe.allMatches(s).toList();
-  RegExpMatch? ym;
-  for (final y in yrs) {
-    if (y.start > 0) ym = y;
-  }
   if (ym != null) {
     a.year = int.parse(ym[1]!);
     mark(ym.start);
@@ -605,7 +664,7 @@ Info analyze(String raw, {required bool file}) {
       a.res = const {'2': '1440p', '4': '2160p', '8': '4320p'}[km[1]];
     }
   }
-  // order: resolution, picture (DV/HDR), audio (Atmos/TrueHD/DTS-HD)
+  // order: resolution, picture (DV/HDR), audio (Atmos/TrueHD/DTS-HD/DTS-X)
   final picture = <String>{}, audio = <String>{};
   for (final t in _hdrAudioRe.allMatches(s)) {
     final k = _canonExtra(t[1]!);
