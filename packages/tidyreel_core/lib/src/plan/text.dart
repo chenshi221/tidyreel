@@ -4,6 +4,9 @@ import '../model/metadata.dart';
 
 final _nonWord = RegExp(r'[^\p{L}\p{N}]', unicode: true);
 
+/// Removes all non-letter, non-digit characters (punctuation / symbols / whitespace).
+String stripPunct(String s) => s.replaceAll(_nonWord, '');
+
 /// Lower-cased title with everything but letters / digits removed and
 /// common Traditional Chinese characters folded to Simplified, for comparing titles.
 String normTitle(String s) {
@@ -298,6 +301,9 @@ String joinPath(String dir, String name) =>
 final _letterPrefixRe = RegExp(r'^[A-Z](?=[㐀-鿿])');
 final _bracketedRe = RegExp(r'[（(【\[《][^）)】\]》]*[）)】\]》]');
 final _cjkCharRe = RegExp(r'[぀-ヿ㐀-鿿가-힯]');
+final _dotUnderscoreRe = RegExp(r'[._]');
+
+bool hasCjk(String s) => _cjkCharRe.hasMatch(s);
 // Words glued to digits ("S01", "x265") end the run.
 final _latinRunRe = RegExp(
   r"[A-Za-z][A-Za-z']*(?![A-Za-z'0-9])(?: +[A-Za-z][A-Za-z']*(?![A-Za-z'0-9]))*",
@@ -346,7 +352,7 @@ List<String> relaxedQueries(String title, String rawName) {
   String? latin;
   final raw = rawName
       .replaceAll(_bracketedRe, ' ')
-      .replaceAll(RegExp(r'[._]'), ' ');
+      .replaceAll(_dotUnderscoreRe, ' ');
   for (final m in _latinRunRe.allMatches(raw)) {
     final words = [
       for (final w in m[0]!.split(' '))

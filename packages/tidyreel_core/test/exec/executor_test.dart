@@ -53,6 +53,8 @@ class HookBackend implements StorageBackend {
       _c('exists', [path], () => inner.exists(path));
   @override
   Future<void> ping() async {}
+  @override
+  Future<void> close() async {}
 }
 
 var _n = 0;
@@ -927,5 +929,255 @@ void main() {
       expect(byId[ops[1].id]!.status, OpStatus.undone);
       expect(f.files, ['/old/a.mkv']);
     });
+
+    test('ThrottledBackend.close delegates and CachedBackend cache hit skips rate-limit slot', () async {
+      var closed = false;
+      final mem = _CloseTrackingBackend({
+        '/a/f.mkv': 1,
+      }, onClose: () => closed = true);
+      final cached = CachedBackend(mem);
+      final delays = <Duration>[];
+      final throttled = ThrottledBackend(
+        cached,
+        minInterval: const Duration(milliseconds: 200),
+        delay: (d) async => delays.add(d),
+      );
+      await throttled.list('/a'); // miss: takes slot 1 (no wait yet)
+      await throttled.list('/a'); // hit: must NOT wait or consume a slot
+      await throttled.list('/a'); // hit: must NOT wait or consume a slot
+      expect(delays, isEmpty);
+      await throttled.close();
+      expect(closed, isTrue);
+    });
+
+    test('DefaultExecutor._wrap does not double-wrap ThrottledBackend or CachedBackend(ThrottledBackend)', () async {
+      final f = MemoryStorageBackend({'/d/a.mkv': 1});
+      final innerDelays = <Duration>[];
+      final execDelays = <Duration>[];
+      final throttled = ThrottledBackend(
+        f,
+        minInterval: const Duration(milliseconds: 100),
+        delay: (d) async => innerDelays.add(d),
+      );
+      final cached = CachedBackend(throttled);
+      final ex = DefaultExecutor(
+        history,
+        minInterval: const Duration(milliseconds: 500),
+        delay: (d) async => execDelays.add(d),
+      );
+      await run(
+        ex.execute(
+          task,
+          conn,
+          RenamePlan(ops: [reloc('/d/a.mkv', '/d/b.mkv')]),
+          cached,
+        ),
+      );
+      expect(f.files, ['/d/b.mkv']);
+      expect(execDelays, isEmpty);
+    });
+
+    test('OpKind.write retries artwork downloads with backoff and runs writes concurrently', () async {
+      var attempts = 0;
+      var inFlight = 0, peak = 0;
+      final delays = <Duration>[];
+      final ex = DefaultExecutor(
+        history,
+        concurrency: 4,
+        minInterval: Duration.zero,
+        delay: (d) async => delays.add(d),
+        fetch: (u) async {
+          if (u.path == '/retry.jpg' && attempts++ < 2) {
+            throw const StorageException(StorageErrorCode.network, 'timeout');
+          }
+          peak = peak < ++inFlight ? inFlight : peak;
+          await Future<void>.delayed(const Duration(milliseconds: 15));
+          inFlight--;
+          return [7, 8, 9];
+        },
+      );
+      final ops = [
+        for (var i = 0; i < 4; i++)
+          RenameOp(
+            id: OpId('w$i'),
+            kind: OpKind.write,
+            phase: ExecPhase.cleanup,
+            src: i == 0
+                ? 'https://example.invalid/retry.jpg'
+                : 'https://example.invalid/p$i.jpg',
+            dst: '/d/p$i.jpg',
+          ),
+      ];
+      await run(ex.execute(task, conn, RenamePlan(ops: ops), fs));
+      expect(delays, const [Duration(seconds: 1), Duration(seconds: 2)]);
+      expect(peak, greaterThan(1));
+      expect(peak, lessThanOrEqualTo(4));
+      final b = await theBatch(history);
+      expect(statusCounts(await history.records(b)), {OpStatus.done: 4});
+    });
+
+    test('resume from srcTmp creates missing dstDir before moving', () async {
+      final op = reloc('/d/x/a.mkv', '/d/missing_dst/b.mkv');
+      final f = MemoryStorageBackend({'/d/x/a.mkv': 1});
+      final b = await history.beginBatch(task, conn, [op]);
+      await f.rename('/d/x/a.mkv', '.tidyreel-tmp-${op.id.value}');
+      await run(executor(history).resume(b, f));
+      expect(f.files, ['/d/missing_dst/b.mkv']);
+      expect(statusCounts(await history.records(b)), {OpStatus.done: 1});
+    });
+
+    test(
+      'failed folder rename blocks OpKind.write targeting post-rename folder',
+      () async {
+        final f = MemoryStorageBackend({'/d/raw/a.mkv': 1});
+        final ops = [
+          reloc('/d/raw/a.mkv', '/d/raw/Show.S01E01.mkv'),
+          reloc('/d/raw', '/d/Show (2020)', phase: ExecPhase.folders),
+          const RenameOp(
+            id: OpId('w-nfo'),
+            kind: OpKind.write,
+            phase: ExecPhase.cleanup,
+            src: 'text:<tvshow/>',
+            dst: '/d/Show (2020)/tvshow.nfo',
+          ),
+        ];
+        final be = HookBackend(f, (m, a) {
+          if (m == 'rename' && a.first == '/d/raw') {
+            throw const StorageException(StorageErrorCode.busy, 'locked');
+          }
+        });
+        await run(
+          executor(history).execute(task, conn, RenamePlan(ops: ops), be),
+        );
+        final recs = {
+          for (final r in await history.records(await theBatch(history)))
+            r.op.id: r.status,
+        };
+        expect(recs[const OpId('w-nfo')], OpStatus.skipped);
+        expect(await f.exists('/d/Show (2020)/tvshow.nfo'), isFalse);
+      },
+    );
+
+    test('_batched list failure marks only that folder ops failed without aborting batch', () async {
+      final f = MemoryStorageBackend({
+        '/bad/a.mkv': 1,
+        '/bad/b.mkv': 2,
+        '/good/c.mkv': 3,
+      });
+      final ops = [
+        reloc('/bad/a.mkv', '/bad/a2.mkv'),
+        reloc('/bad/b.mkv', '/bad/b2.mkv'),
+        reloc('/good/c.mkv', '/good/c2.mkv'),
+      ];
+      final be = HookBackend(f, (m, a) {
+        if (m == 'list' && a.first == '/bad') {
+          throw const StorageException(StorageErrorCode.unauthorized, 'denied');
+        }
+      });
+      await run(
+        executor(history).execute(task, conn, RenamePlan(ops: ops), be),
+      );
+      final b = await theBatch(history);
+      expect(statusCounts(await history.records(b)), {
+        OpStatus.failed: 2,
+        OpStatus.done: 1,
+      });
+      expect(f.files, contains('/good/c2.mkv'));
+    });
+
+    test(
+      '_batched routes viaTmp swap through _runStaged when renameMany fails',
+      () async {
+        final f = MemoryStorageBackend({'/d/01.mkv': 1, '/d/02.mkv': 2});
+        final ops = [
+          reloc('/d/01.mkv', '/d/02.mkv'),
+          reloc('/d/02.mkv', '/d/01.mkv'),
+        ];
+        var failedOnce = false;
+        final be = HookBackend(f, (m, a) {
+          if (m == 'rename' && !failedOnce) {
+            failedOnce = true;
+            throw const StorageException(StorageErrorCode.other, 'batch fail');
+          }
+        });
+        await run(
+          executor(history).execute(task, conn, RenamePlan(ops: ops), be),
+        );
+        final b = await theBatch(history);
+        expect(statusCounts(await history.records(b)), {OpStatus.done: 2});
+        final sizes = {for (final e in await f.list('/d')) e.name: e.size};
+        expect(sizes, {'01.mkv': 2, '02.mkv': 1});
+      },
+    );
+
+    test(
+      '_batched move rollback avoids colliding with viaTmp target name',
+      () async {
+        final f = MemoryStorageBackend({'/d/a.mkv': 1, '/d/b.mkv': 2});
+        final ops = [
+          reloc('/d/a.mkv', '/other/x.mkv'),
+          reloc('/d/b.mkv', '/d/a.mkv'),
+        ];
+        var failMoveOnce = true;
+        final be = HookBackend(f, (m, a) {
+          if (m == 'move' && failMoveOnce) {
+            failMoveOnce = false;
+            throw const StorageException(StorageErrorCode.other, 'move fail');
+          }
+        });
+        await run(
+          executor(history).execute(task, conn, RenamePlan(ops: ops), be),
+        );
+        final b = await theBatch(history);
+        expect(statusCounts(await history.records(b)), {OpStatus.done: 2});
+        expect(await f.exists('/d/a.mkv'), isTrue);
+        expect(await f.exists('/other/x.mkv'), isTrue);
+      },
+    );
+
+    test(
+      'undo avoids redundant list(refresh: true) and history.records queries',
+      () async {
+        final f = MemoryStorageBackend({
+          for (var i = 1; i <= 3; i++) '/s/raw/ep$i.mkv': i,
+        });
+        final countingHistory = _CountingHistory();
+        final ops = [
+          mkdir('/s/raw/Season 01'),
+          for (var i = 1; i <= 3; i++)
+            reloc('/s/raw/ep$i.mkv', '/s/raw/Season 01/Show.S01E$i.mkv'),
+        ];
+        final ex = executor(countingHistory);
+        await run(ex.execute(task, conn, RenamePlan(ops: ops), f));
+        final b = await theBatch(countingHistory);
+        countingHistory.recordQueries = 0;
+        final hook = HookBackend(f);
+        await run(ex.undo(b, hook));
+        expect(countingHistory.recordQueries, 1);
+        // Only 1 list of /s/raw/Season 01 for files + 1 for mkdir empty check (not an extra one in _batched).
+        expect(
+          hook.calls.where((c) => c == 'list /s/raw/Season 01'),
+          hasLength(2),
+        );
+      },
+    );
   });
+}
+
+class _CloseTrackingBackend extends MemoryStorageBackend {
+  final void Function() onClose;
+  _CloseTrackingBackend(super.files, {required this.onClose});
+
+  @override
+  Future<void> close() async => onClose();
+}
+
+class _CountingHistory extends MemoryHistoryStore {
+  var recordQueries = 0;
+
+  @override
+  Future<List<HistoryRecord>> records(BatchId batch) {
+    recordQueries++;
+    return super.records(batch);
+  }
 }

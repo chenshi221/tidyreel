@@ -90,12 +90,15 @@ void main() {
           '$out/Season 02/$name.S02E01.zh-Hant.ass',
         ]..sort(),
       );
-      // Group folder is renamed in the folders phase, after all file ops.
-      final folderOps = p.ops.where((o) => o.phase == ExecPhase.folders);
-      expect(folderOps.single.src, show);
-      expect(folderOps.single.dst, out);
+      // Season folders and the group folder are renamed in the folders phase,
+      // after all file ops (season folders before the outer group folder).
+      final folderOps = p.ops
+          .where((o) => o.phase == ExecPhase.folders)
+          .toList();
+      expect(folderOps.last.src, show);
+      expect(folderOps.last.dst, out);
       final lastFile = p.ops.lastIndexWhere((o) => o.phase == ExecPhase.files);
-      expect(p.ops.indexOf(folderOps.single), greaterThan(lastFile));
+      expect(p.ops.indexOf(folderOps.first), greaterThan(lastFile));
     });
 
     test(
@@ -663,6 +666,74 @@ void main() {
     });
 
     for (final kind in [MediaKind.movie, MediaKind.episode]) {
+      test('${kind.name}: manual matching confirms weak file names', () async {
+        final match = kind == MediaKind.movie
+            ? Demo.inception
+            : Demo.dorohedoro;
+        final scan = scanOf(
+          [
+            MediaGroup(
+              id: const GroupId('g1'),
+              kind: kind,
+              anchorTitle: '测试',
+              rootDir: root,
+              files: [
+                for (var n = 1; n <= 2; n++)
+                  video(
+                    '$root/$n.mkv',
+                    kind: kind,
+                    season: kind == MediaKind.episode ? 1 : null,
+                    episode: kind == MediaKind.episode ? n : null,
+                    confidence: 0.1,
+                  ),
+                other('$root/1.srt', FileRole.subtitle),
+                if (kind == MediaKind.episode)
+                  video('$root/unknown.mkv', confidence: 0.1),
+              ],
+              match: match,
+              matchScore: 0.1,
+            ),
+          ],
+          unassigned: [other('/d/pending.mkv.qkdownload', FileRole.other)],
+        );
+        final automatic = await plan(scan);
+        expect(automatic.ops.every((o) => !o.selected), isTrue);
+
+        final decisions = {
+          const GroupId('g1'): GroupDecision(
+            match: match,
+            overrides: const {'$root/2.mkv': FileOverride(ignore: true)},
+          ),
+        };
+        final confirmed = await plan(scan, decisions: decisions);
+        final selected = opFor(confirmed, '$root/1.mkv');
+        expect(selected.selected, isTrue);
+        expect(selected.warning, isNull);
+        expect(opFor(confirmed, '$root/1.srt').selected, isTrue);
+        expect(confirmed.ops.any((o) => o.src == '$root/2.mkv'), isFalse);
+        expect(confirmed.ops.any((o) => o.src == '$root/unknown.mkv'), isFalse);
+        expect(
+          confirmed.ops.any((o) => o.src.endsWith('.qkdownload')),
+          isFalse,
+        );
+
+        final collision = await plan(
+          scan,
+          decisions: decisions,
+          existing: {selected.dst},
+        );
+        expect(collision.conflicts, isNotEmpty);
+        final deselected = await plan(
+          scan,
+          decisions: {
+            const GroupId('g1'): decisions[const GroupId('g1')]!.copyWith(
+              selected: false,
+            ),
+          },
+        );
+        expect(deselected.ops.any((o) => o.selected), isFalse);
+      });
+
       for (final weak in ['parse', 'match', 'both']) {
         test(
           '${kind.name}: manually selecting a weak $weak keeps warnings',
@@ -724,6 +795,25 @@ void main() {
         );
       }
     }
+
+    test('manual matching still rejects invalid episode numbers', () async {
+      final p = await plan(
+        scanOf([
+          tvGroup([
+            video('$root/a.mkv', season: 1, episode: 1, confidence: 0.1),
+            other('$root/a.srt', FileRole.subtitle),
+          ], score: 0.1),
+        ]),
+        decisions: const {
+          GroupId('g1'): GroupDecision(
+            match: Demo.dorohedoro,
+            episodeOffset: -1,
+          ),
+        },
+      );
+      expect(p.ops.any((o) => o.selected), isFalse);
+      expect(opFor(p, '$root/a.mkv').warning, '集号无效');
+    });
 
     test(
       'manual selection does not accept an invalid episode number',
@@ -1462,5 +1552,119 @@ void main() {
       );
       expect(separated.conflicts, isEmpty);
     });
+
+    test('episodeTitles maps mergeIntoOne past season 1 and ignores order=0 specials in splitKeepEpisode', () async {
+      final meta = _TwoSeasonTitleMeta();
+      const opts = PlanOptions(
+        naming: NamingProfile(tv: NamingOptions(episodeTitle: true)),
+      );
+      final merged = await plan(
+        scanOf([
+          tvGroup([
+            video('$root/S01E01.mkv', season: 1, episode: 1),
+            video('$root/S02E01.mkv', season: 2, episode: 1),
+          ], show: null),
+        ]),
+        decisions: const {
+          GroupId('g1'): GroupDecision(strategy: SeasonStrategy.mergeIntoOne),
+        },
+        options: opts,
+        metadata: meta,
+      );
+      expect(opFor(merged, '$root/S01E01.mkv').dst, contains('S01E01.S1-Ep1'));
+      expect(opFor(merged, '$root/S02E01.mkv').dst, contains('S01E03.S2-Ep1'));
+
+      // EpisodeGroup with order=0 specials + splitKeepEpisode must not subtract specials.
+      final split = await plan(
+        scanOf([
+          tvGroup([video('$root/03.mkv', season: 1, episode: 3)], show: null),
+        ]),
+        decisions: const {
+          GroupId('g1'): GroupDecision(
+            episodeGroupId: 'eg-with-specials',
+            strategy: SeasonStrategy.splitKeepEpisode,
+          ),
+        },
+        options: opts,
+        metadata: meta,
+      );
+      expect(opFor(split, '$root/03.mkv').dst, contains('S02E03.S2-Ep1'));
+    });
+
+    test('_onDiskShow and _mkdir do not mistake existing files for folders', () async {
+      final p = await plan(
+        scanOf([
+          MediaGroup(
+            id: const GroupId('g1'),
+            kind: MediaKind.movie,
+            anchorTitle: 'Foo.bar',
+            rootDir: '/d',
+            files: [video('/d/Foo.bar.mkv', kind: MediaKind.movie)],
+            match: const Candidate(
+              tmdbId: 99,
+              kind: MediaKind.movie,
+              title: 'Foo.bar',
+            ),
+            matchScore: 0.95,
+          ),
+        ]),
+        options: const PlanOptions(
+          mode: OrganizeMode.moveToLibrary,
+          libraryRoot: '/lib',
+        ),
+        existing: const {'/lib/电影/Foo.bar'},
+      );
+      // Foo.bar looks like a file extension (.bar), so it is not treated as an
+      // existing folder to merge into and still gets an mkdir op.
+      expect(p.merges, isEmpty);
+      expect(
+        p.ops.any((o) => o.kind == OpKind.mkdir && o.dst == '/lib/电影/Foo.bar'),
+        isTrue,
+      );
+    });
   });
+}
+
+class _TwoSeasonTitleMeta extends FakeMetadataProvider {
+  @override
+  Future<ShowDetail> show(int tmdbId) async => const ShowDetail(
+    info: Demo.dorohedoro,
+    seasons: [
+      SeasonInfo(number: 0, episodeCount: 2),
+      SeasonInfo(number: 1, episodeCount: 2),
+      SeasonInfo(number: 2, episodeCount: 2),
+    ],
+  );
+
+  @override
+  Future<List<EpisodeGroup>> episodeGroups(int tmdbId) async => const [
+    EpisodeGroup(
+      id: 'eg-with-specials',
+      name: 'DVD',
+      type: 3,
+      seasons: [
+        EpisodeGroupSeason(
+          order: 0,
+          name: 'Specials',
+          episodes: [EpisodeRef(0, 1), EpisodeRef(0, 2)],
+        ),
+        EpisodeGroupSeason(
+          order: 1,
+          name: 'S1',
+          episodes: [EpisodeRef(1, 1), EpisodeRef(1, 2)],
+        ),
+        EpisodeGroupSeason(
+          order: 2,
+          name: 'S2',
+          episodes: [EpisodeRef(2, 1), EpisodeRef(2, 2)],
+        ),
+      ],
+    ),
+  ];
+
+  @override
+  Future<List<Episode>> season(int tmdbId, int season) async => [
+    Episode(season: season, number: 1, title: 'S$season-Ep1'),
+    Episode(season: season, number: 2, title: 'S$season-Ep2'),
+  ];
 }

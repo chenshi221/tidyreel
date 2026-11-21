@@ -11,6 +11,7 @@ Future<void> walkDirs(
   int parallel = 6,
   bool Function()? stop,
 }) {
+  final limit = parallel < 1 ? 1 : parallel;
   final queue = Queue<String>()..addAll(roots);
   final visited = <String>{};
   final done = Completer<void>();
@@ -19,13 +20,14 @@ Future<void> walkDirs(
   void pump() {
     if (done.isCompleted) return;
     if (stop?.call() ?? false) queue.clear();
-    while (active < parallel && queue.isNotEmpty) {
+    while (active < limit && queue.isNotEmpty) {
       final dir = queue.removeFirst();
       if (!visited.add(dir)) continue;
       active++;
-      visit(dir).then(
+      Future.sync(() => visit(dir)).then(
         (subs) {
           active--;
+          if (done.isCompleted) return;
           for (final s in subs) {
             if (!visited.contains(s)) queue.add(s);
           }

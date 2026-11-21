@@ -177,4 +177,34 @@ void main() {
     expect(sharesToken('slow man', 'Slow Horses'), isTrue);
     expect(sharesToken('horse', 'Cat'), isFalse);
   });
+
+  test(
+    'show() uses embedded append_to_response without extra HTTP calls',
+    () async {
+      final a = _Adapter({
+        '/tv/555|1': {
+          'id': 555,
+          'name': 'Slow Horses',
+          'seasons': [],
+          'translations': {'translations': []},
+          'alternative_titles': {
+            'results': [
+              {'iso_3166_1': 'CN', 'title': '流人'},
+            ],
+          },
+        },
+      });
+      final p = TmdbProvider(
+        const TmdbConfig(apiKey: 'k'),
+        dio: Dio()..httpClientAdapter = a,
+      );
+      final s = await p.show(555);
+      expect(s.info.title, '流人');
+      expect(a.requests.where((r) => r.contains('translations')), isEmpty);
+      expect(
+        a.requests.where((r) => r.contains('alternative_titles')),
+        isEmpty,
+      );
+    },
+  );
 }

@@ -44,8 +44,6 @@ final _structural = RegExp(
 /// per folder from the file names.
 enum MediaHint { mixed, anime, tv, movie }
 
-final _cjkRe = RegExp(r'[぀-ヿ㐀-鿿가-힯]');
-
 class AnchorRecognizer implements Recognizer {
   final FilenameParser parser;
   final MetadataProvider metadata;
@@ -116,8 +114,18 @@ class AnchorRecognizer implements Recognizer {
     }
 
     final drafts = _promoteToRoots(_draftGroups(videos, rootDirs), rootDirs);
+    final draftsByDir = <String, List<_Draft>>{};
+    final draftsByVideoDir = <String, List<_Draft>>{};
+    for (final d in drafts) {
+      (draftsByDir[d.dir] ??= []).add(d);
+      final seenDirs = <String>{};
+      for (final v in d.videoFiles) {
+        final vd = dirOf(v.path);
+        if (seenDirs.add(vd)) (draftsByVideoDir[vd] ??= []).add(d);
+      }
+    }
     for (final f in followers) {
-      final d = _homeOf(f, drafts);
+      final d = _homeOf(f, drafts, draftsByDir, draftsByVideoDir);
       if (d == null) {
         unassigned.add(f.file);
       } else {
@@ -129,19 +137,20 @@ class AnchorRecognizer implements Recognizer {
     final h = hint();
     final rules = titleRules();
     // A few folders at a time: each costs several TMDB round trips.
-    final looked = <_Lookup>[];
-    for (var i = 0; i < drafts.length; i += 4) {
-      looked.addAll(
-        await Future.wait(
-          drafts
-              .skip(i)
-              .take(4)
-              .map((d) => _lookup(d, cache, h, rules, nfos, read)),
-        ),
-      );
+    final looked = List<_Lookup?>.filled(drafts.length, null);
+    var next = 0;
+    Future<void> worker() async {
+      while (next < drafts.length) {
+        final idx = next++;
+        looked[idx] = await _lookup(drafts[idx], cache, h, rules, nfos, read);
+      }
     }
+
+    await Future.wait([
+      for (var i = 0; i < min(4, drafts.length); i++) worker(),
+    ]);
     final usedIds = <String>{};
-    final groups = [for (final l in looked) _toGroup(l, usedIds)];
+    final groups = [for (final l in looked) _toGroup(l!, usedIds)];
     groups.sort(
       (a, b) => a.rootDir.compareTo(b.rootDir) != 0
           ? a.rootDir.compareTo(b.rootDir)
@@ -232,35 +241,63 @@ class AnchorRecognizer implements Recognizer {
       if (inside.length != 1) continue;
       final d = inside.single;
       if (d.dir == root || dirOf(d.dir) != root) continue;
-      out[out.indexOf(d)] = _Draft(root, d.videos, d.folderTitle, true);
+      out[out.indexOf(d)] = _Draft(
+        root,
+        d.videos,
+        d.folderTitle,
+        true,
+        originalDir: d.dir,
+      );
     }
     return out;
   }
 
-  _Draft? _homeOf(_Entry f, List<_Draft> drafts) {
+  _Draft? _homeOf(
+    _Entry f,
+    List<_Draft> drafts,
+    Map<String, List<_Draft>> draftsByDir,
+    Map<String, List<_Draft>> draftsByVideoDir,
+  ) {
+    final fdir = dirOf(f.file.path);
+    final checked = <_Draft>{};
     _Draft? best;
-    var sameDir = false;
-    for (final d in drafts) {
-      final m = matchVideo(f.file, [for (final v in d.videos) v.file]);
+
+    // 1. Check drafts that already have a video in the follower's exact directory.
+    for (final d in draftsByVideoDir[fdir] ?? const <_Draft>[]) {
+      checked.add(d);
+      final m = matchVideo(f.file, d.videoFiles);
       if (m == null) continue;
-      final same = dirOf(m.video.path) == dirOf(f.file.path);
-      if (best == null || (same && !sameDir)) {
-        best = d;
-        sameDir = same;
+      if (dirOf(m.video.path) == fdir) return d;
+      best ??= d;
+    }
+
+    // 2. Check enclosing drafts along the follower's directory chain.
+    List<_Draft>? deepestEnclosing;
+    for (final anc in f.chain) {
+      final list = draftsByDir[anc];
+      if (list == null) continue;
+      deepestEnclosing ??= list;
+      for (final d in list) {
+        if (!checked.add(d)) continue;
+        final m = matchVideo(f.file, d.videoFiles);
+        if (m == null) continue;
+        if (dirOf(m.video.path) == fdir) return d;
+        best ??= d;
       }
     }
     if (best != null) return best;
-    // Fall back to the group whose folder contains the file (must be unambiguous).
-    final dir = dirOf(f.file.path);
-    final inside = drafts
-        .where((d) => dir == d.dir || dir.startsWith('${d.dir}/'))
-        .toList();
-    if (inside.isEmpty) return null;
-    inside.sort((a, b) => b.dir.length.compareTo(a.dir.length));
-    final deepest = inside
-        .where((d) => d.dir.length == inside.first.dir.length)
-        .toList();
-    return deepest.length == 1 ? deepest.first : null;
+
+    // 3. Fall back to the unambiguous enclosing group folder (fast path).
+    if (deepestEnclosing != null) {
+      return deepestEnclosing.length == 1 ? deepestEnclosing.single : null;
+    }
+
+    // 4. Follower sits outside all group folders (e.g. a sibling Subs/ dir).
+    for (final d in drafts) {
+      if (!checked.add(d)) continue;
+      if (matchVideo(f.file, d.videoFiles) != null) return d;
+    }
+    return null;
   }
 
   // ---- matching -----------------------------------------------------------
@@ -321,11 +358,22 @@ class AnchorRecognizer implements Recognizer {
     /// with TMDB's titles (all AniList aliases, best one counts).
     Future<bool> tryQuery(String q, {List<String>? scoreAs}) async {
       for (final y in [year, if (year != null) null]) {
-        final results = await (cache['${kind.name}|$q|$y'] ??= metadata.search(
-          q,
-          kind: kind == MediaKind.movie ? MediaKind.movie : MediaKind.episode,
-          year: y,
-        ));
+        final key = '${kind.name}|$q|$y';
+        final future = cache.putIfAbsent(key, () {
+          final f = metadata.search(
+            q,
+            kind: kind == MediaKind.movie ? MediaKind.movie : MediaKind.episode,
+            year: y,
+          );
+          f.then<void>(
+            (_) {},
+            onError: (Object _) {
+              if (identical(cache[key], f)) cache.remove(key);
+            },
+          );
+          return f;
+        });
+        final results = await future;
         Candidate? best;
         var bestScore = 0.0;
         for (final c in results.take(5)) {
@@ -363,7 +411,7 @@ class AnchorRecognizer implements Recognizer {
         : null;
     if (pin != null || scraped != null) {
       // 指定匹配, or the TMDB id an earlier scrape left in tvshow/movie.nfo.
-      match = pin?.match ?? scraped;
+      match = pin?.match ?? scraped!.match;
       score = 1;
       kind = match!.kind == MediaKind.movie
           ? MediaKind.movie
@@ -382,8 +430,13 @@ class AnchorRecognizer implements Recognizer {
         (hint == MediaHint.mixed || hint == MediaHint.anime);
     if (askAlt) {
       alt:
-      for (final q in queries.where((q) => !_cjkRe.hasMatch(q))) {
-        final alts = await altTitles!.altTitles(q);
+      for (final q in queries.where((q) => !hasCjk(q))) {
+        final List<String> alts;
+        try {
+          alts = await altTitles!.altTitles(q);
+        } on Object {
+          continue;
+        }
         for (final a in alts.take(4)) {
           if (await tryQuery(a, scoreAs: [q, ...alts])) {
             anchor = q;
@@ -408,13 +461,15 @@ class AnchorRecognizer implements Recognizer {
     }
     anchor ??= vids.isNotEmpty ? stem(vids.first.name) : baseOf(d.dir);
 
-    final show = match != null && kind == MediaKind.episode
-        ? await metadata.show(match!.tmdbId)
-        : null;
+    final show =
+        scraped?.show ??
+        (match != null && kind == MediaKind.episode
+            ? await metadata.show(match!.tmdbId)
+            : null);
     // No zh-CN title: show() / movie() may have found a Chinese one.
     if (match case final m? when !hasHan(m.title)) {
-      Candidate? detail = show?.info;
-      if (m.kind == MediaKind.movie) {
+      Candidate? detail = show?.info ?? scraped?.movie?.info;
+      if (detail == null && m.kind == MediaKind.movie) {
         try {
           detail = (await metadata.movie(m.tmdbId)).info;
         } on Object {
@@ -435,18 +490,24 @@ class AnchorRecognizer implements Recognizer {
   /// The work named by an already-scraped folder: `tvshow.nfo` / `movie.nfo`
   /// in it, or `<video>.nfo` next to a lone video. Episode nfos are skipped
   /// (their id is the episode's). Unreadable or id-less nfos give null.
-  Future<Candidate?> _fromNfo(
+  Future<({Candidate match, ShowDetail? show, MovieDetail? movie})?> _fromNfo(
     _Draft d,
     List<ScanFile> vids,
     Set<String> nfos,
     Future<List<int>> Function(String path) read,
   ) async {
-    final paths = [
-      joinPath(d.dir, 'tvshow.nfo'),
-      joinPath(d.dir, 'movie.nfo'),
+    final dirs = [
+      d.dir,
+      if (d.originalDir != null && d.originalDir != d.dir) d.originalDir!,
+    ];
+    final paths = <String>{
+      for (final dir in dirs) ...[
+        joinPath(dir, 'tvshow.nfo'),
+        joinPath(dir, 'movie.nfo'),
+      ],
       if (vids.length == 1)
         joinPath(dirOf(vids.single.path), '${stem(vids.single.name)}.nfo'),
-    ];
+    };
     for (final path in paths.where(nfos.contains)) {
       try {
         final text = utf8.decode(await read(path), allowMalformed: true);
@@ -454,9 +515,12 @@ class AnchorRecognizer implements Recognizer {
         final m = _nfoTmdbRe.firstMatch(text);
         final id = int.tryParse(m?[1] ?? m?[2] ?? '');
         if (root == null || id == null) continue;
-        return root == 'movie'
-            ? (await metadata.movie(id)).info
-            : (await metadata.show(id)).info;
+        if (root == 'movie') {
+          final detail = await metadata.movie(id);
+          return (match: detail.info, show: null, movie: detail);
+        }
+        final detail = await metadata.show(id);
+        return (match: detail.info, show: detail, movie: null);
       } on Object {
         // A broken nfo or a TMDB hiccup: fall back to searching.
         continue;
@@ -547,12 +611,20 @@ class _Entry {
 
 class _Draft {
   final String dir;
+  final String? originalDir;
   final List<_Entry> videos;
+  final List<ScanFile> videoFiles;
   final String? folderTitle;
   final bool isRoot;
   final List<ScanFile> followers = [];
 
-  _Draft(this.dir, this.videos, this.folderTitle, this.isRoot);
+  _Draft(
+    this.dir,
+    this.videos,
+    this.folderTitle,
+    this.isRoot, {
+    this.originalDir,
+  }) : videoFiles = [for (final v in videos) v.file];
 }
 
 String _trimSlash(String p) =>

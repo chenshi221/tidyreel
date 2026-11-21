@@ -27,6 +27,9 @@ abstract interface class TaskStore {
     Map<GroupId, GroupDecision> decisions,
   );
 
+  /// Clears stored scan/decisions for [id] (used when restarting recognition).
+  Future<void> clearReview(TaskId id);
+
   /// All stored tasks, any order.
   Future<List<StoredTask>> loadAll();
 
@@ -48,6 +51,9 @@ class MemoryTaskStore implements TaskStore {
     ScanResult scan,
     Map<GroupId, GroupDecision> decisions,
   ) async => _reviews[id] = (scan, Map.of(decisions));
+
+  @override
+  Future<void> clearReview(TaskId id) async => _reviews.remove(id);
 
   @override
   Future<void> delete(TaskId id) async {

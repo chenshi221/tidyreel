@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:shelf/shelf.dart';
 import 'package:test/test.dart';
+import 'package:tidyreel_core/src/storage/local_backend.dart';
+import 'package:tidyreel_core/src/storage/webdav_backend.dart';
 import 'package:tidyreel_core/testing.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
@@ -177,6 +179,75 @@ void main() {
         expect(File('${root.path}/a.mkv').existsSync(), isTrue);
       }, testOn: '!windows');
     });
+
+    test('mapOsErrorCode distinguishes Windows and POSIX errno values', () {
+      expect(
+        LocalBackend.mapOsErrorCode(17, isWindows: true),
+        StorageErrorCode.other,
+      );
+      expect(
+        LocalBackend.mapOsErrorCode(39, isWindows: true),
+        StorageErrorCode.other,
+      );
+      expect(
+        LocalBackend.mapOsErrorCode(32, isWindows: true),
+        StorageErrorCode.busy,
+      );
+      expect(
+        LocalBackend.mapOsErrorCode(5, isWindows: true),
+        StorageErrorCode.busy,
+      );
+      expect(
+        LocalBackend.mapOsErrorCode(183, isWindows: true),
+        StorageErrorCode.alreadyExists,
+      );
+
+      expect(
+        LocalBackend.mapOsErrorCode(17, isWindows: false),
+        StorageErrorCode.alreadyExists,
+      );
+      expect(
+        LocalBackend.mapOsErrorCode(39, isWindows: false),
+        StorageErrorCode.alreadyExists,
+      );
+      expect(
+        LocalBackend.mapOsErrorCode(32, isWindows: false),
+        StorageErrorCode.other,
+      );
+      expect(
+        LocalBackend.mapOsErrorCode(13, isWindows: false),
+        StorageErrorCode.unauthorized,
+      );
+      expect(
+        LocalBackend.mapOsErrorCode(16, isWindows: false),
+        StorageErrorCode.busy,
+      );
+    });
+
+    test('broken symlink size is clamped to 0 and removing dir symlink keeps target', () async {
+      final root = Directory.systemTemp.createTempSync('tidyreel_symlink_');
+      addTearDown(() => root.deleteSync(recursive: true));
+      Directory('${root.path}/target').createSync();
+      File('${root.path}/target/keep.mkv').writeAsBytesSync([1, 2, 3]);
+      Link('${root.path}/broken.mkv').createSync('${root.path}/missing.mkv');
+      Link('${root.path}/dir_link').createSync('${root.path}/target');
+
+      final be = LocalBackend(root.path);
+      final entries = await be.list('/');
+      final broken = entries.firstWhere((e) => e.name == 'broken.mkv');
+      expect(broken.size, 0);
+
+      await be.remove('/', ['dir_link']);
+      expect(File('${root.path}/target/keep.mkv').existsSync(), isTrue);
+      await be.close();
+    }, testOn: '!windows');
+
+    test('list with trailing slash does not produce double slashes', () async {
+      final be = await makeLocal({'/sub/a.mkv': 5});
+      final entries = await be.list('/sub/');
+      expect(entries.single.path, '/sub/a.mkv');
+      await be.close();
+    });
   });
 
   group('Alist', () {
@@ -333,23 +404,167 @@ void main() {
       expect(mock.tree.nodes['/b'], 2);
     });
 
+    test('HTML 200 response from reverse proxy is StorageErrorCode.other', () async {
+      final server = await MockServer.start(
+        (_) => Response.ok(
+          '<html><body>login gateway</body></html>',
+          headers: {'content-type': 'text/html'},
+        ),
+      );
+      addTearDown(server.close);
+      final be = createBackend(
+        cfg(ConnectionType.alist, server.url),
+        const Credentials(token: 'tok'),
+      );
+      await expectLater(be.list('/'), throwsStorage(StorageErrorCode.other));
+      // Wrong-URL HTML 200 on login must NOT be misclassified as unauthorized.
+      final beLogin = createBackend(
+        cfg(ConnectionType.alist, server.url),
+        const Credentials(password: 'pw'),
+      );
+      await expectLater(beLogin.ping(), throwsStorage(StorageErrorCode.other));
+      await be.close();
+      await beLogin.close();
+    });
+
+    test('ping fails on HTTP 404 wrong URL instead of succeeding', () async {
+      final server = await MockServer.start((_) => Response.notFound('nope'));
+      addTearDown(server.close);
+      final be = createBackend(
+        cfg(ConnectionType.alist, server.url),
+        const Credentials(token: 'tok'),
+      );
+      await expectLater(be.ping(), throwsStorage(StorageErrorCode.notFound));
+      await be.close();
+    });
+
+    test('empty token logs in immediately without a wasted 401', () async {
+      final (mock, be) = await connect(
+        creds: const Credentials(password: 'pw', token: ''),
+      );
+      await be.ping();
+      expect(mock.logins, 1);
+      await be.close();
+    });
+
+    test('login HTTP 500 is not misclassified as unauthorized', () async {
+      final server = await MockServer.start(
+        (_) => Response.internalServerError(body: 'server exploded'),
+      );
+      addTearDown(server.close);
+      final be = createBackend(
+        cfg(ConnectionType.alist, server.url),
+        const Credentials(password: 'pw'),
+      );
+      await expectLater(be.ping(), throwsStorage(StorageErrorCode.other));
+      await be.close();
+    });
+
     test(
-      'HTML 200 response from reverse proxy is StorageErrorCode.other',
+      'write fails on non-JSON HTTP 200 and calls mkdirs for parent',
       () async {
-        final server = await MockServer.start(
-          (_) => Response.ok(
-            '<html><body>login gateway</body></html>',
-            headers: {'content-type': 'text/html'},
-          ),
-        );
+        var sawMkdir = false;
+        final server = await MockServer.start((Request r) async {
+          if (r.url.path == 'api/fs/get') {
+            return Response.ok(
+              '{"code":500,"message":"object not found","data":null}',
+              headers: {'content-type': 'application/json'},
+            );
+          }
+          if (r.url.path == 'api/fs/mkdir') {
+            sawMkdir = true;
+            return Response.ok(
+              '{"code":200,"message":"success","data":null}',
+              headers: {'content-type': 'application/json'},
+            );
+          }
+          if (r.url.path == 'api/fs/put') {
+            return Response.ok(
+              '<html>gateway error</html>',
+              headers: {'content-type': 'text/html'},
+            );
+          }
+          return Response.notFound('');
+        });
         addTearDown(server.close);
         final be = createBackend(
           cfg(ConnectionType.alist, server.url),
           const Credentials(token: 'tok'),
         );
-        await expectLater(be.list('/'), throwsStorage(StorageErrorCode.other));
+        await expectLater(
+          be.write('/new/dir/a.nfo', [1, 2, 3]),
+          throwsStorage(StorageErrorCode.other),
+        );
+        expect(sawMkdir, isTrue);
+        await be.close();
       },
     );
+
+    test('read resolves relative raw_url and maps HTTP status codes', () async {
+      var downloadStatus = 200;
+      final server = await MockServer.start((Request r) async {
+        if (r.url.path == 'api/fs/get') {
+          return Response.ok(
+            '{"code":200,"message":"success","data":{"name":"a.nfo","is_dir":false,"raw_url":"/d/a.nfo"}}',
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        if (r.url.path == 'd/a.nfo') {
+          return downloadStatus == 200
+              ? Response.ok([9, 8, 7])
+              : Response(downloadStatus);
+        }
+        return Response.notFound('');
+      });
+      addTearDown(server.close);
+      final be = createBackend(
+        cfg(ConnectionType.alist, server.url),
+        const Credentials(token: 'tok'),
+      );
+      expect(await be.read('/a.nfo'), [9, 8, 7]);
+      downloadStatus = 403;
+      await expectLater(
+        be.read('/a.nfo'),
+        throwsStorage(StorageErrorCode.unauthorized),
+      );
+      downloadStatus = 429;
+      await expectLater(
+        be.read('/a.nfo'),
+        throwsStorage(StorageErrorCode.rateLimited),
+      );
+      downloadStatus = 502;
+      await expectLater(
+        be.read('/a.nfo'),
+        throwsStorage(StorageErrorCode.network),
+      );
+      await be.close();
+    });
+
+    test('renameMany/move/remove skip empty ops, reject dup targets, and only fallback on 404/405', () async {
+      final (mock, be) = await connect(files: {'/d/1': 1, '/d/2': 1});
+      await be.ping();
+      mock.calls.clear();
+
+      await be.renameMany('/d', {});
+      await be.renameMany('/d', {'1': '1'});
+      await be.move('/d', '/d', []);
+      await be.remove('/d', []);
+      expect(mock.calls, isEmpty);
+
+      await expectLater(
+        be.renameMany('/d', {'1': 'same', '2': 'same'}),
+        throwsStorage(StorageErrorCode.alreadyExists),
+      );
+
+      // Code 500 "object not found" during batch_rename must NOT fall back to per-file rename.
+      mock.failNext = (500, 'object not found');
+      await expectLater(
+        be.renameMany('/d', {'1': 'a', '2': 'b'}),
+        throwsStorage(StorageErrorCode.notFound),
+      );
+      expect(mock.calls.where((c) => c == 'api/fs/rename'), isEmpty);
+      await be.close();
+    });
   });
 
   group('WebDAV', () {
@@ -490,6 +705,136 @@ void main() {
       );
       final entries = await be.list('/sub');
       expect(entries.single.name, 'Tom & Jerry.mkv');
+      await be.close();
+    });
+
+    test('omits Authorization header when credentials are empty', () async {
+      String? seenAuth;
+      final server = await MockServer.start((Request r) {
+        seenAuth = r.headers['authorization'];
+        return Response(
+          207,
+          body: '<?xml version="1.0"?><D:multistatus xmlns:D="DAV:"/>',
+          headers: {'content-type': 'application/xml'},
+        );
+      });
+      addTearDown(server.close);
+      final be = WebDAVBackend(
+        ConnectionConfig(
+          id: const ConnectionId('anon'),
+          name: 'anon',
+          type: ConnectionType.webdav,
+          endpoint: '${server.url}/dav',
+          username: '',
+        ),
+        const Credentials(),
+      );
+      await be.ping();
+      expect(seenAuth, isNull);
+      await be.close();
+    });
+
+    test('read strips Authorization on cross-host redirect', () async {
+      String? cdnAuth;
+      final cdn = await MockServer.start((Request r) {
+        cdnAuth = r.headers['authorization'];
+        return Response.ok([42, 43]);
+      });
+      addTearDown(cdn.close);
+      final dav = await MockServer.start((Request r) {
+        return Response(302, headers: {'location': '${cdn.url}/blob'});
+      });
+      addTearDown(dav.close);
+      final be = createBackend(
+        cfg(ConnectionType.webdav, '${dav.url}/dav'),
+        const Credentials(password: 'pw'),
+      );
+      expect(await be.read('/movie.nfo'), [42, 43]);
+      expect(cdnAuth, isNull);
+      await be.close();
+    });
+
+    test('write follows 307 redirect via _send', () async {
+      final seen = <(String, String)>[];
+      var uploaded = <int>[];
+      final server = await MockServer.start((Request r) async {
+        seen.add((r.method, r.requestedUri.path));
+        if (r.method == 'PROPFIND') return Response.notFound('');
+        if (r.method == 'MKCOL') return Response(405);
+        if (r.method == 'PUT' && r.requestedUri.path == '/dav/a.nfo') {
+          return Response(307, headers: {'location': '/dav/final/a.nfo'});
+        }
+        if (r.method == 'PUT' && r.requestedUri.path == '/dav/final/a.nfo') {
+          uploaded = await r.read().expand((b) => b).toList();
+          return Response(201);
+        }
+        return Response(405);
+      });
+      addTearDown(server.close);
+      final be = createBackend(
+        cfg(ConnectionType.webdav, '${server.url}/dav'),
+        const Credentials(password: 'pw'),
+      );
+      await be.write('/a.nfo', [1, 2, 3]);
+      expect(uploaded, [1, 2, 3]);
+      await be.close();
+    });
+
+    test(
+      'mkdirs uses trailing slash and skips redundant parent MKCOL',
+      () async {
+        final mkcols = <String>[];
+        final dav = MockWebDav({'/a/b/existing.txt': 1});
+        final server = await MockServer.start((Request r) {
+          if (r.method == 'MKCOL') mkcols.add(r.requestedUri.path);
+          return dav.handle(r);
+        });
+        addTearDown(server.close);
+        final be = createBackend(
+          cfg(ConnectionType.webdav, '${server.url}/dav'),
+          const Credentials(password: 'pw'),
+        );
+        await be.mkdirs('/a/b/newdir');
+        // Parent /a/b already exists, so only /a/b/newdir/ is requested with trailing slash.
+        expect(mkcols, ['/dav/a/b/newdir/']);
+        await be.close();
+      },
+    );
+
+    test('ignores 404 propstat blocks, avoids double-unxml/RangeError, and preserves # in href', () async {
+      final server = await MockServer.start((Request r) {
+        return Response(
+          207,
+          body:
+              '<?xml version="1.0"?><D:multistatus xmlns:D="DAV:">'
+              '<D:response><D:href>/dav/sub/</D:href><D:propstat><D:prop>'
+              '<D:resourcetype><D:collection/></D:resourcetype>'
+              '</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>'
+              '<D:response><D:href>/dav/sub/Show #1 &amp;lt; &#38;gt; &#999999999;.mkv</D:href>'
+              '<D:propstat><D:prop><D:resourcetype/>'
+              '<D:getcontentlength>99</D:getcontentlength>'
+              '</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat>'
+              '<D:propstat><D:prop><D:resourcetype><D:collection/></D:resourcetype>'
+              '<D:getcontentlength>9999</D:getcontentlength>'
+              '</D:prop><D:status>HTTP/1.1 404 Not Found</D:status></D:propstat>'
+              '</D:response>'
+              '<D:response><D:href>http://[::bad-uri</D:href>'
+              '<D:propstat><D:prop><D:resourcetype/></D:prop></D:propstat></D:response>'
+              '</D:multistatus>',
+          headers: {'content-type': 'application/xml; charset=utf-8'},
+        );
+      });
+      addTearDown(server.close);
+      final be = createBackend(
+        cfg(ConnectionType.webdav, '${server.url}/dav'),
+        const Credentials(password: 'pw'),
+      );
+      final entries = await be.list('/sub');
+      expect(entries, hasLength(1));
+      expect(entries.single.isDir, isFalse);
+      expect(entries.single.size, 99);
+      expect(entries.single.name, 'Show #1 &lt; &gt; &#999999999;.mkv');
+      await be.close();
     });
   });
 }

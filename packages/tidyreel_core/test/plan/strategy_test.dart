@@ -156,6 +156,25 @@ void main() {
     test('season beyond the layout adds everything known', () {
       expect(run(const [EpisodeRef(5, 2)]), const [EpisodeRef(1, 32)]);
     });
+    test('multiple overflow seasons do not collide on episode numbers', () {
+      expect(
+        run(
+          const [
+            EpisodeRef(3, 1),
+            EpisodeRef(3, 2),
+            EpisodeRef(4, 1),
+            EpisodeRef(4, 2),
+          ],
+          c: const [10, 12],
+        ),
+        const [
+          EpisodeRef(1, 23),
+          EpisodeRef(1, 24),
+          EpisodeRef(1, 25),
+          EpisodeRef(1, 26),
+        ],
+      );
+    });
     test('offset first', () {
       expect(run(const [EpisodeRef(2, 1)], offset: 1), const [
         EpisodeRef(1, 12),

@@ -58,8 +58,13 @@ class ThrottledBackend implements StorageBackend {
   }
 
   @override
-  Future<List<RemoteEntry>> list(String dir, {bool refresh = false}) =>
-      _call(() => inner.list(dir, refresh: refresh));
+  Future<List<RemoteEntry>> list(String dir, {bool refresh = false}) {
+    final b = inner;
+    if (!refresh && b is CachedBackend && b.isCached(dir)) {
+      return b.list(dir, refresh: false);
+    }
+    return _call(() => inner.list(dir, refresh: refresh));
+  }
 
   @override
   Future<void> mkdirs(String dir) => _call(() => inner.mkdirs(dir));
@@ -82,8 +87,11 @@ class ThrottledBackend implements StorageBackend {
 
   /// The app hands us `CachedBackend(AlistBackend)`; calls still go through
   /// [inner] so the cache drops what we touch.
-  static StorageBackend _unwrapped(StorageBackend b) =>
-      b is CachedBackend ? _unwrapped(b.inner) : b;
+  static StorageBackend _unwrapped(StorageBackend b) => switch (b) {
+    CachedBackend(:final inner) => _unwrapped(inner),
+    ThrottledBackend(:final inner) => _unwrapped(inner),
+    _ => b,
+  };
 
   @override
   Future<void> move(String srcDir, String dstDir, List<String> names) =>
@@ -105,4 +113,7 @@ class ThrottledBackend implements StorageBackend {
 
   @override
   Future<void> ping() => _call(inner.ping);
+
+  @override
+  Future<void> close() => inner.close();
 }

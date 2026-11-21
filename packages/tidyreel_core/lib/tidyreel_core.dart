@@ -13,7 +13,9 @@ export 'src/model/task.dart';
 export 'src/model/title_rules.dart';
 
 export 'src/parser/parser.dart';
+export 'src/parser/rules.dart' show subtitleExtensions, videoExtensions;
 export 'src/tmdb/metadata_provider.dart';
+export 'src/tmdb/tmdb_client.dart' show TmdbException;
 export 'src/tmdb/anilist.dart';
 export 'src/storage/storage_backend.dart';
 export 'src/storage/cached_backend.dart';
@@ -25,4 +27,5 @@ export 'src/plan/template.dart';
 export 'src/plan/text.dart' show relaxedQueries, stableHash;
 export 'src/plan/planner.dart';
 export 'src/exec/executor.dart';
+export 'src/exec/throttled_backend.dart' show ThrottledBackend;
 export 'src/task/task_manager.dart';

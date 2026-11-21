@@ -36,6 +36,9 @@ abstract interface class StorageBackend {
 
   /// Cheap connectivity / auth check for the 已连接 badge.
   Future<void> ping();
+
+  /// Releases underlying HTTP clients or native connection pools.
+  Future<void> close();
 }
 
 /// Thrown by backends; [code] lets the executor decide whether to retry.

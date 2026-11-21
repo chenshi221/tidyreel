@@ -33,7 +33,7 @@ class RuleBasedParser implements FilenameParser {
 
   @override
   ParsedName parse(String fileName, {List<String> parentDirs = const []}) {
-    final a = analyze(fileName.split('/').last, file: true);
+    final a = analyze(fileName.split('/').last.split('\\').last, file: true);
 
     // Folder info: nearest folder with a title wins; season/special/extra folders
     // contribute flags.
@@ -113,6 +113,8 @@ class RuleBasedParser implements FilenameParser {
       episodes = const [];
       absolute = null;
     }
+    final effectiveYear =
+        year ?? (kind == MediaKind.movie ? a.airDate?.year : null);
 
     final hasTitle = title.isNotEmpty;
     var conf = switch (kind) {
@@ -121,7 +123,7 @@ class RuleBasedParser implements FilenameParser {
       MediaKind.movie =>
         a.movieKw
             ? (hasTitle ? 0.75 : 0.4)
-            : year != null && hasTitle
+            : effectiveYear != null && hasTitle
             ? 0.92
             : hasTitle
             ? 0.55
@@ -143,7 +145,7 @@ class RuleBasedParser implements FilenameParser {
 
     return ParsedName(
       title: hasTitle ? title : null,
-      year: year,
+      year: effectiveYear,
       season: season,
       episodes: episodes,
       absolute: absolute,

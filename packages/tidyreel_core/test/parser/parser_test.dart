@@ -108,12 +108,110 @@ void main() {
       '一百零五': 105,
       '一百二十': 120,
       '两': 2,
+      '兩': 2,
+      '兩百': 200,
       '九': 9,
       '二〇': 20,
       '05': 5,
       '一千零一': 1001,
     };
     cases.forEach((k, v) => expect(chineseToInt(k), v, reason: k));
-    expect(chineseToInt('abc'), isNull);
+    for (final invalid in ['abc', '零十', '零百', '一百零十', '一二十', '二十三四', '十十']) {
+      expect(chineseToInt(invalid), isNull, reason: invalid);
+    }
+  });
+
+  test(
+    'classifyFile does not falsely mark common English dot-titles as junk',
+    () {
+      for (final video in [
+        'All.In.mkv',
+        'About.Us.mkv',
+        'Love.Me.mkv',
+        'Apple.TV.mkv',
+        'Fight.Club.mkv',
+        'On.Top.mkv',
+        'Have.Fun.mkv',
+      ]) {
+        expect(_parser.classify(video), FileRole.video, reason: video);
+      }
+      expect(_parser.classify('Stand.By.Me.srt'), FileRole.subtitle);
+      for (final junk in [
+        'www.example.com.mp4',
+        'https://example.top.mp4',
+        'dytt8.com.mp4',
+        '最新地址.txt',
+      ]) {
+        expect(_parser.classify(junk), FileRole.junk, reason: junk);
+      }
+    },
+  );
+
+  test(
+    'parses lowercase multi-episode ranges, uppercase 1X02, and traditional 兩',
+    () {
+      final range = _parser.parse('Show.s01e01-e05.mkv');
+      expect(range.season, 1);
+      expect(range.episodes, [1, 2, 3, 4, 5]);
+
+      final upperX = _parser.parse('Show.1X02.mkv');
+      expect(upperX.season, 1);
+      expect(upperX.episodes, [2]);
+
+      final trad = _parser.parse('慶餘年 第兩季 第兩集.mkv');
+      expect(trad.season, 2);
+      expect(trad.episodes, [2]);
+    },
+  );
+
+  test(
+    'does not misclassify movie titles like The Menu / The Interview as extra',
+    () {
+      final menu = _parser.parse('The Menu (2022).mkv');
+      expect(menu.kind, MediaKind.movie);
+      expect(menu.title, 'The Menu');
+      expect(menu.year, 2022);
+
+      final interview = _parser.parse('The Interview (2014).mkv');
+      expect(interview.kind, MediaKind.movie);
+      expect(interview.title, 'The Interview');
+      expect(interview.year, 2014);
+    },
+  );
+
+  test('validates calendar dates and keeps year on dated movie files', () {
+    final invalid = _parser.parse('Show.20240231.mkv');
+    expect(invalid.airDate, isNull);
+
+    final nonLeap = _parser.parse('Show.20230229.mkv');
+    expect(nonLeap.airDate, isNull);
+
+    final leap = _parser.parse('向往的生活.20240229.mp4');
+    expect(leap.airDate, DateTime.utc(2024, 2, 29));
+
+    final datedMovie = _parser.parse('剧场版 柯南 2024-04-12.mkv');
+    expect(datedMovie.kind, MediaKind.movie);
+    expect(datedMovie.year, 2024);
+  });
+
+  test('handles DTS HD/X after normalization, subtitle trailing -LANG, and backslash paths', () {
+    final dtsHd = _parser.parse('Movie.2020.1080p.BluRay.DTS.HD.MA.5.1.mkv');
+    expect(dtsHd.extraInfo, '1080p.DTS-HD');
+
+    final dtsX = _parser.parse('Movie.2020.2160p.BluRay.DTS.X.mkv');
+    expect(dtsX.extraInfo, '2160p.DTS-X');
+
+    final subChs = _parser.parse('Show.S01E01.1080p.WEB-DL-CHS.srt');
+    expect(subChs.lang, 'CHS');
+    expect(subChs.group, isNull);
+
+    final subEng = _parser.parse('Movie.2020.1080p.BluRay-ENG.ass');
+    expect(subEng.lang, 'ENG');
+    expect(subEng.group, isNull);
+
+    final winPath = _parser.parse(r'C:\Movies\Inception.2010.1080p.mkv');
+    expect(winPath.title, 'Inception');
+    expect(winPath.year, 2010);
+    expect(winPath.kind, MediaKind.movie);
   });
 }

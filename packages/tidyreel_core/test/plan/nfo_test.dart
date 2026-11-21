@@ -56,4 +56,35 @@ void main() {
     });
     expect(g.match, isNull);
   });
+
+  test(
+    'promoted root still reads tvshow.nfo from inner dir and fetches show once',
+    () async {
+      final meta = _CountingNoSearch();
+      final files = {
+        '/库/剧集/内层目录/S01E01.mkv': '',
+        '/库/剧集/内层目录/tvshow.nfo':
+            '<tvshow><tmdbid>${Demo.dorohedoro.tmdbId}</tmdbid></tvshow>',
+      };
+      final r = await AnchorRecognizer(const RuleBasedParser(), meta).recognize(
+        const ConnectionId('c'),
+        ['/库/剧集'],
+        entriesOf(files.keys),
+        read: (path) async => utf8.encode(files[path] ?? ''),
+      );
+      expect(r.groups.single.rootDir, '/库/剧集');
+      expect(r.groups.single.match?.tmdbId, Demo.dorohedoro.tmdbId);
+      expect(meta.showCalls, 1);
+    },
+  );
+}
+
+class _CountingNoSearch extends _NoSearch {
+  var showCalls = 0;
+
+  @override
+  Future<ShowDetail> show(int tmdbId) {
+    showCalls++;
+    return super.show(tmdbId);
+  }
 }

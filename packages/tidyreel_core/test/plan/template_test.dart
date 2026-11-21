@@ -205,6 +205,44 @@ void main() {
       const o2 = NamingOptions(order: [NameField.episode, NameField.title]);
       expect(tv(o2), 'S02E03.老友记.Friends');
     });
+    test('englishFirst bilingual keeps Chinese title when NameField.title is not first and en_title is null', () {
+      const o = NamingOptions(
+        titleLanguage: TitleLanguage.englishFirst,
+        bilingual: true,
+        order: [NameField.year, NameField.title, NameField.episode],
+      );
+      expect(
+        tv(o, {'title': '老友记', 'year': 1994, 'season': 2, 'episode': 3}),
+        '1994.老友记.S02E03',
+      );
+      expect(
+        movie(
+          const NamingOptions(
+            titleLanguage: TitleLanguage.englishFirst,
+            bilingual: true,
+            order: [NameField.year, NameField.title],
+          ),
+          {'title': '盗梦空间', 'year': 2010},
+        ),
+        '2010.盗梦空间',
+      );
+    });
+    test('preserves ellipsis and double hyphens inside substituted titles', () {
+      expect(
+        renderTemplate('{title}.{year}', {
+          'title': 'Once Upon a Time... in Hollywood',
+          'year': 2019,
+        }),
+        'Once Upon a Time... in Hollywood.2019',
+      );
+      expect(
+        renderTemplate('{title} - {episode_title}', {
+          'title': 'A -- B',
+          'episode_title': 'To Be Continued...',
+        }),
+        'A -- B - To Be Continued...',
+      );
+    });
     test('customTemplate wins', () {
       const o = NamingOptions(
         customTemplate: '{en_title} - S{season:02}E{episode:02}',
