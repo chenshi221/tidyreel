@@ -103,6 +103,20 @@ class PlanOptions {
   /// 刮削模式: also write .nfo files and TMDB artwork next to the media.
   final bool scrape;
 
+  /// 仅刮削补全: do not rename or move videos/folders, only write missing
+  /// .nfo files and TMDB artwork beside existing files.
+  final bool scrapeOnly;
+
+  /// Allow [OpKind.write] ops for `.nfo` files to replace existing `.nfo` files.
+  final bool overwriteNfo;
+
+  /// Enable on-demand container header probing (MKV/MP4) when filenames lack
+  /// resolution/HDR/audio info or have low confidence.
+  final bool probeMedia;
+
+  /// Explicit per-file junk delete overrides from UnassignedPane (path → delete?).
+  final Map<String, bool> unassignedDeletes;
+
   const PlanOptions({
     this.mode = OrganizeMode.inPlace,
     this.libraryRoot,
@@ -110,6 +124,10 @@ class PlanOptions {
     this.deleteJunk = false,
     this.confidenceThreshold = 0.7,
     this.scrape = false,
+    this.scrapeOnly = false,
+    this.overwriteNfo = false,
+    this.probeMedia = false,
+    this.unassignedDeletes = const {},
   });
 
   @override
@@ -120,7 +138,11 @@ class PlanOptions {
       other.naming == naming &&
       other.deleteJunk == deleteJunk &&
       other.confidenceThreshold == confidenceThreshold &&
-      other.scrape == scrape;
+      other.scrape == scrape &&
+      other.scrapeOnly == scrapeOnly &&
+      other.overwriteNfo == overwriteNfo &&
+      other.probeMedia == probeMedia &&
+      _mapEq(other.unassignedDeletes, unassignedDeletes);
 
   @override
   int get hashCode => Object.hash(
@@ -130,7 +152,21 @@ class PlanOptions {
     deleteJunk,
     confidenceThreshold,
     scrape,
+    scrapeOnly,
+    overwriteNfo,
+    probeMedia,
+    Object.hashAllUnordered(
+      unassignedDeletes.entries.map((e) => Object.hash(e.key, e.value)),
+    ),
   );
+}
+
+bool _mapEq<K, V>(Map<K, V> a, Map<K, V> b) {
+  if (a.length != b.length) return false;
+  for (final e in a.entries) {
+    if (!b.containsKey(e.key) || b[e.key] != e.value) return false;
+  }
+  return true;
 }
 
 /// Execution order: all [files] ops, then [folders], then [cleanup].
@@ -168,6 +204,10 @@ class RenameOp {
   /// Shown in yellow, e.g. "超出 TMDB 总集数".
   final String? warning;
 
+  /// For [OpKind.write]: when true (e.g. `overwriteNfo`), replaces an existing
+  /// file safely instead of failing with alreadyExists.
+  final bool overwrite;
+
   const RenameOp({
     required this.id,
     required this.kind,
@@ -177,6 +217,7 @@ class RenameOp {
     this.group,
     this.selected = true,
     this.warning,
+    this.overwrite = false,
   });
 }
 

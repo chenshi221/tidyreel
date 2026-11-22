@@ -18,6 +18,7 @@ class FakeRecognizer implements Recognizer {
     List<String> roots,
     List<RemoteEntry> files, {
     Future<List<int>> Function(String path)? read,
+    StorageBackend? backend,
   }) async {
     calls++;
     await gate?.future;

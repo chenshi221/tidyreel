@@ -7,6 +7,7 @@ import '../model/metadata.dart';
 import '../model/scan.dart';
 import '../model/title_rules.dart';
 import '../parser/parser.dart';
+import '../storage/storage_backend.dart';
 import '../tmdb/anilist.dart';
 import '../tmdb/metadata_provider.dart';
 import 'follow.dart';
@@ -17,12 +18,14 @@ import 'text.dart';
 abstract interface class Recognizer {
   /// [files] is the recursive listing of [roots] (files only). [read]
   /// fetches a file's content (already-scraped .nfo); without it nothing is
-  /// read.
+  /// read. [backend] is optional and enables on-demand container header probing
+  /// via [MediaProbe] when configured.
   Future<ScanResult> recognize(
     ConnectionId connection,
     List<String> roots,
     List<RemoteEntry> files, {
     Future<List<int>> Function(String path)? read,
+    StorageBackend? backend,
   });
 }
 
@@ -72,6 +75,7 @@ class AnchorRecognizer implements Recognizer {
     List<String> roots,
     List<RemoteEntry> files, {
     Future<List<int>> Function(String path)? read,
+    StorageBackend? backend,
   }) async {
     final rootDirs = [for (final r in roots) _trimSlash(r)];
     final nfos = {

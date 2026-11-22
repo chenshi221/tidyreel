@@ -110,3 +110,8 @@ String? langFromRemainder(String remainder) {
   }
   return null;
 }
+
+/// Extracts normalized subtitle trait flags (`forced`, `default`, `sdh`,
+/// `bilingual`) from [remainder] or a subtitle filename stem.
+/// Implemented in full by Worker 2 (`core-parser-text`).
+List<String> subFlagsFromRemainder(String remainder) => const [];

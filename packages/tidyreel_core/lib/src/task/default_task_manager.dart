@@ -176,6 +176,7 @@ class DefaultTaskManager implements TaskManager {
     List<String> paths,
     OrganizeMode mode, {
     bool scrape = false,
+    bool scrapeOnly = false,
   }) async {
     await _ready;
     final cleanPaths = [
@@ -191,7 +192,8 @@ class DefaultTaskManager implements TaskManager {
         connection: connection,
         paths: List.unmodifiable(cleanPaths),
         mode: mode,
-        scrape: scrape,
+        scrape: scrape || scrapeOnly,
+        scrapeOnly: scrapeOnly,
         stage: TaskStage.importing,
         message: '正在导入文件',
         createdAt: DateTime.now(),
@@ -294,6 +296,37 @@ class DefaultTaskManager implements TaskManager {
       t.pendingEdits--;
     }
   }
+
+  @override
+  Future<TaskReview> assignUnassigned(
+    TaskId id,
+    String filePath,
+    GroupId targetGroup,
+  ) => review(id);
+
+  @override
+  Future<TaskReview> setUnassignedDelete(
+    TaskId id,
+    String filePath,
+    bool delete,
+  ) => review(id);
+
+  @override
+  Future<TaskReview> mergeGroups(TaskId id, GroupId keep, GroupId absorb) =>
+      review(id);
+
+  @override
+  Future<TaskReview> splitGroup(
+    TaskId id,
+    GroupId group,
+    Set<String> filePaths,
+  ) => review(id);
+
+  @override
+  Future<List<String>> findEmptyDirs(TaskId id) async => const [];
+
+  @override
+  Future<int> removeEmptyDirs(TaskId id, List<String> dirs) async => 0;
 
   @override
   Future<void> run(TaskId id, {bool onlyConfident = false}) async {

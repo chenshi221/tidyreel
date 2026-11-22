@@ -382,10 +382,23 @@ final titleRulesProvider = NotifierProvider<TitleRulesNotifier, TitleRules>(
 // ---- helpers -------------------------------------------------------------
 
 /// Forwards to whatever [metadataProvider] currently is (key / proxy edits).
-class _LiveMetadata implements MetadataProvider {
+class _LiveMetadata implements MetadataProvider, ExternalIdLookup {
   final MetadataProvider Function() _current;
 
   _LiveMetadata(this._current);
+
+  @override
+  Future<Candidate?> findByExternalId(
+    String source,
+    String id, {
+    MediaKind? kind,
+  }) async {
+    final cur = _current();
+    if (cur is ExternalIdLookup) {
+      return (cur as ExternalIdLookup).findByExternalId(source, id, kind: kind);
+    }
+    return null;
+  }
 
   @override
   Future<List<Candidate>> search(String query, {MediaKind? kind, int? year}) =>

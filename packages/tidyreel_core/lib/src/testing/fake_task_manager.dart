@@ -42,6 +42,7 @@ class FakeTaskManager implements TaskManager {
       paths: t.paths,
       mode: t.mode,
       scrape: t.scrape,
+      scrapeOnly: t.scrapeOnly,
       stage: stage,
       message: message,
       importedCount: imported ?? t.importedCount,
@@ -62,6 +63,7 @@ class FakeTaskManager implements TaskManager {
     List<String> paths,
     OrganizeMode mode, {
     bool scrape = false,
+    bool scrapeOnly = false,
   }) async {
     final id = TaskId(
       'T${++_seq}-${DateTime.now().microsecondsSinceEpoch.toRadixString(16).substring(5, 11)}',
@@ -75,7 +77,8 @@ class FakeTaskManager implements TaskManager {
         connection: connection,
         paths: paths,
         mode: mode,
-        scrape: scrape,
+        scrape: scrape || scrapeOnly,
+        scrapeOnly: scrapeOnly,
         stage: TaskStage.importing,
         message: '正在导入文件',
         videoCount: files.where((f) => f.role == FileRole.video).length,
@@ -148,6 +151,40 @@ class FakeTaskManager implements TaskManager {
     );
     return _reviews[id]!;
   }
+
+  @override
+  Future<TaskReview> assignUnassigned(
+    TaskId id,
+    String filePath,
+    GroupId targetGroup,
+  ) async => _reviews[id]!;
+
+  @override
+  Future<TaskReview> setUnassignedDelete(
+    TaskId id,
+    String filePath,
+    bool delete,
+  ) async => _reviews[id]!;
+
+  @override
+  Future<TaskReview> mergeGroups(
+    TaskId id,
+    GroupId keep,
+    GroupId absorb,
+  ) async => _reviews[id]!;
+
+  @override
+  Future<TaskReview> splitGroup(
+    TaskId id,
+    GroupId group,
+    Set<String> filePaths,
+  ) async => _reviews[id]!;
+
+  @override
+  Future<List<String>> findEmptyDirs(TaskId id) async => const [];
+
+  @override
+  Future<int> removeEmptyDirs(TaskId id, List<String> dirs) async => 0;
 
   @override
   Future<void> run(TaskId id, {bool onlyConfident = false}) async {

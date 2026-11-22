@@ -1,5 +1,24 @@
 import 'media.dart';
 
+/// Cast member credit for enriched NFO scraping.
+class PersonCredit {
+  final String name;
+  final String? role;
+  final String? profilePath;
+
+  const PersonCredit({required this.name, this.role, this.profilePath});
+
+  @override
+  bool operator ==(Object other) =>
+      other is PersonCredit &&
+      other.name == name &&
+      other.role == role &&
+      other.profilePath == profilePath;
+
+  @override
+  int get hashCode => Object.hash(name, role, profilePath);
+}
+
 /// A TMDB search hit. [kind] is [MediaKind.movie] or [MediaKind.episode] (= TV show).
 class Candidate {
   final int tmdbId;
@@ -18,6 +37,12 @@ class Candidate {
   final String? originCountry;
   final double? voteAverage;
 
+  /// Number of TMDB votes; helps break ties between obscure and popular homonyms.
+  final int? voteCount;
+
+  /// TMDB popularity score; secondary tie-breaker.
+  final double? popularity;
+
   /// zh-CN synopsis.
   final String? overview;
 
@@ -31,6 +56,34 @@ class Candidate {
   /// search hits whose own titles don't explain the match.
   final List<String> aliases;
 
+  /// External IDs populated by detail calls.
+  final String? imdbId;
+  final int? tvdbId;
+
+  /// Movie collection (belongs_to_collection) info.
+  final String? collectionName;
+  final int? collectionId;
+
+  /// Extra artwork paths from TMDB `/images`.
+  final String? clearLogoPath;
+  final String? landscapePath;
+
+  /// Content rating / MPAA certification (e.g. PG-13, TV-14).
+  final String? certification;
+
+  /// Production studios / networks.
+  final List<String> studios;
+
+  /// Top billed cast members.
+  final List<PersonCredit> actors;
+
+  /// Directors and writers.
+  final List<String> directors;
+  final List<String> writers;
+
+  /// TMDB keywords / tags.
+  final List<String> tags;
+
   const Candidate({
     required this.tmdbId,
     required this.kind,
@@ -41,10 +94,24 @@ class Candidate {
     this.posterPath,
     this.originCountry,
     this.voteAverage,
+    this.voteCount,
+    this.popularity,
     this.overview,
     this.backdropPath,
     this.genres = const [],
     this.aliases = const [],
+    this.imdbId,
+    this.tvdbId,
+    this.collectionName,
+    this.collectionId,
+    this.clearLogoPath,
+    this.landscapePath,
+    this.certification,
+    this.studios = const [],
+    this.actors = const [],
+    this.directors = const [],
+    this.writers = const [],
+    this.tags = const [],
   });
 }
 

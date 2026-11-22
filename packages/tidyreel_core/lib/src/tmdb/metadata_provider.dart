@@ -20,6 +20,16 @@ abstract interface class MetadataProvider {
   Future<MovieDetail> movie(int tmdbId);
 }
 
+/// Optional direct lookup by external catalog ID (e.g. `{tmdb-27205}`,
+/// `{imdb-tt1375666}`, `{tvdb-81189}`).
+abstract interface class ExternalIdLookup {
+  Future<Candidate?> findByExternalId(
+    String source,
+    String id, {
+    MediaKind? kind,
+  });
+}
+
 class TmdbConfig {
   /// v3 api key or v4 read token (detected by length / "eyJ" prefix).
   final String apiKey;
