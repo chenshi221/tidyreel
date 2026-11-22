@@ -1,8 +1,10 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tidyreel/data/providers.dart';
 import 'package:tidyreel/features/naming/naming_page.dart';
+import 'package:tidyreel/features/naming/naming_preview.dart';
 import 'package:tidyreel/features/settings/settings_page.dart';
 import 'package:tidyreel/data/settings.dart';
 import 'package:tidyreel/ui/theme.dart';
@@ -244,10 +246,17 @@ void main() {
     await tap(find.text('移动到媒体库'));
     await tap(find.byKey(const ValueKey('auto-junk')));
     await tap(find.byKey(const ValueKey('scan-preview')));
+    await tap(find.byKey(const ValueKey('overwrite-nfo')));
     await tap(find.text('8'));
-    expect(find.byKey(const ValueKey('restart-concurrency')), findsOneWidget);
+    expect(find.byKey(const ValueKey('restart-concurrency')), findsNothing);
+    expect(find.textContaining('修改后对新任务立即生效'), findsOneWidget);
+    await tap(find.text('10'));
+    expect(find.byKey(const ValueKey('restart-rps')), findsNothing);
+    expect(find.textContaining('修改后立即生效'), findsOneWidget);
     await tap(find.text('繁体'));
     await tap(find.text('严格'));
+    await tap(find.byKey(const ValueKey('probe-media')));
+    await tap(find.byKey(const ValueKey('enable-bangumi')));
     await tap(find.text('深色'));
     await tap(find.byKey(const ValueKey('accent-indigo')));
     await tap(find.byKey(const ValueKey('notify-finished')));
@@ -257,9 +266,13 @@ void main() {
     expect(s.defaultMode, OrganizeMode.moveToLibrary);
     expect(s.autoDeleteJunk, isTrue);
     expect(s.scanPreview, isFalse);
+    expect(s.overwriteNfo, isTrue);
     expect(s.concurrency, 8);
+    expect(s.requestsPerSecond, 10);
     expect(s.tmdbLanguage, 'zh-TW');
     expect(s.confidenceThreshold, 0.85);
+    expect(s.probeMedia, isFalse);
+    expect(s.enableBangumi, isFalse);
     expect(s.accent, AccentChoice.indigo);
     expect(s.notifyFinished, isFalse);
     expect(c.read(themeModeProvider), ThemeMode.dark);
@@ -298,4 +311,187 @@ void main() {
       expect(check.color, Colors.black);
     },
   );
+
+  testWidgets('naming preview supports scenario presets and custom tester', (
+    tester,
+  ) async {
+    await pumpPage(tester, const NamingPage());
+
+    // Switch movie scenarios.
+    await tester.tap(find.byKey(const ValueKey('sample-uhd-dv')));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<SelectableText>(find.byKey(const ValueKey('example-name')))
+          .data,
+      contains('沙丘2'),
+    );
+
+    await tester.tap(find.byKey(const ValueKey('sample-edition-part')));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<SelectableText>(find.byKey(const ValueKey('example-name')))
+          .data,
+      contains('-cd1.mkv'),
+    );
+
+    // Switch to TV scenarios.
+    await tester.tap(find.text('剧集'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('sample-anime')));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<SelectableText>(find.byKey(const ValueKey('example-name')))
+          .data,
+      contains('葬送的芙莉莲'),
+    );
+
+    // Custom filename live tester: anime episode.
+    final customField = find.byKey(const ValueKey('custom-filename-tester'));
+    await tester.enterText(
+      customField,
+      '[VCB-Studio] Frieren [01][Ma10p_1080p].mkv',
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('custom-parsed-fields')), findsOneWidget);
+    expect(
+      tester
+          .widget<SelectableText>(
+            find.byKey(const ValueKey('custom-rendered-name')),
+          )
+          .data,
+      contains('Frieren'),
+    );
+    expect(
+      tester
+          .widget<SelectableText>(
+            find.byKey(const ValueKey('custom-rendered-name')),
+          )
+          .data,
+      contains('S01E01'),
+    );
+
+    // Custom filename live tester: movie with edition + external ID.
+    await tester.enterText(
+      customField,
+      "盗梦空间.2010.Director's.Cut.2160p.DV.{tmdb-27205}.mkv",
+    );
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<SelectableText>(
+            find.byKey(const ValueKey('custom-rendered-name')),
+          )
+          .data,
+      '盗梦空间.2010.mkv',
+    );
+  });
+
+  testWidgets('naming JSON export/import round-trip and validation', (
+    tester,
+  ) async {
+    String? copiedText;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copiedText = (call.arguments as Map)['text'] as String?;
+        }
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+
+    final (_, c) = await pumpPage(tester, const NamingPage());
+    // Customize profile & title rules, then export to clipboard.
+    final customProfile = NamingProfile.forPlayer(TargetPlayer.plex).copyWith(
+      movie: NamingProfile.forPlayer(TargetPlayer.plex).movie
+          .copyWith(rewrites: const [NameRewrite('foo', 'bar')]),
+    );
+    const customRules = TitleRules(
+      cleanups: [NameRewrite(r'^【.*?】', '')],
+      pins: [
+        TitlePin(
+          '异兽魔都',
+          Candidate(
+            tmdbId: 95224,
+            kind: MediaKind.episode,
+            title: '异兽魔都',
+            year: 2020,
+          ),
+        ),
+      ],
+    );
+    c.read(namingProfileProvider.notifier).set(customProfile);
+    c.read(titleRulesProvider.notifier).set(customRules);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('naming-export-import')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('naming-export-clipboard')));
+    await tester.pumpAndSettle();
+    expect(copiedText, isNotNull);
+    expect(copiedText, contains('"version": 1'));
+
+    // Reset providers back to defaults before importing back.
+    c.read(namingProfileProvider.notifier).set(NamingProfile.vidhub);
+    c.read(titleRulesProvider.notifier).set(const TitleRules());
+    await tester.pumpAndSettle();
+
+    // Open Import dialog and test invalid JSON first.
+    await tester.tap(find.byKey(const ValueKey('naming-export-import')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('naming-import-json')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('naming-import-dialog')), findsOneWidget);
+
+    await tester.enterText(
+      find.byKey(const ValueKey('naming-import-input')),
+      '{bad json',
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('naming-import-error')), findsOneWidget);
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.byKey(const ValueKey('naming-import-confirm')),
+          )
+          .onPressed,
+      isNull,
+    );
+
+    // Unsupported schema version is rejected cleanly.
+    await tester.enterText(
+      find.byKey(const ValueKey('naming-import-input')),
+      '{"version": 99, "naming": {}}',
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('不支持的配置版本'), findsOneWidget);
+
+    // Paste exported JSON and confirm round-trip.
+    await tester.enterText(
+      find.byKey(const ValueKey('naming-import-input')),
+      copiedText!,
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('naming-import-preview')), findsOneWidget);
+    expect(find.textContaining('播放器预设：Plex'), findsOneWidget);
+    expect(find.textContaining('替换规则：共 1 条'), findsOneWidget);
+    expect(find.textContaining('清洗 1 条 · 指定匹配 1 条'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('naming-import-confirm')));
+    await tester.pumpAndSettle();
+    expect(c.read(namingProfileProvider), customProfile);
+    expect(c.read(titleRulesProvider).cleanups, hasLength(1));
+    expect(c.read(titleRulesProvider).pins, hasLength(1));
+    expect(c.read(titleRulesProvider).pins.single.keyword, '异兽魔都');
+    expect(decodeNamingBundle(copiedText!).error, isNull);
+  });
 }

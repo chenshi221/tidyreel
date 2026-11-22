@@ -8,7 +8,12 @@ import '../../ui/widgets.dart';
 import '../../data/smb_backend.dart' show SmbTarget, parseSmbEndpoint;
 import 'folder_picker.dart';
 import 'sources_providers.dart'
-    show ConnCheck, ConnStatus, FolderLister, FolderSessionOpener;
+    show
+        ConnCheck,
+        ConnStatus,
+        ConnectionTester,
+        FolderLister,
+        FolderSessionOpener;
 
 String connectionTypeLabel(ConnectionType t) => switch (t) {
   ConnectionType.alist => 'Alist',
@@ -45,8 +50,13 @@ enum DavTemplate {
 class ConnectionDraft {
   final ConnectionConfig config;
   final String password;
+  final Map<String, String> dirPasswords;
 
-  const ConnectionDraft(this.config, this.password);
+  const ConnectionDraft(
+    this.config,
+    this.password, {
+    this.dirPasswords = const {},
+  });
 }
 
 /// Server address split into the parts users actually know.
@@ -101,8 +111,9 @@ Future<ConnectionDraft?> showConnectionDialog(
   BuildContext context, {
   ConnectionConfig? existing,
   String? initialPassword,
+  Map<String, String>? initialDirPasswords,
   bool copy = false,
-  Future<ConnCheck> Function(ConnectionConfig, String password)? tester,
+  ConnectionTester? tester,
   FolderLister? lister,
   FolderSessionOpener? openLister,
 }) => showDialog<ConnectionDraft>(
@@ -110,6 +121,7 @@ Future<ConnectionDraft?> showConnectionDialog(
   builder: (_) => _ConnectionDialog(
     existing: existing,
     initialPassword: initialPassword,
+    initialDirPasswords: initialDirPasswords,
     copy: copy,
     tester: tester,
     lister: lister,
@@ -120,14 +132,16 @@ Future<ConnectionDraft?> showConnectionDialog(
 class _ConnectionDialog extends StatefulWidget {
   final ConnectionConfig? existing;
   final String? initialPassword;
+  final Map<String, String>? initialDirPasswords;
   final bool copy;
-  final Future<ConnCheck> Function(ConnectionConfig, String)? tester;
+  final ConnectionTester? tester;
   final FolderLister? lister;
   final FolderSessionOpener? openLister;
 
   const _ConnectionDialog({
     this.existing,
     this.initialPassword,
+    this.initialDirPasswords,
     this.copy = false,
     this.tester,
     this.lister,
@@ -136,6 +150,21 @@ class _ConnectionDialog extends StatefulWidget {
 
   @override
   State<_ConnectionDialog> createState() => _ConnectionDialogState();
+}
+
+class _DirPasswordEntry {
+  final TextEditingController path;
+  final TextEditingController password;
+  bool obscure = true;
+
+  _DirPasswordEntry({String path = '', String password = ''})
+    : path = TextEditingController(text: path),
+      password = TextEditingController(text: password);
+
+  void dispose() {
+    path.dispose();
+    password.dispose();
+  }
 }
 
 const _defaultPort = '5244';
@@ -183,6 +212,17 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
   late final _start = TextEditingController(
     text: widget.existing?.startDir == '/' ? '' : widget.existing?.startDir,
   );
+  late final List<_DirPasswordEntry> _dirPasswords = () {
+    final initial = widget.initialDirPasswords;
+    if (initial == null || initial.isEmpty) return <_DirPasswordEntry>[];
+    final entries = initial.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+    return [
+      for (final e in entries)
+        _DirPasswordEntry(path: e.key, password: e.value),
+    ];
+  }();
+  late var _dirPasswordsExpanded = _dirPasswords.isNotEmpty;
   var _showErrors = false;
   var _showPassword = false;
   var _testing = false;
@@ -212,6 +252,10 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
     for (final c in [_host, _port, _path, _folder, _user, _password, _share]) {
       c.addListener(_onEdit);
     }
+    for (final e in _dirPasswords) {
+      e.path.addListener(_onEdit);
+      e.password.addListener(_onEdit);
+    }
   }
 
   @override
@@ -229,6 +273,9 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
       _share,
     ]) {
       c.dispose();
+    }
+    for (final e in _dirPasswords) {
+      e.dispose();
     }
     super.dispose();
   }
@@ -374,6 +421,38 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
     );
   }
 
+  Map<String, String> _dirPasswordsMap() {
+    if (_type != ConnectionType.alist) return const {};
+    return {
+      for (final e in _dirPasswords)
+        if (e.path.text.trim().isNotEmpty && e.password.text.isNotEmpty)
+          _apiPath(e.path.text): e.password.text,
+    };
+  }
+
+  void _addDirPassword() {
+    final entry = _DirPasswordEntry();
+    entry.path.addListener(_onEdit);
+    entry.password.addListener(_onEdit);
+    setState(() {
+      _dirPasswords.add(entry);
+      _dirPasswordsExpanded = true;
+      _testResult = null;
+      _browseHint = null;
+    });
+  }
+
+  void _removeDirPassword(int index) {
+    final removed = _dirPasswords.removeAt(index);
+    removed.path.removeListener(_onEdit);
+    removed.password.removeListener(_onEdit);
+    removed.dispose();
+    setState(() {
+      _testResult = null;
+      _browseHint = null;
+    });
+  }
+
   void _save() {
     if (!_valid()) {
       setState(() => _showErrors = true);
@@ -381,7 +460,11 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
     }
     Navigator.pop(
       context,
-      ConnectionDraft(_config(), _local ? '' : _password.text),
+      ConnectionDraft(
+        _config(),
+        _local ? '' : _password.text,
+        dirPasswords: _dirPasswordsMap(),
+      ),
     );
   }
 
@@ -394,7 +477,11 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
       _testing = true;
       _testResult = null;
     });
-    final r = await widget.tester!(_config(), _password.text);
+    final r = await widget.tester!(
+      _config(),
+      _password.text,
+      dirPasswords: _dirPasswordsMap(),
+    );
     if (!mounted) return;
     setState(() {
       _testing = false;
@@ -414,7 +501,12 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
     setState(() => _browseHint = null);
     final config = _config();
     final password = _local ? '' : _password.text;
-    final session = widget.openLister?.call(config, password);
+    final dirPasswords = _dirPasswordsMap();
+    final session = widget.openLister?.call(
+      config,
+      password,
+      dirPasswords: dirPasswords,
+    );
     try {
       final dir = await showRemoteFolderPicker(
         context,
@@ -422,7 +514,12 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
         initial: c.text.trim().isEmpty ? '/' : _apiPath(c.text),
         list: session != null
             ? session.list
-            : (dir) => widget.lister!(config, password, dir),
+            : (dir) => widget.lister!(
+                config,
+                password,
+                dir,
+                dirPasswords: dirPasswords,
+              ),
       );
       if (!mounted) return;
       if (dir != null) c.text = dir == '/' ? '' : dir;
@@ -605,6 +702,125 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
           ),
         ),
       ),
+      if (_type == ConnectionType.alist)
+        FormRow(
+          label: '目录密码',
+          help: '仅 Alist / OpenList 加密目录需要，填写目录路径（如 /私密）与访问密码',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Hoverable(
+                    key: const ValueKey('toggle-dir-passwords'),
+                    onTap: () => setState(
+                      () => _dirPasswordsExpanded = !_dirPasswordsExpanded,
+                    ),
+                    builder: (_, hover) => Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: hover ? p.hover : Colors.transparent,
+                        borderRadius: BorderRadius.circular(Radii.sm),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            _dirPasswordsExpanded
+                                ? CupertinoIcons.chevron_down
+                                : CupertinoIcons.chevron_right,
+                            size: 11,
+                            color: p.textMuted,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            _dirPasswords.isEmpty
+                                ? '目录密码（可选）'
+                                : '目录密码（已设 ${_dirPasswords.length} 条）',
+                            style: TextStyle(
+                              fontSize: TypeScale.small,
+                              color: p.textMuted,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const Spacer(),
+                  TextButton.icon(
+                    key: const ValueKey('add-dir-password'),
+                    onPressed: _addDirPassword,
+                    icon: const Icon(CupertinoIcons.plus, size: 12),
+                    label: const Text('添加目录密码'),
+                  ),
+                ],
+              ),
+              if (_dirPasswordsExpanded && _dirPasswords.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                for (var i = 0; i < _dirPasswords.length; i++)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Expanded(
+                          flex: 11,
+                          child: TextField(
+                            key: ValueKey('dir-password-path-$i'),
+                            controller: _dirPasswords[i].path,
+                            autocorrect: false,
+                            enableSuggestions: false,
+                            style: theme.textTheme.bodyMedium,
+                            decoration: const InputDecoration(hintText: '/私密'),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          flex: 10,
+                          child: TextField(
+                            key: ValueKey('dir-password-value-$i'),
+                            controller: _dirPasswords[i].password,
+                            obscureText: _dirPasswords[i].obscure,
+                            autocorrect: false,
+                            enableSuggestions: false,
+                            style: theme.textTheme.bodyMedium,
+                            decoration: InputDecoration(
+                              hintText: '密码',
+                              suffixIcon: IconButton(
+                                tooltip: _dirPasswords[i].obscure
+                                    ? '显示目录密码'
+                                    : '隐藏目录密码',
+                                iconSize: 14,
+                                icon: Icon(
+                                  _dirPasswords[i].obscure
+                                      ? CupertinoIcons.eye
+                                      : CupertinoIcons.eye_slash,
+                                ),
+                                onPressed: () => setState(
+                                  () => _dirPasswords[i].obscure =
+                                      !_dirPasswords[i].obscure,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          key: ValueKey('remove-dir-password-$i'),
+                          tooltip: '删除目录密码',
+                          iconSize: 14,
+                          icon: const Icon(CupertinoIcons.xmark),
+                          onPressed: () => _removeDirPassword(i),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ],
+          ),
+        ),
     ];
 
     final local = <Widget>[

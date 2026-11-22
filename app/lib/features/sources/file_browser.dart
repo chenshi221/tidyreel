@@ -163,17 +163,23 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
 
   /// Submits [only] (one row's 整理 button) or the current selection.
   /// [scrape] = 刮削: organize and also write .nfo files and artwork.
+  /// [scrapeOnly] = 仅刮削: write .nfo and artwork in place without moving/renaming.
   Future<void> _submit([
     String? only,
     OrganizeMode? mode,
     bool scrape = false,
+    bool scrapeOnly = false,
   ]) async {
-    final OrganizeMode chosenMode = mode ?? ref.read(browserModeProvider);
-    if (chosenMode == OrganizeMode.moveToLibrary &&
+    final OrganizeMode chosenMode = scrapeOnly
+        ? OrganizeMode.inPlace
+        : (mode ?? ref.read(browserModeProvider));
+    if (!scrapeOnly &&
+        chosenMode == OrganizeMode.moveToLibrary &&
         widget.connection.libraryRoot == null) {
       _warnMissingLibrary();
       return;
     }
+    final effectiveScrape = scrape || scrapeOnly;
     final paths = only != null
         ? [only]
         : (ref.read(browserSelectionProvider).toList()..sort());
@@ -193,7 +199,8 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
           paths: paths,
           fileSizes: fileSizes,
           mode: chosenMode,
-          scrape: scrape,
+          scrape: effectiveScrape,
+          scrapeOnly: scrapeOnly,
           mediaHint: settings.mediaHint,
           organizedCount: (dirs) async {
             final organized = await history.areOrganized(
@@ -206,7 +213,13 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
     if (!ok || !mounted) return;
     final id = await ref
         .read(taskManagerProvider)
-        .submit(widget.connection.id, paths, chosenMode, scrape: scrape);
+        .submit(
+          widget.connection.id,
+          paths,
+          chosenMode,
+          scrape: effectiveScrape,
+          scrapeOnly: scrapeOnly,
+        );
     if (!mounted) return;
     if (only == null) ref.read(browserSelectionProvider.notifier).clear();
     // The detail page follows the task and opens the review once recognized.
@@ -264,6 +277,11 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
         '刮削',
         () => _submit(path, null, true),
         icon: CupertinoIcons.photo_on_rectangle,
+      ),
+      MenuAction(
+        '仅刮削（不改文件名）',
+        () => _submit(path, null, true, true),
+        icon: CupertinoIcons.sparkles,
       ),
     ];
 
@@ -595,6 +613,7 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
                               .clear,
                           onOrganize: _submit,
                           onScrape: () => _submit(null, null, true),
+                          onScrapeOnly: () => _submit(null, null, true, true),
                           onShowSelected: _showSelected,
                           hint: ref.watch(
                             settingsProvider.select((s) => s.mediaHint),
@@ -615,7 +634,7 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
   }
 }
 
-/// Floating bar for the 多选 → 整理 / 刮削 step.
+/// Floating bar for the 多选 → 整理 / 刮削 / 仅刮削 step.
 class _SelectionBar extends StatelessWidget {
   final int count;
   final OrganizeMode mode;
@@ -623,6 +642,7 @@ class _SelectionBar extends StatelessWidget {
   final VoidCallback onCancel;
   final VoidCallback onOrganize;
   final VoidCallback onScrape;
+  final VoidCallback onScrapeOnly;
   final VoidCallback onShowSelected;
   final MediaHint hint;
   final void Function(MediaHint) onHint;
@@ -634,6 +654,7 @@ class _SelectionBar extends StatelessWidget {
     required this.onCancel,
     required this.onOrganize,
     required this.onScrape,
+    required this.onScrapeOnly,
     required this.onShowSelected,
     required this.hint,
     required this.onHint,
@@ -643,7 +664,7 @@ class _SelectionBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = Palette.of(context);
     return Container(
-      constraints: const BoxConstraints(maxWidth: 860),
+      constraints: const BoxConstraints(maxWidth: 960),
       padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
       decoration: BoxDecoration(
         color: p.panel,
@@ -665,7 +686,7 @@ class _SelectionBar extends StatelessWidget {
               style: const TextStyle(fontWeight: FontWeight.w600),
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
           PopupMenuButton<MediaHint>(
             key: const ValueKey('media-hint'),
             tooltip: '切换后作为识别类型提示',
@@ -689,7 +710,7 @@ class _SelectionBar extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
           Segmented<OrganizeMode>(
             options: const {
               OrganizeMode.inPlace: '原地整理',
@@ -698,7 +719,7 @@ class _SelectionBar extends StatelessWidget {
             value: mode,
             onChanged: onMode,
           ),
-          const SizedBox(width: 16),
+          const SizedBox(width: 12),
           TextButton(onPressed: onCancel, child: const Text('取消')),
           const SizedBox(width: 4),
           Tooltip(
@@ -709,13 +730,22 @@ class _SelectionBar extends StatelessWidget {
               child: const Text('整理'),
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
           Tooltip(
             message: '整理，并写入 NFO 和海报',
             child: OutlinedButton(
               key: const ValueKey('scrape'),
               onPressed: onScrape,
               child: const Text('刮削'),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Tooltip(
+            message: '不移动、不重命名文件，仅在原位补全 NFO 与海报',
+            child: OutlinedButton(
+              key: const ValueKey('scrape-only'),
+              onPressed: onScrapeOnly,
+              child: const Text('仅刮削'),
             ),
           ),
         ],

@@ -119,6 +119,7 @@ Future<bool> showScanPreview(
   Map<String, int> fileSizes = const {},
   OrganizeMode? mode,
   bool scrape = false,
+  bool scrapeOnly = false,
   MediaHint? mediaHint,
 }) async =>
     await showDialog<bool>(
@@ -130,6 +131,7 @@ Future<bool> showScanPreview(
         fileSizes: fileSizes,
         mode: mode,
         scrape: scrape,
+        scrapeOnly: scrapeOnly,
         mediaHint: mediaHint,
       ),
     ) ??
@@ -142,6 +144,7 @@ class _PreviewSheet extends StatefulWidget {
   final Map<String, int> fileSizes;
   final OrganizeMode? mode;
   final bool scrape;
+  final bool scrapeOnly;
   final MediaHint? mediaHint;
 
   const _PreviewSheet({
@@ -151,6 +154,7 @@ class _PreviewSheet extends StatefulWidget {
     this.fileSizes = const {},
     this.mode,
     this.scrape = false,
+    this.scrapeOnly = false,
     this.mediaHint,
   });
 
@@ -261,20 +265,56 @@ class _PreviewSheetState extends State<_PreviewSheet> {
               ),
               if (widget.mode != null ||
                   widget.scrape ||
+                  widget.scrapeOnly ||
                   widget.mediaHint != null) ...[
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 6,
                   runSpacing: 6,
                   children: [
-                    if (widget.mode != null)
-                      Tag(
-                        widget.mode == OrganizeMode.inPlace ? '原地整理' : '移动到媒体库',
-                      ),
-                    if (widget.scrape) Tag('刮削', color: p.accent),
+                    if (widget.scrapeOnly)
+                      Tag('仅刮削', color: p.accent)
+                    else ...[
+                      if (widget.mode != null)
+                        Tag(
+                          widget.mode == OrganizeMode.inPlace
+                              ? '原地整理'
+                              : '移动到媒体库',
+                        ),
+                      if (widget.scrape) Tag('刮削', color: p.accent),
+                    ],
                     if (widget.mediaHint != null)
                       Tag('类型：${mediaHintLabels[widget.mediaHint]}'),
                   ],
+                ),
+              ],
+              if (widget.scrapeOnly) ...[
+                const SizedBox(height: 10),
+                Container(
+                  key: const ValueKey('scrape-only-note'),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: p.accentSoft,
+                    borderRadius: BorderRadius.circular(Radii.sm),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(CupertinoIcons.sparkles, size: 13, color: p.accent),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          '仅刮削模式：不移动、不重命名文件，仅在原位补全 NFO 与海报',
+                          style: TextStyle(
+                            fontSize: TypeScale.small,
+                            color: p.text,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ],
               const SizedBox(height: 16),
@@ -361,7 +401,9 @@ class _PreviewSheetState extends State<_PreviewSheet> {
                 ],
                 const SizedBox(height: 12),
                 Text(
-                  '这一步只识别，不改任何文件。确认结果后点「开始整理」才会改名，之后也能撤销。',
+                  widget.scrapeOnly
+                      ? '这一步只识别，确认结果后才会写入 NFO 与海报，且不会修改任何现有文件名。'
+                      : '这一步只识别，不改任何文件。确认结果后点「开始整理」才会改名，之后也能撤销。',
                   style: theme.textTheme.bodySmall,
                 ),
               ],

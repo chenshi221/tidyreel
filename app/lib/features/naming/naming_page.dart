@@ -1,5 +1,9 @@
+import 'dart:io';
+
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
@@ -117,6 +121,56 @@ class _NamingPageState extends ConsumerState<NamingPage> {
     ref.read(namingProfileProvider.notifier).set(NamingProfile.forPlayer(next));
   }
 
+  Future<void> _handleExportImport(_ExportImportAction action) async {
+    final profile = ref.read(namingProfileProvider);
+    final rules = ref.read(titleRulesProvider);
+    switch (action) {
+      case _ExportImportAction.copyJson:
+        final jsonStr = encodeNamingBundle(profile, rules);
+        await Clipboard.setData(ClipboardData(text: jsonStr));
+        if (!mounted) return;
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(const SnackBar(content: Text('已复制命名与片名规则 JSON 到剪贴板')));
+      case _ExportImportAction.saveFile:
+        final jsonStr = encodeNamingBundle(profile, rules);
+        try {
+          final location = await getSaveLocation(
+            suggestedName: 'tidyreel-naming.json',
+            acceptedTypeGroups: const [
+              XTypeGroup(label: 'JSON', extensions: ['json']),
+            ],
+          );
+          if (location == null || !mounted) return;
+          await File(location.path).writeAsString(jsonStr);
+          if (!mounted) return;
+          ScaffoldMessenger.of(context)
+            ..hideCurrentSnackBar()
+            ..showSnackBar(SnackBar(content: Text('已导出到 ${location.path}')));
+        } catch (e) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context)
+            ..hideCurrentSnackBar()
+            ..showSnackBar(SnackBar(content: Text('导出失败：$e')));
+        }
+      case _ExportImportAction.importJson:
+        final bundle = await showDialog<NamingBundle>(
+          context: context,
+          builder: (_) => const _ImportNamingDialog(),
+        );
+        if (bundle == null || !mounted) return;
+        if (bundle.naming != null) {
+          ref.read(namingProfileProvider.notifier).set(bundle.naming!);
+        }
+        if (bundle.titleRules != null) {
+          ref.read(titleRulesProvider.notifier).set(bundle.titleRules!);
+        }
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(const SnackBar(content: Text('已导入命名与片名规则')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final profile = ref.watch(namingProfileProvider);
@@ -130,6 +184,8 @@ class _NamingPageState extends ConsumerState<NamingPage> {
         ),
         const SizedBox(width: 6),
         _PlayerMenu(value: profile.player, onChanged: _selectPlayer),
+        const SizedBox(width: 6),
+        _ExportImportMenu(onSelected: _handleExportImport),
       ],
       child: Padding(
         padding: const EdgeInsets.fromLTRB(48, 0, 40, 0),
@@ -204,21 +260,392 @@ class _PlayerMenu extends StatelessWidget {
   }
 }
 
+enum _ExportImportAction { copyJson, saveFile, importJson }
+
+class _ExportImportMenu extends StatelessWidget {
+  final ValueChanged<_ExportImportAction> onSelected;
+
+  const _ExportImportMenu({required this.onSelected});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    return PopupMenuButton<_ExportImportAction>(
+      key: const ValueKey('naming-export-import'),
+      tooltip: '导出或导入命名与片名规则',
+      position: PopupMenuPosition.under,
+      onSelected: onSelected,
+      itemBuilder: (_) => const [
+        PopupMenuItem(
+          key: ValueKey('naming-export-clipboard'),
+          value: _ExportImportAction.copyJson,
+          height: 30,
+          child: Row(
+            children: [
+              Icon(CupertinoIcons.doc_on_clipboard, size: 14),
+              SizedBox(width: 8),
+              Text('导出到剪贴板'),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          key: ValueKey('naming-export-file'),
+          value: _ExportImportAction.saveFile,
+          height: 30,
+          child: Row(
+            children: [
+              Icon(CupertinoIcons.square_arrow_up, size: 14),
+              SizedBox(width: 8),
+              Text('导出为 JSON 文件'),
+            ],
+          ),
+        ),
+        PopupMenuDivider(height: 9),
+        PopupMenuItem(
+          key: ValueKey('naming-import-json'),
+          value: _ExportImportAction.importJson,
+          height: 30,
+          child: Row(
+            children: [
+              Icon(CupertinoIcons.square_arrow_down, size: 14),
+              SizedBox(width: 8),
+              Text('导入 JSON…'),
+            ],
+          ),
+        ),
+      ],
+      child: Container(
+        height: 28,
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        decoration: BoxDecoration(
+          color: p.panel,
+          borderRadius: BorderRadius.circular(Radii.sm),
+          border: Border.all(color: p.lineStrong, width: hairline),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              CupertinoIcons.arrow_up_arrow_down,
+              size: 13,
+              color: p.textMuted,
+            ),
+            const SizedBox(width: 6),
+            const Text(
+              '导出 / 导入',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ImportNamingDialog extends StatefulWidget {
+  const _ImportNamingDialog();
+
+  @override
+  State<_ImportNamingDialog> createState() => _ImportNamingDialogState();
+}
+
+class _ImportNamingDialogState extends State<_ImportNamingDialog> {
+  final _controller = TextEditingController();
+  String? _fileError;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickFile() async {
+    try {
+      final file = await openFile(
+        acceptedTypeGroups: const [
+          XTypeGroup(label: 'JSON', extensions: ['json']),
+        ],
+      );
+      if (file == null || !mounted) return;
+      final content = await file.readAsString();
+      if (!mounted) return;
+      setState(() {
+        _fileError = null;
+        _controller.text = content;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _fileError = '读取文件失败：$e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    final theme = Theme.of(context);
+    final raw = _controller.text;
+    final parsed = raw.trim().isEmpty ? null : decodeNamingBundle(raw);
+    final bundle = parsed?.bundle;
+    final error = _fileError ?? parsed?.error;
+
+    return MacSheet(
+      key: const ValueKey('naming-import-dialog'),
+      child: SizedBox(
+        width: 540,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(22, 20, 22, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '导入命名与片名规则',
+                      style: theme.textTheme.titleMedium,
+                    ),
+                  ),
+                  OutlinedButton.icon(
+                    key: const ValueKey('naming-import-pick-file'),
+                    onPressed: _pickFile,
+                    icon: const Icon(CupertinoIcons.folder, size: 13),
+                    label: const Text('从文件选择…'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '粘贴导出的 JSON 内容，或点击右上角从本地文件读取。确认后会覆盖当前命名规则与片名规则。',
+                style: theme.textTheme.bodySmall,
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                key: const ValueKey('naming-import-input'),
+                controller: _controller,
+                maxLines: 8,
+                minLines: 5,
+                style: const TextStyle(
+                  fontFamily: monoFamily,
+                  fontFamilyFallback: [...monoFallback, ...sansFallback],
+                  fontSize: TypeScale.small,
+                ),
+                decoration: const InputDecoration(
+                  hintText: '{\n  "version": 1,\n  "naming": { ... },\n  "titleRules": { ... }\n}',
+                  alignLabelWithHint: true,
+                ),
+                onChanged: (_) => setState(() => _fileError = null),
+              ),
+              if (error != null) ...[
+                const SizedBox(height: 10),
+                Container(
+                  key: const ValueKey('naming-import-error'),
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: p.danger.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(Radii.sm),
+                    border: Border.all(
+                      color: p.danger.withValues(alpha: 0.35),
+                      width: hairline,
+                    ),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                        CupertinoIcons.exclamationmark_circle_fill,
+                        size: 15,
+                        color: p.danger,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          error,
+                          style: TextStyle(
+                            fontSize: TypeScale.small,
+                            color: p.danger,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              if (bundle != null) ...[
+                const SizedBox(height: 10),
+                Container(
+                  key: const ValueKey('naming-import-preview'),
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: p.success.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(Radii.sm),
+                    border: Border.all(
+                      color: p.success.withValues(alpha: 0.30),
+                      width: hairline,
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(
+                            CupertinoIcons.checkmark_circle_fill,
+                            size: 14,
+                            color: p.success,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            '校验通过，将应用以下配置',
+                            style: TextStyle(
+                              fontSize: TypeScale.small,
+                              fontWeight: FontWeight.w600,
+                              color: p.text,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        '播放器预设：${bundle.naming != null ? _playerNames[bundle.naming!.player]! : '保持现有'}',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: p.text,
+                        ),
+                      ),
+                      if (bundle.naming != null)
+                        Text(
+                          '替换规则：共 ${bundle.naming!.movie.rewrites.length + bundle.naming!.tv.rewrites.length} 条'
+                          '（电影 ${bundle.naming!.movie.rewrites.length} 条 · 剧集 ${bundle.naming!.tv.rewrites.length} 条）',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: p.text,
+                          ),
+                        ),
+                      Text(
+                        bundle.titleRules != null
+                            ? '片名规则：清洗 ${bundle.titleRules!.cleanups.length} 条 · 指定匹配 ${bundle.titleRules!.pins.length} 条'
+                            : '片名规则：保持现有',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: p.text,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('取消'),
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton(
+                    key: const ValueKey('naming-import-confirm'),
+                    onPressed: bundle == null
+                        ? null
+                        : () => Navigator.pop(context, bundle),
+                    child: const Text('导入并应用'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 NamingOptions _optionsOf(NamingProfile p, bool tv) => tv ? p.tv : p.movie;
 
-/// Before → after, plus the library path drawn as a small tree.
-class _Preview extends ConsumerWidget {
+/// Before → after, plus the library path drawn as a small tree, scenario
+/// presets, and a custom filename live tester.
+class _Preview extends ConsumerStatefulWidget {
   final bool isTv;
 
   const _Preview({required this.isTv});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_Preview> createState() => _PreviewState();
+}
+
+class _PreviewState extends ConsumerState<_Preview> {
+  var _movieScenarioId = 'standard';
+  var _tvScenarioId = 'standard';
+  final _customInput = TextEditingController();
+
+  @override
+  void dispose() {
+    _customInput.dispose();
+    super.dispose();
+  }
+
+  String _kindLabel(MediaKind k) => switch (k) {
+    MediaKind.movie => '电影',
+    MediaKind.episode => '剧集',
+    MediaKind.special => '特别篇',
+    MediaKind.extra => '花絮',
+    MediaKind.unknown => '未知',
+  };
+
+  String _episodeSummary(ParsedName p) {
+    if (p.episodes.isNotEmpty) {
+      final s = p.season != null
+          ? 'S${p.season!.toString().padLeft(2, '0')}'
+          : '';
+      final eStart = 'E${p.episodes.first.toString().padLeft(2, '0')}';
+      final eEnd = p.episodes.length > 1 && p.episodes.last > p.episodes.first
+          ? '-E${p.episodes.last.toString().padLeft(2, '0')}'
+          : '';
+      return '$s$eStart$eEnd';
+    }
+    if (p.absolute != null) {
+      return '第 ${p.absolute} 集（绝对集）';
+    }
+    if (p.airDate != null) {
+      return '日期 ${fmtDate(p.airDate)}';
+    }
+    if (p.season != null) {
+      return 'S${p.season!.toString().padLeft(2, '0')}';
+    }
+    return '—';
+  }
+
+  String _versionSummary(ParsedName p) {
+    final parts = <String>[
+      if (p.edition != null && p.edition!.isNotEmpty) p.edition!,
+      if (p.partLabel != null && p.partLabel!.isNotEmpty) p.partLabel!,
+    ];
+    return parts.isEmpty ? '—' : parts.join(' · ');
+  }
+
+  String _extraSummary(ParsedName p) {
+    final parts = <String>[
+      if (p.extraInfo != null && p.extraInfo!.isNotEmpty)
+        p.extraInfo!
+      else if (p.resolution != null && p.resolution!.isNotEmpty)
+        p.resolution!,
+      if (p.group != null && p.group!.isNotEmpty) '发布组 ${p.group}',
+    ];
+    return parts.isEmpty ? '—' : parts.join(' · ');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isTv = widget.isTv;
     final p = Palette.of(context);
     final theme = Theme.of(context);
     final profile = ref.watch(namingProfileProvider);
     final o = _optionsOf(profile, isTv);
-    final sample = isTv ? NamingSample.tvFor(o) : NamingSample.movie;
+    final scenarios = isTv ? tvNamingScenarios : movieNamingScenarios;
+    final selectedId = isTv ? _tvScenarioId : _movieScenarioId;
+    final scenario = scenarios.firstWhere(
+      (s) => s.id == selectedId,
+      orElse: () => scenarios.first,
+    );
+    final sample = scenario.buildSample(o);
     final kind = isTv ? MediaKind.episode : MediaKind.movie;
     final name = renderNaming(o, kind, sample);
     final folder = renderFolder(o.folderTemplate, sample, o.rewrites);
@@ -255,84 +682,226 @@ class _Preview extends ConsumerWidget {
       ],
     );
 
-    return Panel(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Text('实时示例', style: theme.textTheme.titleSmall),
-              const Spacer(),
-              Tag(_playerNames[profile.player]!),
-            ],
+    final customText = _customInput.text.trim();
+    final customPreview = customText.isEmpty
+        ? null
+        : previewCustomFilename(customText, profile, fallbackIsTv: isTv);
+
+    Widget fieldChip(String label, String value, {Color? valueColor}) =>
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: p.sidebar,
+            borderRadius: BorderRadius.circular(Radii.sm),
+            border: Border.all(color: p.line, width: hairline),
           ),
-          const SizedBox(height: 14),
-          Text('原文件名', style: theme.textTheme.labelSmall),
-          const SizedBox(height: 4),
-          fileLine(CupertinoIcons.doc, sample.original, p.textFaint),
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: Icon(
-              CupertinoIcons.arrow_down,
-              size: 14,
-              color: p.textMuted,
-            ),
-          ),
-          Text('整理后', style: theme.textTheme.labelSmall),
-          const SizedBox(height: 4),
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: name.text == null
-                  ? p.danger.withValues(alpha: 0.06)
-                  : p.sidebar,
-              borderRadius: BorderRadius.circular(Radii.sm),
-              border: Border.all(
-                color: name.text == null
-                    ? p.danger.withValues(alpha: 0.4)
-                    : p.line,
-                width: hairline,
+          child: RichText(
+            text: TextSpan(
+              style: TextStyle(
+                fontSize: TypeScale.small,
+                color: p.textFaint,
+                fontFamilyFallback: sansFallback,
               ),
-            ),
-            child: fileLine(
-              CupertinoIcons.film,
-              name.display,
-              name.text == null ? p.danger : p.text,
-              key: const ValueKey('example-name'),
+              children: [
+                TextSpan(text: '$label '),
+                TextSpan(
+                  text: value,
+                  style: TextStyle(
+                    color: valueColor ?? p.text,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 18),
-          Text('移动到媒体库时', style: theme.textTheme.labelSmall),
-          const SizedBox(height: 6),
-          for (var i = 0; i < tree.length; i++)
-            Padding(
-              padding: EdgeInsets.only(left: 16.0 * i, bottom: 2),
-              child: fileLine(
-                tree[i].$2
-                    ? CupertinoIcons.exclamationmark_triangle
-                    : CupertinoIcons.folder_fill,
-                tree[i].$1,
-                tree[i].$2 ? p.danger : p.textMuted,
-              ),
+        );
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.only(bottom: 28),
+      child: Panel(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text('实时示例', style: theme.textTheme.titleSmall),
+                const Spacer(),
+                Tag(_playerNames[profile.player]!),
+              ],
             ),
-          if (name.text != null)
-            Padding(
-              padding: EdgeInsets.only(left: 16.0 * tree.length),
-              child: fileLine(CupertinoIcons.film, name.text!, p.text),
-            ),
-          if (isTv) ...[
             const SizedBox(height: 10),
-            Text(
-              o.singleSeasonFolder
-                  ? '单季剧也会建季文件夹（${season?.text ?? o.seasonFolderTemplate}）'
-                  : '单季剧省略季文件夹：${profile.tvDir}/${folder.text ?? '…'}/${name.text ?? '…'}',
-              key: const ValueKey('single-season-preview'),
-              style: theme.textTheme.bodySmall?.copyWith(color: p.textFaint),
+            Wrap(
+              spacing: 4,
+              runSpacing: 4,
+              children: [
+                for (final s in scenarios)
+                  _StyleChip(
+                    key: ValueKey('sample-${s.id}'),
+                    label: s.label,
+                    selected: scenario.id == s.id,
+                    onTap: () => setState(() {
+                      if (isTv) {
+                        _tvScenarioId = s.id;
+                      } else {
+                        _movieScenarioId = s.id;
+                      }
+                    }),
+                  ),
+              ],
             ),
+            const SizedBox(height: 14),
+            Text('原文件名', style: theme.textTheme.labelSmall),
+            const SizedBox(height: 4),
+            fileLine(CupertinoIcons.doc, sample.original, p.textFaint),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Icon(
+                CupertinoIcons.arrow_down,
+                size: 14,
+                color: p.textMuted,
+              ),
+            ),
+            Text('整理后', style: theme.textTheme.labelSmall),
+            const SizedBox(height: 4),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: name.text == null
+                    ? p.danger.withValues(alpha: 0.06)
+                    : p.sidebar,
+                borderRadius: BorderRadius.circular(Radii.sm),
+                border: Border.all(
+                  color: name.text == null
+                      ? p.danger.withValues(alpha: 0.4)
+                      : p.line,
+                  width: hairline,
+                ),
+              ),
+              child: fileLine(
+                CupertinoIcons.film,
+                name.display,
+                name.text == null ? p.danger : p.text,
+                key: const ValueKey('example-name'),
+              ),
+            ),
+            const SizedBox(height: 18),
+            Text('移动到媒体库时', style: theme.textTheme.labelSmall),
+            const SizedBox(height: 6),
+            for (var i = 0; i < tree.length; i++)
+              Padding(
+                padding: EdgeInsets.only(left: 16.0 * i, bottom: 2),
+                child: fileLine(
+                  tree[i].$2
+                      ? CupertinoIcons.exclamationmark_triangle
+                      : CupertinoIcons.folder_fill,
+                  tree[i].$1,
+                  tree[i].$2 ? p.danger : p.textMuted,
+                ),
+              ),
+            if (name.text != null)
+              Padding(
+                padding: EdgeInsets.only(left: 16.0 * tree.length),
+                child: fileLine(CupertinoIcons.film, name.text!, p.text),
+              ),
+            if (isTv) ...[
+              const SizedBox(height: 10),
+              Text(
+                o.singleSeasonFolder
+                    ? '单季剧也会建季文件夹（${season?.text ?? o.seasonFolderTemplate}）'
+                    : '单季剧省略季文件夹：${profile.tvDir}/${folder.text ?? '…'}/${name.text ?? '…'}',
+                key: const ValueKey('single-season-preview'),
+                style: theme.textTheme.bodySmall?.copyWith(color: p.textFaint),
+              ),
+            ],
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 14),
+              child: Divider(),
+            ),
+            Text('自定义测试', style: theme.textTheme.titleSmall),
+            const SizedBox(height: 4),
+            Text(
+              '粘贴任意真实文件名（或带目录路径），实时查看解析字段与目标文件名',
+              style: theme.textTheme.bodySmall,
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              key: const ValueKey('custom-filename-tester'),
+              controller: _customInput,
+              style: mono,
+              decoration: InputDecoration(
+                hintText: '如 [VCB-Studio] Frieren [01][Ma10p_1080p].mkv',
+                prefixIcon: const Icon(CupertinoIcons.lab_flask, size: 14),
+                suffixIcon: customText.isEmpty
+                    ? null
+                    : IconButton(
+                        tooltip: '清空',
+                        iconSize: 13,
+                        icon: const Icon(CupertinoIcons.xmark_circle_fill),
+                        onPressed: () => setState(() => _customInput.clear()),
+                      ),
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+            if (customPreview != null) ...[
+              const SizedBox(height: 10),
+              Wrap(
+                key: const ValueKey('custom-parsed-fields'),
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  fieldChip('类型', _kindLabel(customPreview.parsed.kind)),
+                  fieldChip('标题', customPreview.parsed.title ?? '—'),
+                  fieldChip('年份', customPreview.parsed.year?.toString() ?? '—'),
+                  fieldChip('季集', _episodeSummary(customPreview.parsed)),
+                  fieldChip('版本', _versionSummary(customPreview.parsed)),
+                  fieldChip('附加信息', _extraSummary(customPreview.parsed)),
+                  fieldChip(
+                    '外部ID',
+                    customPreview.parsed.externalId?.toString() ?? '—',
+                  ),
+                  fieldChip(
+                    '置信度',
+                    '${(customPreview.parsed.confidence * 100).round()}%',
+                    valueColor: customPreview.parsed.confidence >= 0.8
+                        ? p.success
+                        : customPreview.parsed.confidence >= 0.5
+                        ? p.warning
+                        : p.danger,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(
+                '当前规则目标文件名（按${customPreview.isTv ? '剧集' : '电影'}规则）',
+                style: theme.textTheme.labelSmall,
+              ),
+              const SizedBox(height: 4),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: customPreview.renderedName.text == null
+                      ? p.danger.withValues(alpha: 0.06)
+                      : p.sidebar,
+                  borderRadius: BorderRadius.circular(Radii.sm),
+                  border: Border.all(
+                    color: customPreview.renderedName.text == null
+                        ? p.danger.withValues(alpha: 0.4)
+                        : p.line,
+                    width: hairline,
+                  ),
+                ),
+                child: fileLine(
+                  CupertinoIcons.film,
+                  customPreview.renderedName.display,
+                  customPreview.renderedName.text == null ? p.danger : p.text,
+                  key: const ValueKey('custom-rendered-name'),
+                ),
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }

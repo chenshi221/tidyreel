@@ -87,4 +87,34 @@ void main() {
       expect(find.textContaining('其中 1 个文件夹已经整理过'), findsOneWidget);
     },
   );
+
+  testWidgets('scrapeOnly shows 仅刮削 tag and in-place metadata note', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => TextButton(
+              onPressed: () => showScanPreview(
+                context,
+                backend: fs,
+                paths: const ['/dl/A'],
+                mode: OrganizeMode.inPlace,
+                scrape: true,
+                scrapeOnly: true,
+              ),
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('仅刮削'), findsOneWidget);
+    expect(find.byKey(const ValueKey('scrape-only-note')), findsOneWidget);
+    expect(find.text('仅刮削模式：不移动、不重命名文件，仅在原位补全 NFO 与海报'), findsOneWidget);
+  });
 }

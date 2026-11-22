@@ -190,11 +190,13 @@ Future<void> editConnection(
 ]) async {
   final isNew = existing == null || copy;
   final passwords = ref.read(connectionPasswordsProvider);
+  final dirPasswords = ref.read(connectionDirPasswordsProvider);
   final draft = await showConnectionDialog(
     context,
     existing: existing,
     copy: copy,
     initialPassword: existing == null ? null : passwords[existing.id],
+    initialDirPasswords: existing == null ? null : dirPasswords[existing.id],
     tester: ref.read(connectionTesterProvider),
     openLister: ref.read(connectionListerSessionProvider),
   );
@@ -204,6 +206,9 @@ Future<void> editConnection(
     ...ref.read(connectionPasswordsProvider),
     draft.config.id: draft.password,
   });
+  ref
+      .read(connectionDirPasswordsProvider.notifier)
+      .setFor(draft.config.id, draft.dirPasswords);
   ref.invalidate(connectionStatusProvider(draft.config.id));
   if (isNew) {
     ScaffoldMessenger.of(context)
@@ -224,6 +229,7 @@ Future<void> editConnection(
 /// never a file, so a confirmation dialog would be noise.
 void _delete(BuildContext context, WidgetRef ref, ConnectionConfig c) {
   final password = ref.read(connectionPasswordsProvider)[c.id];
+  final dirPasswords = ref.read(connectionDirPasswordsProvider)[c.id];
   ref.read(connectionsEditorProvider.notifier).remove(c.id);
   ScaffoldMessenger.of(context)
     ..hideCurrentSnackBar()
@@ -239,6 +245,11 @@ void _delete(BuildContext context, WidgetRef ref, ConnectionConfig c) {
                 ...ref.read(connectionPasswordsProvider),
                 c.id: password,
               });
+            }
+            if (dirPasswords != null && dirPasswords.isNotEmpty) {
+              ref
+                  .read(connectionDirPasswordsProvider.notifier)
+                  .setFor(c.id, dirPasswords);
             }
           },
         ),

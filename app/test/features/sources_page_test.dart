@@ -163,4 +163,51 @@ void main() {
     expect(tasks.single.mode, OrganizeMode.inPlace);
     expect(tasks.single.paths.single, endsWith('异兽魔都 2020 1080p'));
   });
+
+  testWidgets('selection bar 仅刮削 submits task with scrapeOnly: true', (
+    tester,
+  ) async {
+    final (tm, _) = await pumpPage(tester, const SourcesPage());
+    await tester.tap(find.byKey(const ValueKey('fav demo-alist /下载/完成')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('check 异兽魔都 2020 1080p')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('scrape-only')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('scrape-only-note')), findsOneWidget);
+    expect(find.text('仅刮削模式：不移动、不重命名文件，仅在原位补全 NFO 与海报'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('preview-submit')));
+    await tester.pumpAndSettle();
+
+    final tasks = await tm.watchAll().first;
+    expect(tasks, hasLength(1));
+    expect(tasks.single.scrape, isTrue);
+    expect(tasks.single.scrapeOnly, isTrue);
+    expect(tasks.single.mode, OrganizeMode.inPlace);
+  });
+
+  testWidgets('right-click 仅刮削（不改文件名） submits task with scrapeOnly: true', (
+    tester,
+  ) async {
+    final (tm, _) = await pumpPage(tester, const SourcesPage());
+    await tester.tap(find.byKey(const ValueKey('fav demo-alist /下载/完成')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('异兽魔都 2020 1080p'), buttons: kSecondaryButton);
+    await tester.pumpAndSettle();
+    expect(find.text('仅刮削（不改文件名）'), findsOneWidget);
+    await tester.tap(find.text('仅刮削（不改文件名）'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('仅刮削模式：不移动、不重命名文件，仅在原位补全 NFO 与海报'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('preview-submit')));
+    await tester.pumpAndSettle();
+
+    final tasks = await tm.watchAll().first;
+    expect(tasks, hasLength(1));
+    expect(tasks.single.scrape, isTrue);
+    expect(tasks.single.scrapeOnly, isTrue);
+  });
 }

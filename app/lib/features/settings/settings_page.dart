@@ -31,8 +31,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   late final _url = TextEditingController(
     text: ref.read(settingsProvider).tmdbBaseUrl,
   );
-  late final _initialConcurrency = ref.read(settingsProvider).concurrency;
-  late final _initialRps = ref.read(settingsProvider).requestsPerSecond;
   var _showKey = false;
   var _testing = false;
   String? _testMessage;
@@ -125,8 +123,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     final builtIn = ref.watch(builtInTmdbTokenProvider).isNotEmpty;
     final urlNonDefault =
         _url.text.trim().isNotEmpty && _url.text.trim() != _defaultTmdbBaseUrl;
-    final concurrencyChanged = s.concurrency != _initialConcurrency;
-    final rpsChanged = s.requestsPerSecond != _initialRps;
 
     return PageScaffold(
       title: '设置',
@@ -288,49 +284,31 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   ),
                 ),
                 SettingRow(
+                  title: '刮削时覆盖已有 NFO',
+                  caption: '默认保留已存在的 .nfo 文件；开启后重新刮削会安全替换为最新完整元数据',
+                  control: toggle(
+                    'overwrite-nfo',
+                    s.overwriteNfo,
+                    (v) => s.copyWith(overwriteNfo: v),
+                  ),
+                ),
+                SettingRow(
                   title: '同时处理的文件数',
-                  caption: '越大越快，但网盘更容易限流。重启理片后生效',
-                  control: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (concurrencyChanged) ...[
-                        Tag(
-                          '需重启生效',
-                          key: const ValueKey('restart-concurrency'),
-                          color: p.warning,
-                        ),
-                        const SizedBox(width: 8),
-                      ],
-                      Segmented<int>(
-                        options: const {1: '1', 2: '2', 4: '4', 8: '8'},
-                        value: s.concurrency,
-                        onChanged: (v) =>
-                            _set((o) => o.copyWith(concurrency: v)),
-                      ),
-                    ],
+                  caption: '越大越快，但网盘更容易限流。修改后对新任务立即生效',
+                  control: Segmented<int>(
+                    options: const {1: '1', 2: '2', 4: '4', 8: '8'},
+                    value: s.concurrency,
+                    onChanged: (v) => _set((o) => o.copyWith(concurrency: v)),
                   ),
                 ),
                 SettingRow(
                   title: '每秒请求上限',
-                  caption: '仅影响网盘/远程连接。Alist 默认会限流，频繁报错时调小。重启理片后生效',
-                  control: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (rpsChanged) ...[
-                        Tag(
-                          '需重启生效',
-                          key: const ValueKey('restart-rps'),
-                          color: p.warning,
-                        ),
-                        const SizedBox(width: 8),
-                      ],
-                      Segmented<int>(
-                        options: const {2: '2', 5: '5', 10: '10'},
-                        value: s.requestsPerSecond,
-                        onChanged: (v) =>
-                            _set((o) => o.copyWith(requestsPerSecond: v)),
-                      ),
-                    ],
+                  caption: '仅影响网盘/远程连接。Alist 默认会限流，频繁报错时调小。修改后立即生效',
+                  control: Segmented<int>(
+                    options: const {2: '2', 5: '5', 10: '10'},
+                    value: s.requestsPerSecond,
+                    onChanged: (v) =>
+                        _set((o) => o.copyWith(requestsPerSecond: v)),
                   ),
                 ),
               ],
@@ -373,6 +351,24 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                         : 0.7,
                     onChanged: (v) =>
                         _set((o) => o.copyWith(confidenceThreshold: v)),
+                  ),
+                ),
+                SettingRow(
+                  title: '媒体头探测',
+                  caption: '仅读取 MKV/MP4 文件头（不下载整片），自动补全分辨率、杜比视界/HDR 与音轨信息',
+                  control: toggle(
+                    'probe-media',
+                    s.probeMedia,
+                    (v) => s.copyWith(probeMedia: v),
+                  ),
+                ),
+                SettingRow(
+                  title: 'Bangumi 动漫译名',
+                  caption: '结合 Bangumi 与 AniList 补全番剧中文译名和日文原名，提高动漫匹配率',
+                  control: toggle(
+                    'enable-bangumi',
+                    s.enableBangumi,
+                    (v) => s.copyWith(enableBangumi: v),
                   ),
                 ),
                 SettingRow(

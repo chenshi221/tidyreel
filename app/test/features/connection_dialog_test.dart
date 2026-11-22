@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tidyreel/data/providers.dart';
 import 'package:tidyreel/features/sources/connection_dialog.dart';
 import 'package:tidyreel/features/sources/sources_page.dart';
+import 'package:tidyreel/features/sources/sources_providers.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
 import 'helpers.dart';
@@ -310,7 +310,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.textContaining('连接路径「/不存在」不存在'), findsOneWidget);
 
-      // Local connections hide 连接路径.
+      // Local connections hide 连接路径 and 目录密码.
       await tester.tap(
         find.descendant(
           of: find.byKey(const ValueKey('conn-kind')),
@@ -319,6 +319,172 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('field-连接路径')), findsNothing);
+      expect(find.byKey(const ValueKey('add-dir-password')), findsNothing);
     },
   );
+
+  testWidgets(
+    'Alist directory passwords persist on save, prefill on edit, copy and undo on delete',
+    (tester) async {
+      final (_, c) = await pumpPage(tester, const SourcesPage());
+      await tester.tap(find.text('添加连接'));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byKey(const ValueKey('field-名称')),
+        '加密 Alist',
+      );
+      await tester.enterText(find.byKey(const ValueKey('field-主机')), 'nas');
+
+      // Add a directory password row.
+      await tester.tap(find.byKey(const ValueKey('add-dir-password')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('dir-password-path-0')),
+        '/私密',
+      );
+      await tester.enterText(
+        find.byKey(const ValueKey('dir-password-value-0')),
+        'dir-pass-123',
+      );
+      await tester.pump();
+      expect(
+        tester
+            .widget<TextField>(
+              find.byKey(const ValueKey('dir-password-value-0')),
+            )
+            .obscureText,
+        isTrue,
+      );
+
+      await tester.tap(find.text('保存'));
+      await tester.pumpAndSettle();
+
+      final saved = c.read(connectionsProvider).last;
+      expect(c.read(connectionDirPasswordsProvider)[saved.id], {
+        '/私密': 'dir-pass-123',
+      });
+
+      // Edit connection: prefills saved directory password and allows updating.
+      final connRow = find.byKey(ValueKey('conn ${saved.id.value}'));
+      final connMore = find.descendant(
+        of: connRow,
+        matching: find.byTooltip('更多'),
+      );
+      await tester.tap(connMore);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('编辑'));
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<TextField>(
+              find.byKey(const ValueKey('dir-password-path-0')),
+            )
+            .controller!
+            .text,
+        '/私密',
+      );
+      expect(
+        tester
+            .widget<TextField>(
+              find.byKey(const ValueKey('dir-password-value-0')),
+            )
+            .controller!
+            .text,
+        'dir-pass-123',
+      );
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+
+      // Copy connection preserves directory passwords under the new ID.
+      await tester.tap(connMore);
+      await tester.pumpAndSettle();
+      await tester.tap(find.textContaining('复制'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('field-名称')),
+        '复制 Alist',
+      );
+      await tester.tap(find.text('保存'));
+      await tester.pumpAndSettle();
+      final copied = c.read(connectionsProvider).last;
+      expect(copied.id, isNot(saved.id));
+      expect(c.read(connectionDirPasswordsProvider)[copied.id], {
+        '/私密': 'dir-pass-123',
+      });
+
+      // Delete & undo restores directory passwords too.
+      await tester.tap(connMore);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('删除'));
+      await tester.pumpAndSettle();
+      expect(c.read(connectionDirPasswordsProvider)[saved.id], isNull);
+
+      await tester.tap(find.text('撤销'));
+      await tester.pumpAndSettle();
+      expect(c.read(connectionDirPasswordsProvider)[saved.id], {
+        '/私密': 'dir-pass-123',
+      });
+    },
+  );
+
+  testWidgets('Alist directory passwords are forwarded to tester and lister', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    Map<String, String>? testedDirPasswords;
+    Map<String, String>? listedDirPasswords;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => TextButton(
+              onPressed: () => showConnectionDialog(
+                context,
+                tester: (cfg, pw, {dirPasswords = const {}}) async {
+                  testedDirPasswords = dirPasswords;
+                  return (status: ConnStatus.connected, detail: null);
+                },
+                openLister: (cfg, pw, {dirPasswords = const {}}) {
+                  listedDirPasswords = dirPasswords;
+                  return FolderPickerSession(
+                    list: (_) async => const [],
+                    close: () async {},
+                  );
+                },
+              ),
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const ValueKey('field-主机')), 'nas');
+    final addBtn = find.byKey(const ValueKey('add-dir-password'));
+    await tester.ensureVisible(addBtn);
+    await tester.tap(addBtn);
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('dir-password-path-0')),
+      '/dav/私密',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('dir-password-value-0')),
+      'secret42',
+    );
+    await tester.tap(find.text('测试连接'));
+    await tester.pumpAndSettle();
+    expect(testedDirPasswords, {'/私密': 'secret42'});
+
+    final browseBtn = find.text('浏览…').first;
+    await tester.ensureVisible(browseBtn);
+    await tester.tap(browseBtn);
+    await tester.pumpAndSettle();
+    expect(listedDirPasswords, {'/私密': 'secret42'});
+  });
 }
