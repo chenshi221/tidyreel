@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:shelf/shelf.dart';
@@ -248,6 +249,59 @@ void main() {
       expect(entries.single.path, '/sub/a.mkv');
       await be.close();
     });
+
+    test(
+      'readRange slices head, middle, EOF, and rejects missing/escape paths',
+      () async {
+        final root = Directory.systemTemp.createTempSync('tidyreel_range_');
+        addTearDown(() => root.deleteSync(recursive: true));
+        File('${root.path}/data.bin')
+            .writeAsBytesSync(List<int>.generate(20, (i) => i));
+
+        final be = LocalBackend(root.path);
+        expect(await be.readRange('/data.bin', 0, 5), [0, 1, 2, 3, 4]);
+        expect(await be.readRange('/data.bin', 7, 4), [7, 8, 9, 10]);
+        expect(await be.readRange('/data.bin', 17, 10), [17, 18, 19]);
+        expect(await be.readRange('/data.bin', 20, 5), isEmpty);
+        expect(await be.readRange('/data.bin', 50, 5), isEmpty);
+        expect(await be.readRange('/data.bin', 0, 0), isEmpty);
+        expect(await be.readRange('/data.bin', -1, 4), isEmpty);
+        await expectLater(
+          be.readRange('/missing.bin', 0, 4),
+          throwsStorage(StorageErrorCode.notFound),
+        );
+        await expectLater(
+          be.readRange('/../escape.bin', 0, 4),
+          throwsStorage(StorageErrorCode.other),
+        );
+        await be.close();
+      },
+    );
+  });
+
+  group('Memory', () {
+    test(
+      'readRange slices head, middle, past EOF, and missing files',
+      () async {
+        final be = MemoryStorageBackend();
+        await be.write('/dir/data.bin', List<int>.generate(12, (i) => i + 10));
+
+        expect(await be.readRange('/dir/data.bin', 0, 4), [10, 11, 12, 13]);
+        expect(await be.readRange('/dir/data.bin', 5, 3), [15, 16, 17]);
+        expect(await be.readRange('/dir/data.bin', 10, 5), [20, 21]);
+        expect(await be.readRange('/dir/data.bin', 12, 4), isEmpty);
+        expect(await be.readRange('/dir/data.bin', 0, 0), isEmpty);
+        expect(await be.readRange('/dir/data.bin', -2, 4), isEmpty);
+        await expectLater(
+          be.readRange('/nope.bin', 0, 4),
+          throwsStorage(StorageErrorCode.notFound),
+        );
+        await expectLater(
+          be.readRange('/dir', 0, 4),
+          throwsStorage(StorageErrorCode.notFound),
+        );
+      },
+    );
   });
 
   group('Alist', () {
@@ -565,6 +619,153 @@ void main() {
       expect(mock.calls.where((c) => c == 'api/fs/rename'), isEmpty);
       await be.close();
     });
+
+    test('sends deepest matching directory password on list, get, and ping', () async {
+      final seenListPasswords = <String, String?>{};
+      final seenGetPasswords = <String, String?>{};
+
+      final server = await MockServer.start((Request r) async {
+        final body = jsonDecode(await r.readAsString()) as Map<String, dynamic>;
+        if (r.url.path == 'api/fs/list') {
+          seenListPasswords[body['path'] as String] =
+              body['password'] as String?;
+          return Response.ok(
+            '{"code":200,"message":"success","data":{"content":[],"total":0}}',
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        if (r.url.path == 'api/fs/get') {
+          seenGetPasswords[body['path'] as String] =
+              body['password'] as String?;
+          return Response.ok(
+            '{"code":200,"message":"success","data":{"name":"x","is_dir":true,"raw_url":""}}',
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return Response.notFound('');
+      });
+      addTearDown(server.close);
+
+      final be = createBackend(
+        cfg(ConnectionType.alist, server.url),
+        const Credentials(
+          token: 'tok',
+          dirPasswords: {
+            '/': 'root-pw',
+            '/私密': 'secret-1',
+            '/私密/深层': 'secret-2',
+          },
+        ),
+      );
+
+      await be.ping();
+      await be.list('/公开');
+      await be.list('/私密');
+      await be.list('/私密/深层/电影');
+      await be.exists('/私密/a.mkv');
+      await be.exists('/私密/深层/b.mkv');
+
+      expect(seenGetPasswords['/'], 'root-pw');
+      expect(seenListPasswords['/公开'], 'root-pw');
+      expect(seenListPasswords['/私密'], 'secret-1');
+      expect(seenListPasswords['/私密/深层/电影'], 'secret-2');
+      expect(seenGetPasswords['/私密/a.mkv'], 'secret-1');
+      expect(seenGetPasswords['/私密/深层/b.mkv'], 'secret-2');
+      await be.close();
+    });
+
+    test('readRange supports 206 Partial Content, forwards raw_url headers, handles 416 and 200 streaming cap', () async {
+      final payload = List<int>.generate(256, (i) => i);
+      var mode = '206';
+      String? seenRange;
+      String? seenCustomHeader;
+      String? seenGetPw;
+      var streamedChunks = 0;
+
+      final server = await MockServer.start((Request r) async {
+        if (r.url.path == 'api/fs/get') {
+          final body =
+              jsonDecode(await r.readAsString()) as Map<String, dynamic>;
+          seenGetPw = body['password'] as String?;
+          return Response.ok(
+            jsonEncode({
+              'code': 200,
+              'message': 'success',
+              'data': {
+                'name': 'movie.mkv',
+                'is_dir': false,
+                'raw_url': '/d/movie.mkv',
+                'header': {'X-Drive-Auth': 'drive-token'},
+              },
+            }),
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        if (r.url.path == 'd/movie.mkv') {
+          seenRange = r.headers['range'];
+          seenCustomHeader = r.headers['x-drive-auth'];
+          if (mode == '206') {
+            final m = RegExp(r'bytes=(\d+)-(\d+)').firstMatch(seenRange ?? '');
+            final start = int.parse(m![1]!);
+            final end = int.parse(m[2]!);
+            if (start >= payload.length) {
+              return Response(416);
+            }
+            final clampedEnd = end >= payload.length ? payload.length - 1 : end;
+            return Response(
+              206,
+              body: payload.sublist(start, clampedEnd + 1),
+              headers: {
+                'content-range': 'bytes $start-$clampedEnd/${payload.length}',
+              },
+            );
+          }
+          if (mode == '200-stream') {
+            streamedChunks = 0;
+            // Simulate a huge multi-megabyte stream when server ignores Range.
+            Stream<List<int>> huge() async* {
+              for (var idx = 0; idx < 500; idx++) {
+                streamedChunks++;
+                yield List<int>.generate(4096, (j) => (idx * 4096 + j) & 0xFF);
+                await Future<void>.delayed(Duration.zero);
+              }
+            }
+
+            return Response.ok(huge());
+          }
+        }
+        return Response.notFound('');
+      });
+      addTearDown(server.close);
+
+      final be = createBackend(
+        cfg(ConnectionType.alist, server.url),
+        const Credentials(token: 'tok', dirPasswords: {'/vault': 'vp'}),
+      ) as RangeReadableBackend;
+
+      // 206 Partial Content
+      final part = await be.readRange('/vault/movie.mkv', 10, 5);
+      expect(part, [10, 11, 12, 13, 14]);
+      expect(seenRange, 'bytes=10-14');
+      expect(seenCustomHeader, 'drive-token');
+      expect(seenGetPw, 'vp');
+
+      // 416 Past EOF returns empty list cleanly
+      expect(await be.readRange('/vault/movie.mkv', 999, 10), isEmpty);
+
+      // 200 OK streaming cap slices safely without buffering entire multi-MB stream
+      mode = '200-stream';
+      final sliced = await be.readRange('/vault/movie.mkv', 100, 8);
+      expect(sliced, [100, 101, 102, 103, 104, 105, 106, 107]);
+      expect(streamedChunks, lessThan(50));
+
+      // 200 OK with huge start offset refuses to download gigabytes
+      await expectLater(
+        be.readRange('/vault/movie.mkv', 1024 * 1024, 16),
+        throwsStorage(StorageErrorCode.other),
+      );
+      await (be as StorageBackend).close();
+    });
   });
 
   group('WebDAV', () {
@@ -835,6 +1036,79 @@ void main() {
       expect(entries.single.size, 99);
       expect(entries.single.name, 'Show #1 &lt; &gt; &#999999999;.mkv');
       await be.close();
+    });
+
+    test('readRange supports 206, 416, cross-origin redirect stripping auth, and 200 streaming cap', () async {
+      final payload = List<int>.generate(256, (i) => i);
+      var mode = '206';
+      String? cdnAuth;
+      String? cdnRange;
+      var streamedChunks = 0;
+
+      final cdn = await MockServer.start((Request r) {
+        cdnAuth = r.headers['authorization'];
+        cdnRange = r.headers['range'];
+        return Response(206, body: payload.sublist(5, 9));
+      });
+      addTearDown(cdn.close);
+
+      final server = await MockServer.start((Request r) {
+        final range = r.headers['range'];
+        if (r.requestedUri.path == '/dav/redir.mkv') {
+          return Response(302, headers: {'location': '${cdn.url}/blob'});
+        }
+        if (r.requestedUri.path != '/dav/movie.mkv') {
+          return Response.notFound('');
+        }
+        if (mode == '206') {
+          final m = RegExp(r'bytes=(\d+)-(\d+)').firstMatch(range ?? '');
+          final start = int.parse(m![1]!);
+          final end = int.parse(m[2]!);
+          if (start >= payload.length) return Response(416);
+          final clampedEnd = end >= payload.length ? payload.length - 1 : end;
+          return Response(206, body: payload.sublist(start, clampedEnd + 1));
+        }
+        streamedChunks = 0;
+        Stream<List<int>> huge() async* {
+          for (var idx = 0; idx < 500; idx++) {
+            streamedChunks++;
+            yield List<int>.generate(4096, (j) => (idx * 4096 + j) & 0xFF);
+            await Future<void>.delayed(Duration.zero);
+          }
+        }
+
+        return Response.ok(huge());
+      });
+      addTearDown(server.close);
+
+      final be = createBackend(
+        cfg(ConnectionType.webdav, '${server.url}/dav'),
+        const Credentials(password: 'pw'),
+      ) as RangeReadableBackend;
+
+      expect(await be.readRange('/movie.mkv', 20, 6), [20, 21, 22, 23, 24, 25]);
+      expect(await be.readRange('/movie.mkv', 500, 8), isEmpty);
+      await expectLater(
+        be.readRange('/missing.mkv', 0, 8),
+        throwsStorage(StorageErrorCode.notFound),
+      );
+
+      // Cross-origin redirect strips Authorization while keeping Range
+      expect(await be.readRange('/redir.mkv', 5, 4), [5, 6, 7, 8]);
+      expect(cdnAuth, isNull);
+      expect(cdnRange, 'bytes=5-8');
+
+      // HTTP 200 streaming cap
+      mode = '200-stream';
+      expect(await be.readRange('/movie.mkv', 50, 6), [50, 51, 52, 53, 54, 55]);
+      expect(streamedChunks, lessThan(50));
+
+      // HTTP 200 huge start refuses full download
+      await expectLater(
+        be.readRange('/movie.mkv', 1024 * 1024, 16),
+        throwsStorage(StorageErrorCode.other),
+      );
+      await (be as StorageBackend).close();
     });
   });
 }

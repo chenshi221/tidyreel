@@ -180,4 +180,48 @@ void main() {
     expect(capped.isCached('/d3'), isTrue);
     expect(capped.isCached('/d4'), isTrue);
   });
+
+  test('readRange delegates to inner RangeReadableBackend and rejects non-range inner', () async {
+    await inner.write('/a/video.mkv', [0, 1, 2, 3, 4, 5]);
+    expect(await be.readRange('/a/video.mkv', 2, 3), [2, 3, 4]);
+    expect(await be.readRange('/a/video.mkv', 10, 4), isEmpty);
+
+    final wrapped = CachedBackend(_NonRangeInner());
+    await expectLater(
+      wrapped.readRange('/a/video.mkv', 0, 4),
+      throwsA(
+        isA<StorageException>().having(
+          (e) => e.code,
+          'code',
+          StorageErrorCode.other,
+        ),
+      ),
+    );
+  });
+}
+
+class _NonRangeInner implements StorageBackend {
+  @override
+  Future<List<RemoteEntry>> list(String dir, {bool refresh = false}) async =>
+      const [];
+  @override
+  Future<void> mkdirs(String dir) async {}
+  @override
+  Future<void> rename(String path, String newName) async {}
+  @override
+  Future<void> renameMany(String dir, Map<String, String> names) async {}
+  @override
+  Future<void> move(String srcDir, String dstDir, List<String> names) async {}
+  @override
+  Future<void> remove(String dir, List<String> names) async {}
+  @override
+  Future<bool> exists(String path) async => false;
+  @override
+  Future<List<int>> read(String path) async => const [];
+  @override
+  Future<void> write(String path, List<int> bytes) async {}
+  @override
+  Future<void> ping() async {}
+  @override
+  Future<void> close() async {}
 }

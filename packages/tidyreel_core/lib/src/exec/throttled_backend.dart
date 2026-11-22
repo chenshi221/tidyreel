@@ -12,32 +12,46 @@ typedef Delay = Future<void> Function(Duration d);
 /// Wraps a backend with PLAN §4.3 rule 5: at most one request start per
 /// [minInterval] (200 ms = 5 req/s) and 3 retries (1s/2s/4s) on rate-limit,
 /// network and busy (file in use) errors.
-class ThrottledBackend implements StorageBackend {
+class ThrottledBackend implements StorageBackend, RangeReadableBackend {
   final StorageBackend inner;
   final Duration minInterval;
+
+  /// Optional live provider overriding [minInterval] on every request so
+  /// runtime settings changes take effect immediately.
+  final Duration Function()? minIntervalProvider;
   final List<Duration> backoff;
   final Delay delay;
-  DateTime _nextSlot = DateTime.fromMillisecondsSinceEpoch(0);
+  final DateTime Function() now;
+  DateTime _lastSlot = DateTime.fromMillisecondsSinceEpoch(0);
 
   ThrottledBackend(
     this.inner, {
     this.minInterval = const Duration(milliseconds: 200),
+    this.minIntervalProvider,
     this.backoff = const [
       Duration(seconds: 1),
       Duration(seconds: 2),
       Duration(seconds: 4),
     ],
     this.delay = _realDelay,
+    this.now = DateTime.now,
   });
 
   static Future<void> _realDelay(Duration d) => Future<void>.delayed(d);
 
+  Duration get _effectiveMinInterval {
+    final d = minIntervalProvider?.call() ?? minInterval;
+    return d.isNegative ? Duration.zero : d;
+  }
+
   Future<void> _slot() async {
-    if (minInterval == Duration.zero) return;
-    final now = DateTime.now();
-    final at = _nextSlot.isAfter(now) ? _nextSlot : now;
-    _nextSlot = at.add(minInterval);
-    final wait = at.difference(now);
+    final interval = _effectiveMinInterval;
+    if (interval == Duration.zero) return;
+    final current = now();
+    final nextAllowed = _lastSlot.add(interval);
+    final at = nextAllowed.isAfter(current) ? nextAllowed : current;
+    _lastSlot = at;
+    final wait = at.difference(current);
     if (wait > Duration.zero) await delay(wait);
   }
 
@@ -106,6 +120,16 @@ class ThrottledBackend implements StorageBackend {
 
   @override
   Future<List<int>> read(String path) => _call(() => inner.read(path));
+
+  @override
+  Future<List<int>> readRange(String path, int start, int length) {
+    if (inner case final RangeReadableBackend range) {
+      return _call(() => range.readRange(path, start, length));
+    }
+    return Future.error(
+      const StorageException(StorageErrorCode.other, '不支持分段读取'),
+    );
+  }
 
   @override
   Future<void> write(String path, List<int> bytes) =>

@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show HttpDate;
+import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:path/path.dart' as p;
@@ -14,7 +16,7 @@ import 'storage_backend.dart';
 /// `webdav_client` was not used: it surfaces errors as `DioError` without status
 /// codes (so notFound / alreadyExists can't be told apart) and its MOVE retries
 /// blindly on 409.
-class WebDAVBackend implements StorageBackend {
+class WebDAVBackend implements StorageBackend, RangeReadableBackend {
   final Uri _base;
   final String? _authHeader;
   final Dio _dio;
@@ -44,6 +46,7 @@ class WebDAVBackend implements StorageBackend {
       '<d:getcontentlength/><d:getlastmodified/></d:prop></d:propfind>';
 
   static const _redirects = {301, 302, 303, 307, 308};
+  static const _maxUnrangedSkip = 512 * 1024;
 
   List<String> _segs(String path) =>
       path.split('/').where((s) => s.isNotEmpty).toList();
@@ -281,6 +284,78 @@ class WebDAVBackend implements StorageBackend {
     throw _fail(r, path);
   }
 
+  static Future<void> _discardStream(ResponseBody? body) async {
+    if (body == null) return;
+    try {
+      await body.stream.listen((_) {}).cancel();
+    } on Object {
+      // Ignore cleanup errors on aborted streams.
+    }
+  }
+
+  static Future<List<int>> _readBoundedStream(
+    Stream<Uint8List> stream, {
+    required int skip,
+    required int take,
+  }) {
+    final builder = BytesBuilder(copy: false);
+    var remainingSkip = skip;
+    var remainingTake = take;
+    final done = Completer<List<int>>();
+    late StreamSubscription<Uint8List> sub;
+    var stopping = false;
+
+    sub = stream.listen(
+      (chunk) {
+        if (stopping || done.isCompleted) return;
+        var offset = 0;
+        if (remainingSkip > 0) {
+          if (chunk.length <= remainingSkip) {
+            remainingSkip -= chunk.length;
+            return;
+          }
+          offset = remainingSkip;
+          remainingSkip = 0;
+        }
+        final avail = chunk.length - offset;
+        if (avail <= 0) return;
+        if (avail >= remainingTake) {
+          builder.add(
+            offset == 0 && remainingTake == chunk.length
+                ? chunk
+                : Uint8List.sublistView(chunk, offset, offset + remainingTake),
+          );
+          remainingTake = 0;
+          stopping = true;
+          sub.cancel().then<void>(
+            (_) {
+              if (!done.isCompleted) done.complete(builder.takeBytes());
+            },
+            onError: (_) {
+              if (!done.isCompleted) done.complete(builder.takeBytes());
+            },
+          );
+        } else {
+          builder.add(
+            offset == 0 ? chunk : Uint8List.sublistView(chunk, offset),
+          );
+          remainingTake -= avail;
+        }
+      },
+      onError: (Object e, StackTrace st) {
+        if (!stopping && !done.isCompleted) {
+          done.completeError(e, st);
+        }
+      },
+      onDone: () {
+        if (!done.isCompleted) done.complete(builder.takeBytes());
+      },
+      cancelOnError: true,
+    );
+
+    return done.future;
+  }
+
   @override
   Future<List<int>> read(String path) async {
     var uri = _uri(path);
@@ -307,6 +382,74 @@ class WebDAVBackend implements StorageBackend {
       throw StorageException(
         StorageErrorCode.network,
         'WebDAV 读取 $path 失败：${_dioMsg(e)}',
+      );
+    }
+  }
+
+  @override
+  Future<List<int>> readRange(String path, int start, int length) async {
+    if (start < 0 || length <= 0) return const [];
+    var uri = _uri(path);
+    final rangeHeader = 'bytes=$start-${start + length - 1}';
+    try {
+      for (var hop = 0; ; hop++) {
+        final sendAuth = _authHeader != null && _sameOrigin(_base, uri);
+        final r = await _dio.getUri<ResponseBody>(
+          uri,
+          options: Options(
+            responseType: ResponseType.stream,
+            followRedirects: false,
+            headers: {
+              if (sendAuth) 'Authorization': _authHeader,
+              'Range': rangeHeader,
+            },
+          ),
+        );
+        final body = r.data;
+        final location = r.headers.value('location');
+        if (hop < 5 && _redirects.contains(r.statusCode) && location != null) {
+          await _discardStream(body);
+          uri = uri.resolve(location);
+          continue;
+        }
+        final status = r.statusCode ?? 0;
+        if (status == 416) {
+          await _discardStream(body);
+          return const [];
+        }
+        if (status == 206) {
+          if (body == null) return const [];
+          return await _readBoundedStream(body.stream, skip: 0, take: length);
+        }
+        if (status == 200) {
+          if (start > _maxUnrangedSkip) {
+            await _discardStream(body);
+            throw StorageException(
+              StorageErrorCode.other,
+              'WebDAV 服务器不支持分段读取（$path）：HTTP 200',
+            );
+          }
+          if (body == null) return const [];
+          return await _readBoundedStream(
+            body.stream,
+            skip: start,
+            take: length,
+          );
+        }
+        await _discardStream(body);
+        throw _fail(r, path);
+      }
+    } on StorageException {
+      rethrow;
+    } on DioException catch (e) {
+      throw StorageException(
+        StorageErrorCode.network,
+        'WebDAV 分段读取 $path 失败：${_dioMsg(e)}',
+      );
+    } on Object catch (e) {
+      throw StorageException(
+        StorageErrorCode.network,
+        'WebDAV 分段读取 $path 失败：$e',
       );
     }
   }
