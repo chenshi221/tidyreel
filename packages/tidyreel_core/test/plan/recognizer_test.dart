@@ -324,6 +324,379 @@ void main() {
       expect(meta.inceptionCalls, 2);
     });
   });
+
+  group('v1.0 recognizer upgrades', () {
+    test(
+      'detects BDMV and VIDEO_TS disc units from dir markers and nested files',
+      () async {
+        // 1. Dir-marker entries (as produced by DefaultTaskManager._listAll).
+        final fromMarkers =
+            await AnchorRecognizer(
+              const RuleBasedParser(),
+              FakeMetadataProvider(),
+            ).recognize(
+              conn,
+              ['/dl'],
+              const [
+                RemoteEntry(
+                  path: '/dl/Inception.2010.BluRay',
+                  name: 'Inception.2010.BluRay',
+                  isDir: true,
+                ),
+                RemoteEntry(
+                  path: '/dl/Inception.2010.BluRay/BDMV',
+                  name: 'BDMV',
+                  isDir: true,
+                ),
+              ],
+            );
+        expect(fromMarkers.groups, hasLength(1));
+        final g1 = fromMarkers.groups.single;
+        expect(g1.kind, MediaKind.movie);
+        expect(g1.match?.tmdbId, Demo.inception.tmdbId);
+        expect(g1.rootDir, '/dl/Inception.2010.BluRay');
+        expect(g1.files, hasLength(1));
+        expect(g1.files.single.isDiscDir, isTrue);
+        expect(g1.files.single.parsed?.isDisc, isTrue);
+        expect(g1.files.single.parsed?.kind, MediaKind.movie);
+        expect(g1.files.single.path, '/dl/Inception.2010.BluRay');
+
+        // 2. Full nested file listing (VIDEO_TS + BDMV streams ignored & sizes summed).
+        final fromStreams =
+            await AnchorRecognizer(
+              const RuleBasedParser(),
+              FakeMetadataProvider(),
+            ).recognize(
+              conn,
+              ['/dl'],
+              const [
+                RemoteEntry(
+                  path: '/dl/Inception 2010/VIDEO_TS/VTS_01_1.VOB',
+                  name: 'VTS_01_1.VOB',
+                  isDir: false,
+                  size: 4000,
+                ),
+                RemoteEntry(
+                  path: '/dl/Inception 2010/VIDEO_TS/VIDEO_TS.IFO',
+                  name: 'VIDEO_TS.IFO',
+                  isDir: false,
+                  size: 200,
+                ),
+              ],
+            );
+        expect(fromStreams.groups, hasLength(1));
+        final g2 = fromStreams.groups.single;
+        expect(g2.files, hasLength(1));
+        expect(g2.files.single.isDiscDir, isTrue);
+        expect(g2.files.single.size, 4200);
+        expect(g2.files.single.path, '/dl/Inception 2010');
+        expect(fromStreams.unassigned, isEmpty);
+      },
+    );
+
+    test('directory context inference handles bare 4-digit anime stems and prefixed sequences', () async {
+      final r =
+          await AnchorRecognizer(
+            const RuleBasedParser(),
+            FakeMetadataProvider(),
+          ).recognize(
+            conn,
+            ['/dl'],
+            entriesOf([
+              '/dl/海贼王/1078.mkv',
+              '/dl/海贼王/1079.mkv',
+              '/dl/海贼王/1080.mkv',
+            ]),
+          );
+      final g = r.groups.single;
+      expect(g.kind, MediaKind.episode);
+      expect(g.match?.tmdbId, Demo.onePiece.tmdbId);
+      expect(g.files.map((f) => f.parsed?.absolute), [1078, 1079, 1080]);
+      expect(g.files.every((f) => f.parsed?.title == '海贼王'), isTrue);
+      expect(g.files.every((f) => (f.parsed?.confidence ?? 0) >= 0.75), isTrue);
+
+      // Prefixed low-confidence files like OP_01 / OP_02 infer sequential episodes.
+      final prefixed =
+          await AnchorRecognizer(
+            const RuleBasedParser(),
+            FakeMetadataProvider(),
+          ).recognize(conn, [
+            '/dl',
+          ], entriesOf(['/dl/异兽魔都/OP_01.mkv', '/dl/异兽魔都/OP_02.mkv']));
+      final pg = prefixed.groups.single;
+      expect(pg.kind, MediaKind.episode);
+      expect(pg.files.map((f) => f.parsed?.episodes), [
+        [1],
+        [2],
+      ]);
+      expect(
+        pg.files.every((f) => (f.parsed?.confidence ?? 0) >= 0.75),
+        isTrue,
+      );
+
+      // Unrelated movie years are NOT turned into episodes.
+      final years =
+          await AnchorRecognizer(
+            const RuleBasedParser(),
+            FakeMetadataProvider(),
+          ).recognize(conn, [
+            '/dl',
+          ], entriesOf(['/dl/Film.2019.mkv', '/dl/Film.2020.mkv']));
+      expect(years.groups.every((g) => g.kind == MediaKind.movie), isTrue);
+    });
+
+    test('ExternalIdLookup matches {tmdb-...} and {imdb-...} directly without text search', () async {
+      final meta = _ExternalOnlyMeta();
+      final r = await AnchorRecognizer(const RuleBasedParser(), meta).recognize(
+        conn,
+        ['/dl'],
+        entriesOf([
+          '/dl/Random Name {tmdb-27205}/video.mkv',
+          '/dl/Another Show {imdb-tt0108778}/S01E01.mkv',
+        ]),
+      );
+      expect(meta.searchCalls, 0);
+      final byDir = {for (final g in r.groups) g.rootDir: g};
+      final movie = byDir['/dl/Random Name {tmdb-27205}']!;
+      expect(movie.match?.tmdbId, Demo.inception.tmdbId);
+      expect(movie.matchScore, 1.0);
+      expect(movie.kind, MediaKind.movie);
+
+      final tv = byDir['/dl/Another Show {imdb-tt0108778}']!;
+      expect(tv.match?.tmdbId, Demo.friends.tmdbId);
+      expect(tv.matchScore, 1.0);
+      expect(tv.kind, MediaKind.episode);
+      expect(tv.show, isNotNull);
+    });
+
+    test('cross-kind fallback recovers misclassified lone movie or show in mixed mode', () async {
+      final meta = _CrossKindMeta();
+      // Movie with a stray number guessed as episode (no explicit SxxExx) -> falls back to movie.
+      final movieScan = await AnchorRecognizer(
+        const _StrayNumberMovieParser(),
+        meta,
+      ).recognize(conn, ['/dl'], entriesOf(['/dl/Blade Runner 2049.mkv']));
+      expect(movieScan.groups.single.kind, MediaKind.movie);
+      expect(movieScan.groups.single.match?.title, '银翼杀手2049');
+      expect(movieScan.groups.single.matchScore, greaterThanOrEqualTo(0.72));
+
+      // Single video guessed as movie -> falls back to TV when strong TV hit exists.
+      final tvScan = await AnchorRecognizer(
+        const RuleBasedParser(),
+        meta,
+      ).recognize(conn, ['/dl'], entriesOf(['/dl/Friends.1994.mkv']));
+      expect(tvScan.groups.single.kind, MediaKind.episode);
+      expect(tvScan.groups.single.match?.tmdbId, Demo.friends.tmdbId);
+      expect(tvScan.groups.single.show, isNotNull);
+
+      // Explicit S01E01 never falls back to movie.
+      final strictSxe = await AnchorRecognizer(const RuleBasedParser(), meta)
+          .recognize(conn, [
+            '/dl',
+          ], entriesOf(['/dl/Blade Runner 2049 S01E01.mkv']));
+      expect(strictSxe.groups.single.match, isNull);
+    });
+
+    test('suggests splitSequential for multi-season show with continuous absolute episodes', () async {
+      // Demo.dorohedoroShow has S1=12, S2=11 (total=23).
+      final absScan =
+          await AnchorRecognizer(
+            const RuleBasedParser(),
+            FakeMetadataProvider(),
+          ).recognize(
+            conn,
+            ['/dl'],
+            entriesOf([
+              '/dl/异兽魔都/[Sub] Dorohedoro - 01 [1080p].mkv',
+              '/dl/异兽魔都/[Sub] Dorohedoro - 15 [1080p].mkv',
+              '/dl/异兽魔都/[Sub] Dorohedoro - 23 [1080p].mkv',
+            ]),
+          );
+      final g = absScan.groups.single;
+      expect(g.suggestedStrategy, SeasonStrategy.splitSequential);
+      expect(g.suggestedStrategyReason, contains('23'));
+      expect(g.suggestedStrategyReason, contains('12'));
+
+      // Properly seasoned S01 + S02 gets no strategy suggestion.
+      final seasoned =
+          await AnchorRecognizer(
+            const TestParser(),
+            FakeMetadataProvider(),
+          ).recognize(
+            conn,
+            ['/下载'],
+            entriesOf([
+              '$show/Season 1/$ep1.mkv',
+              '$show/Season 2/[Sub] Dorohedoro S02E01 [1080p].mkv',
+            ]),
+          );
+      expect(seasoned.groups.single.suggestedStrategy, isNull);
+      expect(seasoned.groups.single.suggestedStrategyReason, isNull);
+    });
+
+    test(
+      'MediaProbe fills resolution/extraInfo and applies duration heuristics',
+      () async {
+        final probe = _FakeProbe({
+          '/dl/Inception.2010.mkv': const MediaProbeInfo(
+            width: 3840,
+            height: 2160,
+            videoCodec: 'HEVC',
+            hdr: 'DV',
+            audioCodec: 'Atmos',
+            duration: Duration(minutes: 148),
+          ),
+          '/dl/ShortAd.2020.mkv': const MediaProbeInfo(
+            width: 1920,
+            height: 1080,
+            duration: Duration(seconds: 30),
+          ),
+          '/dl/MysteryFilm.mkv': const MediaProbeInfo(
+            width: 1920,
+            height: 1080,
+            duration: Duration(minutes: 95),
+          ),
+        });
+        final be = MemoryStorageBackend({
+          '/dl/Inception.2010.mkv': 1000,
+          '/dl/ShortAd.2020.mkv': 100,
+          '/dl/MysteryFilm.mkv': 900,
+        });
+
+        final r =
+            await AnchorRecognizer(
+              const RuleBasedParser(),
+              FakeMetadataProvider(),
+              mediaProbe: probe,
+              probeMedia: () => true,
+            ).recognize(
+              conn,
+              ['/dl'],
+              entriesOf([
+                '/dl/Inception.2010.mkv',
+                '/dl/ShortAd.2020.mkv',
+                '/dl/MysteryFilm.mkv',
+              ]),
+              backend: be,
+            );
+        final byPath = {
+          for (final g in r.groups)
+            for (final f in g.files) f.path: f,
+        };
+        final inc = byPath['/dl/Inception.2010.mkv']!;
+        expect(inc.parsed?.resolution, '2160p');
+        expect(inc.parsed?.extraInfo, '2160p.DV.Atmos');
+        expect(inc.parsed?.probe?.duration, const Duration(minutes: 148));
+
+        final shortAd = byPath['/dl/ShortAd.2020.mkv']!;
+        expect(shortAd.parsed?.confidence, lessThanOrEqualTo(0.35));
+
+        final mystery = byPath['/dl/MysteryFilm.mkv']!;
+        expect(mystery.parsed?.kind, MediaKind.movie);
+        expect(mystery.parsed?.confidence, greaterThan(0.25));
+
+        // Disabled when probeMedia returns false.
+        probe.calls.clear();
+        await AnchorRecognizer(
+          const RuleBasedParser(),
+          FakeMetadataProvider(),
+          mediaProbe: probe,
+          probeMedia: () => false,
+        ).recognize(
+          conn,
+          ['/dl'],
+          entriesOf(['/dl/Inception.2010.mkv']),
+          backend: be,
+        );
+        expect(probe.calls, isEmpty);
+      },
+    );
+  });
+}
+
+class _FakeProbe implements MediaProbe {
+  final Map<String, MediaProbeInfo> results;
+  final calls = <String>[];
+  _FakeProbe(this.results);
+
+  @override
+  Future<MediaProbeInfo?> probe(
+    StorageBackend backend,
+    String path, {
+    int? fileSize,
+  }) async {
+    calls.add(path);
+    return results[path];
+  }
+}
+
+class _ExternalOnlyMeta extends FakeMetadataProvider {
+  var searchCalls = 0;
+
+  @override
+  Future<List<Candidate>> search(
+    String query, {
+    MediaKind? kind,
+    int? year,
+  }) async {
+    searchCalls++;
+    return const [];
+  }
+
+  @override
+  Future<Candidate?> findByExternalId(
+    String source,
+    String id, {
+    MediaKind? kind,
+  }) async {
+    if (source == 'imdb' && id == 'tt0108778') {
+      return kind == MediaKind.movie ? null : Demo.friends;
+    }
+    return super.findByExternalId(source, id, kind: kind);
+  }
+}
+
+class _CrossKindMeta extends FakeMetadataProvider {
+  static const _blade = Candidate(
+    tmdbId: 335984,
+    kind: MediaKind.movie,
+    title: '银翼杀手2049',
+    englishTitle: 'Blade Runner 2049',
+    year: 2017,
+  );
+
+  @override
+  Future<List<Candidate>> search(
+    String query, {
+    MediaKind? kind,
+    int? year,
+  }) async {
+    if (kind == MediaKind.movie &&
+        query.toLowerCase().contains('blade runner')) {
+      return const [_blade];
+    }
+    if (kind == MediaKind.episode && query.toLowerCase().contains('friends')) {
+      return const [Demo.friends];
+    }
+    return const [];
+  }
+}
+
+class _StrayNumberMovieParser extends RuleBasedParser {
+  const _StrayNumberMovieParser();
+
+  @override
+  ParsedName parse(String fileName, {List<String> parentDirs = const []}) {
+    if (fileName.contains('Blade Runner 2049')) {
+      return const ParsedName(
+        title: 'Blade Runner 2049',
+        absolute: 2049,
+        kind: MediaKind.episode,
+        confidence: 0.6,
+      );
+    }
+    return super.parse(fileName, parentDirs: parentDirs);
+  }
 }
 
 class _FailingAlt implements AltTitleSource {

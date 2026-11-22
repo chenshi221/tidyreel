@@ -176,7 +176,9 @@ class _PlanBuilder {
       await _group(g, d, match);
       processed.add(g);
     }
-    _junk(processed, skipped);
+    if (!opts.scrapeOnly) {
+      _junk(processed, skipped);
+    }
 
     final mkdirOps =
         [
@@ -310,7 +312,7 @@ class _PlanBuilder {
         items.add(it);
         continue;
       }
-      if (!isTv) {
+      if (!isTv || v.isDiscDir) {
         items.add(it);
         if (lowParse) it.warnings.add('识别置信度较低');
         continue;
@@ -484,17 +486,44 @@ class _PlanBuilder {
     }
 
     // --- episode titles
+    final wantScrape = opts.scrape || opts.scrapeOnly;
     final wantTitles =
         isTv &&
         (naming.episodeTitle ||
             (naming.customTemplate?.contains('episode_title') ?? false) ||
-            (opts.scrape && epGroup != null));
+            (wantScrape && epGroup != null));
     final titles = wantTitles
         ? await _episodeTitles(match.tmdbId, epGroup, d.strategy, tmdbCounts, [
             for (final it in items) ?it.ref,
             for (final c in companions) ?c.ref,
           ])
         : const <EpisodeRef, String>{};
+
+    // --- 仅刮削补全: write .nfo and artwork beside existing files; zero moves/mkdirs/deletes.
+    if (opts.scrapeOnly) {
+      for (final it in items) {
+        if (it.file.isDiscDir) {
+          it.dstDir = it.file.path;
+          it.outName = 'movie';
+        } else {
+          it.dstDir = dirOf(it.file.path);
+          it.outName = it.file.name;
+        }
+      }
+      await _scrape(
+        g,
+        match,
+        show,
+        epGroup,
+        d.strategy,
+        tmdbCounts,
+        titles,
+        items,
+        g.rootDir,
+        (dir) => dir,
+      );
+      return;
+    }
 
     // --- folders
     final groupSelected =
@@ -528,6 +557,78 @@ class _PlanBuilder {
         naming.rewrites,
       ),
     );
+
+    // --- BDMV / VIDEO_TS disc units: relocate the folder as an atomic unit,
+    // never touching inner stream files and never adding a video extension.
+    final discItems = [
+      for (final it in items)
+        if (it.file.isDiscDir) it,
+    ];
+    if (discItems.isNotEmpty && discItems.length == items.length) {
+      String? libTypeBase;
+      if (opts.mode == OrganizeMode.moveToLibrary) {
+        final lib = opts.libraryRoot;
+        if (lib == null) {
+          throw ArgumentError('moveToLibrary needs PlanOptions.libraryRoot');
+        }
+        final typeDir = isTv ? opts.naming.tvDir : opts.naming.movieDir;
+        var base = lib == '/' ? '' : lib.replaceFirst(RegExp(r'/+$'), '');
+        if (typeDir.isNotEmpty) {
+          base = '$base/${sanitizeName(typeDir)}';
+          _mkdir(base, g.id, selected: groupSelected);
+        }
+        libTypeBase = base.isEmpty ? '/' : base;
+      }
+      for (final it in discItems) {
+        it.dstDir = opts.mode == OrganizeMode.inPlace
+            ? dirOf(it.file.path)
+            : libTypeBase!;
+        it.newBase = folderName;
+      }
+      _disambiguateVersions(discItems, isDisc: true);
+      for (final it in discItems) {
+        final part = it.file.parsed?.partLabel?.trim();
+        if (part != null && part.isNotEmpty) {
+          it.newBase = '${it.newBase}-${sanitizeName(part)}';
+        }
+        final discDst = joinPath(it.dstDir, it.newBase);
+        if (it.file.path != discDst) {
+          renamedRoots[it.file.path] = discDst;
+        }
+        if (it.selected && it.file.path != discDst) {
+          _movedSrcs.add(it.file.path);
+        }
+        folderOps.add(
+          RenameOp(
+            id: OpId('f-${stableHash(it.file.path)}'),
+            kind: OpKind.relocate,
+            phase: ExecPhase.folders,
+            src: it.file.path,
+            dst: discDst,
+            group: g.id,
+            selected: it.selected,
+            warning: it.warnings.isNotEmpty ? it.warnings.join('；') : null,
+          ),
+        );
+        it.dstDir = discDst;
+        it.outName = 'movie';
+      }
+      if (wantScrape) {
+        await _scrape(
+          g,
+          match,
+          show,
+          epGroup,
+          d.strategy,
+          tmdbCounts,
+          titles,
+          discItems,
+          discItems.first.dstDir,
+          (dir) => dir,
+        );
+      }
+      return;
+    }
     String curBase;
     // Where the show folder ends up, and whether another group / the disk
     // already has it: then this group merges in unless told 分开保留.
@@ -697,6 +798,16 @@ class _PlanBuilder {
       it.dstDir = rendered.dstDir;
       it.newBase = rendered.newBase;
     }
+    _disambiguateVersions(items);
+    for (final it in items) {
+      if (it.extra || it.file.isDiscDir) continue;
+      final part = it.file.parsed?.partLabel?.trim();
+      if (part != null && part.isNotEmpty) {
+        final ext = extOf(it.file.name);
+        it.newBase =
+            '${_stripTrailingExt(it.newBase, ext)}-${sanitizeName(part)}';
+      }
+    }
     if (isTv && opts.mode == OrganizeMode.inPlace) {
       _reuseSeasonFolders(g, items, curBase);
     }
@@ -719,24 +830,98 @@ class _PlanBuilder {
     final seasonByDst = {
       for (final e in renamedSeasons.entries) e.value: e.key,
     };
+    final renderedCompanion = <_Companion, ({String dstDir, String newBase})>{};
+    final subBaseCounts = <String, int>{};
+    for (final c in companions) {
+      final f = c.file;
+      final followed = c.followed;
+      String dstDir;
+      String base;
+      if (followed != null) {
+        dstDir = followed.dstDir;
+        base = followed.newBase;
+      } else if (c.extra) {
+        dstDir = joinPath(curBase, 'Extras');
+        base = stem(f.name);
+      } else {
+        final rendered = renderName(
+          file: f,
+          ref: c.ref,
+          manual: true,
+          metaSource: c.fallbackVideo,
+        );
+        dstDir = seasonByDst[rendered.dstDir] ?? rendered.dstDir;
+        base = rendered.newBase;
+        renderedCompanion[c] = (dstDir: dstDir, newBase: base);
+      }
+      if (f.role == FileRole.subtitle && !(followed?.extra ?? c.extra)) {
+        final ext = extOf(f.name);
+        final lang = langFromRemainder(c.remainder) ?? _parsedLang(f);
+        final flags = _mergedSubFlags(f, c.remainder);
+        final std = _canonicalSubFlags(flags);
+        final cleanBase = _stripTrailingExt(
+          base,
+          extOf(followed?.file.name ?? ''),
+        );
+        final baseKey =
+            '$dstDir/$cleanBase${lang == null ? '' : '.$lang'}${std.isEmpty ? '' : '.${std.join('.')}'}.$ext'
+                .toLowerCase();
+        subBaseCounts[baseKey] = (subBaseCounts[baseKey] ?? 0) + 1;
+      }
+    }
+
     final subTargets = <String, int>{};
+    String formatSubName({
+      required ScanFile f,
+      required String remainder,
+      required String dstDir,
+      required String base,
+      required String ext,
+    }) {
+      final lang = langFromRemainder(remainder) ?? _parsedLang(f);
+      final flags = _mergedSubFlags(f, remainder);
+      final std = _canonicalSubFlags(flags);
+      final baseKey =
+          '$dstDir/$base${lang == null ? '' : '.$lang'}${std.isEmpty ? '' : '.${std.join('.')}'}.$ext'
+              .toLowerCase();
+      final addBilingual =
+          flags.contains('bilingual') && (subBaseCounts[baseKey] ?? 0) > 1;
+      final suffixParts = <String>[
+        ?lang,
+        if (addBilingual) 'bilingual',
+        ...std,
+      ];
+      final prefix = suffixParts.isEmpty
+          ? base
+          : '$base.${suffixParts.join('.')}';
+      final key = '$dstDir/$prefix.$ext'.toLowerCase();
+      final n = (subTargets[key] ?? 0) + 1;
+      subTargets[key] = n;
+      return n == 1 ? '$prefix.$ext' : '$prefix.$n.$ext';
+    }
+
     for (final c in companions) {
       final f = c.file;
       final ext = extOf(f.name);
       final followed = c.followed;
       if (followed != null) {
+        final followedBase = _stripTrailingExt(
+          followed.newBase,
+          extOf(followed.file.name),
+        );
         String name;
         if (followed.extra) {
           name = f.name;
         } else if (f.role == FileRole.subtitle) {
-          final lang = langFromRemainder(c.remainder) ?? _parsedLang(f);
-          final prefix = '${followed.newBase}${lang == null ? '' : '.$lang'}';
-          final key = '${followed.dstDir}/$prefix.$ext'.toLowerCase();
-          final n = (subTargets[key] ?? 0) + 1;
-          subTargets[key] = n;
-          name = n == 1 ? '$prefix.$ext' : '$prefix.$n.$ext';
+          name = formatSubName(
+            f: f,
+            remainder: c.remainder,
+            dstDir: followed.dstDir,
+            base: followedBase,
+            ext: ext,
+          );
         } else {
-          name = '${followed.newBase}${c.remainder}.$ext';
+          name = '$followedBase${c.remainder}.$ext';
         }
         _mkdir(followed.dstDir, g.id, selected: c.selected);
         _emit(followed, name, g.id, source: f, selected: c.selected);
@@ -749,22 +934,18 @@ class _PlanBuilder {
         dstDir = joinPath(curBase, 'Extras');
         name = f.name;
       } else {
-        final rendered = renderName(
-          file: f,
-          ref: c.ref,
-          manual: true,
-          metaSource: c.fallbackVideo,
-        );
-        dstDir = seasonByDst[rendered.dstDir] ?? rendered.dstDir;
+        final r = renderedCompanion[c]!;
+        dstDir = r.dstDir;
         if (f.role == FileRole.subtitle) {
-          final lang = langFromRemainder(c.remainder) ?? _parsedLang(f);
-          final prefix = '${rendered.newBase}${lang == null ? '' : '.$lang'}';
-          final key = '$dstDir/$prefix.$ext'.toLowerCase();
-          final n = (subTargets[key] ?? 0) + 1;
-          subTargets[key] = n;
-          name = n == 1 ? '$prefix.$ext' : '$prefix.$n.$ext';
+          name = formatSubName(
+            f: f,
+            remainder: c.remainder,
+            dstDir: dstDir,
+            base: r.newBase,
+            ext: ext,
+          );
         } else {
-          name = '${rendered.newBase}${c.remainder}.$ext';
+          name = '${r.newBase}${c.remainder}.$ext';
         }
       }
       _mkdir(dstDir, g.id, selected: c.selected);
@@ -784,7 +965,7 @@ class _PlanBuilder {
       );
     }
 
-    if (opts.scrape) {
+    if (wantScrape) {
       // Paths as they are after the run: season folders and the show folder
       // renamed, or merged into another one.
       final showDir = mergeInto ?? renamedRoots[g.rootDir] ?? curBase;
@@ -862,6 +1043,8 @@ class _PlanBuilder {
   }) {
     if (!scraped.add(dst)) return;
     final there = _alreadyThere(dst);
+    final isNfo = dst.toLowerCase().endsWith('.nfo');
+    final canOverwrite = there && isNfo && opts.overwriteNfo;
     deleteOps.add(
       RenameOp(
         id: OpId('w-${stableHash(dst)}'),
@@ -870,9 +1053,10 @@ class _PlanBuilder {
         src: source,
         dst: dst,
         group: gid,
-        // Never overwrite: an existing nfo / poster is the user's.
-        selected: selected && !there,
-        warning: there ? '已存在，保留原文件' : null,
+        // Never overwrite unless overwriteNfo is explicitly enabled for .nfo files.
+        selected: selected && (!there || canOverwrite),
+        warning: there && !canOverwrite ? '已存在，保留原文件' : null,
+        overwrite: isNfo && opts.overwriteNfo,
       ),
     );
   }
@@ -893,19 +1077,32 @@ class _PlanBuilder {
     final on = items.any((it) => it.selected);
     String img(String path, String size) =>
         'https://image.tmdb.org/t/p/$size$path';
-    void art(String dir, Candidate c) {
-      if (c.posterPath != null) {
+    void art(String dir, Candidate c, Candidate fallback) {
+      final same = fallback.tmdbId == c.tmdbId;
+      final poster = c.posterPath ?? (same ? fallback.posterPath : null);
+      final backdrop = c.backdropPath ?? (same ? fallback.backdropPath : null);
+      final clearLogo =
+          c.clearLogoPath ?? (same ? fallback.clearLogoPath : null);
+      final landscape =
+          c.landscapePath ?? (same ? fallback.landscapePath : null);
+      if (poster != null) {
+        _writeOp('$dir/poster.jpg', img(poster, 'w780'), g.id, selected: on);
+      }
+      if (backdrop != null) {
+        _writeOp('$dir/fanart.jpg', img(backdrop, 'w1280'), g.id, selected: on);
+      }
+      if (clearLogo != null) {
         _writeOp(
-          '$dir/poster.jpg',
-          img(c.posterPath!, 'w780'),
+          '$dir/clearlogo.png',
+          img(clearLogo, 'original'),
           g.id,
           selected: on,
         );
       }
-      if (c.backdropPath != null) {
+      if (landscape != null) {
         _writeOp(
-          '$dir/fanart.jpg',
-          img(c.backdropPath!, 'w1280'),
+          '$dir/landscape.jpg',
+          img(landscape, 'w1280'),
           g.id,
           selected: on,
         );
@@ -918,14 +1115,17 @@ class _PlanBuilder {
       if (main.isEmpty) return;
       final dir = finalDir(main.first.dstDir);
       for (final it in main) {
+        final nfoPath = it.file.isDiscDir
+            ? '${finalDir(it.dstDir)}/movie.nfo'
+            : '${finalDir(it.dstDir)}/${stem(it.outName)}.nfo';
         _writeOp(
-          '${finalDir(it.dstDir)}/${stem(it.outName)}.nfo',
+          nfoPath,
           '$writeTextPrefix${movieNfo(info)}',
           g.id,
           selected: it.selected,
         );
       }
-      art(dir, info);
+      art(dir, info, match);
       return;
     }
 
@@ -936,7 +1136,7 @@ class _PlanBuilder {
       g.id,
       selected: on,
     );
-    art(showDir, s.info);
+    art(showDir, s.info, match);
 
     final episodeItems = [
       for (final it in items)
@@ -1174,14 +1374,139 @@ class _PlanBuilder {
         .any((t) => t.isNotEmpty && folder.contains(t));
   }
 
+  // ---- multi-version & subtitle helpers -----------------------------------
+
+  static const _orderedSubFlags = ['forced', 'default', 'sdh'];
+
+  static String _stripTrailingExt(String base, String ext) {
+    if (ext.isNotEmpty &&
+        base.toLowerCase().endsWith('.${ext.toLowerCase()}')) {
+      return base.substring(0, base.length - ext.length - 1);
+    }
+    return base;
+  }
+
+  static Set<String> _mergedSubFlags(ScanFile f, String remainder) {
+    final out = <String>{};
+    for (final flag in f.parsed?.subFlags ?? const <String>[]) {
+      final norm = flag.trim().toLowerCase();
+      if (norm.isNotEmpty) out.add(norm);
+    }
+    for (final flag in subFlagsFromRemainder(remainder)) {
+      final norm = flag.trim().toLowerCase();
+      if (norm.isNotEmpty) out.add(norm);
+    }
+    return out;
+  }
+
+  static List<String> _canonicalSubFlags(Set<String> flags) => [
+    for (final flag in _orderedSubFlags)
+      if (flags.contains(flag)) flag,
+  ];
+
+  static String? _editionTag(ParsedName? p) {
+    final raw = p?.edition?.trim();
+    return raw == null || raw.isEmpty ? null : raw;
+  }
+
+  static String? _techTag(ParsedName? p) {
+    if (p == null) return null;
+    for (final candidate in [
+      p.extraInfo,
+      p.probe?.extraInfoSummary,
+      p.resolution,
+      p.probe?.resolution,
+    ]) {
+      final s = candidate?.trim();
+      if (s != null && s.isNotEmpty) return s;
+    }
+    return null;
+  }
+
+  /// Appends VidHub / Emby / Plex multi-version ` - <tag>` suffixes when two or
+  /// more videos in the same group render to the exact same target name but
+  /// differ by edition, extraInfo/probe tech tags, or resolution. True
+  /// duplicates (identical tags) are left untouched so [_conflicts] catches them.
+  void _disambiguateVersions(List<_Item> items, {bool isDisc = false}) {
+    final buckets = <String, List<_Item>>{};
+    for (final it in items) {
+      if (it.extra) continue;
+      if (!isDisc && it.file.isDiscDir) continue;
+      final ext = isDisc ? '' : extOf(it.file.name);
+      final cleanBase = isDisc
+          ? it.newBase
+          : _stripTrailingExt(it.newBase, ext);
+      final part = it.file.parsed?.partLabel?.trim();
+      final partSuffix = part == null || part.isEmpty
+          ? ''
+          : '-${sanitizeName(part)}';
+      final key = isDisc
+          ? '${it.dstDir}/$cleanBase$partSuffix'.toLowerCase()
+          : '${it.dstDir}/$cleanBase$partSuffix.$ext'.toLowerCase();
+      (buckets[key] ??= []).add(it);
+    }
+
+    bool allDistinct(List<String?> tags) {
+      if (!tags.any((t) => t != null && t.isNotEmpty)) return false;
+      final seen = <String>{};
+      for (final t in tags) {
+        if (!seen.add((t ?? '').toLowerCase())) return false;
+      }
+      return true;
+    }
+
+    for (final bucket in buckets.values) {
+      if (bucket.length < 2) continue;
+      final editions = [for (final it in bucket) _editionTag(it.file.parsed)];
+      final techs = [for (final it in bucket) _techTag(it.file.parsed)];
+      final combined = [
+        for (var i = 0; i < bucket.length; i++)
+          () {
+            final parts = <String>[?editions[i], ?techs[i]];
+            return parts.isEmpty ? null : parts.join(' ');
+          }(),
+      ];
+
+      List<String?>? chosen;
+      if (allDistinct(editions)) {
+        chosen = editions;
+      } else if (allDistinct(techs)) {
+        chosen = techs;
+      } else if (allDistinct(combined)) {
+        chosen = combined;
+      } else {
+        final sigs = {for (final t in combined) (t ?? '').toLowerCase()};
+        if (sigs.length >= 2) chosen = combined;
+      }
+      if (chosen == null) continue;
+
+      for (var i = 0; i < bucket.length; i++) {
+        final tag = chosen[i];
+        if (tag == null || tag.isEmpty) continue;
+        final it = bucket[i];
+        final ext = isDisc ? '' : extOf(it.file.name);
+        final cleanBase = isDisc
+            ? it.newBase
+            : _stripTrailingExt(it.newBase, ext);
+        it.newBase = '$cleanBase - ${sanitizeName(tag)}';
+      }
+    }
+  }
+
   // ---- junk ---------------------------------------------------------------
 
   void _junk(List<MediaGroup> processed, List<MediaGroup> skipped) {
     bool under(String path, Iterable<MediaGroup> gs) =>
         gs.any((g) => path.startsWith('${g.rootDir}/'));
     for (final f in scan.unassigned) {
-      if (f.role != FileRole.junk) continue;
-      if (under(f.path, skipped) && !under(f.path, processed)) continue;
+      final override = opts.unassignedDeletes[f.path];
+      if (override == null) {
+        if (f.role != FileRole.junk) continue;
+        if (under(f.path, skipped) && !under(f.path, processed)) continue;
+      } else if (!override) {
+        if (f.role != FileRole.junk) continue;
+        if (under(f.path, skipped) && !under(f.path, processed)) continue;
+      }
       var path = f.path;
       for (final e in renamedSeasons.entries) {
         if (path.startsWith('${e.key}/')) {
@@ -1202,7 +1527,7 @@ class _PlanBuilder {
           phase: ExecPhase.cleanup,
           src: path,
           dst: '',
-          selected: opts.deleteJunk,
+          selected: override ?? opts.deleteJunk,
         ),
       );
     }

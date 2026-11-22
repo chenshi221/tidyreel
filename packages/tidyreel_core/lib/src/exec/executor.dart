@@ -66,6 +66,9 @@ class DefaultExecutor implements Executor {
   /// Max ops in flight (PLAN §4.3 rule 5).
   final int concurrency;
 
+  /// Optional dynamic concurrency reader; sampled per run and clamped to 1..16.
+  final int Function()? concurrencyProvider;
+
   /// Spacing between request starts; 200 ms = 5 req/s. Tests pass [Duration.zero].
   final Duration minInterval;
   final List<Duration> backoff;
@@ -79,6 +82,7 @@ class DefaultExecutor implements Executor {
   DefaultExecutor(
     this.history, {
     this.concurrency = 4,
+    this.concurrencyProvider,
     this.minInterval = const Duration(milliseconds: 200),
     this.backoff = const [
       Duration(seconds: 1),
@@ -88,6 +92,9 @@ class DefaultExecutor implements Executor {
     this.delay = _defaultDelay,
     this.fetch = _download,
   });
+
+  int get _effectiveConcurrency =>
+      (concurrencyProvider?.call() ?? concurrency).clamp(1, 16);
 
   static final _dio = Dio(
     BaseOptions(
@@ -205,6 +212,7 @@ class DefaultExecutor implements Executor {
           dst: _mapPath(op.dst, doneFolders),
           selected: op.selected,
           warning: op.warning,
+          overwrite: op.overwrite,
         );
 
   @override
@@ -325,9 +333,10 @@ class DefaultExecutor implements Executor {
       for (final o in todo)
         if (o.phase == ExecPhase.files && o.kind == OpKind.mkdir) o,
     ];
+    final conc = _effectiveConcurrency;
     if (cleanup.isNotEmpty) {
       var nextCleanup = 0;
-      final cleanupWidth = min(min(concurrency, 4), cleanup.length);
+      final cleanupWidth = min(min(conc, 4), cleanup.length);
       Future<void> cleanupWorker() async {
         while (!cancelled() && nextCleanup < cleanup.length) {
           await undoOne(cleanup[nextCleanup++]);
@@ -442,7 +451,7 @@ class DefaultExecutor implements Executor {
     Future<void> invStagedRetry(List<RenameOp> ops) => _runStaged(
       ops,
       be,
-      width: concurrency,
+      width: conc,
       stage: true,
       resuming: true,
       taken: taken,
@@ -467,7 +476,7 @@ class DefaultExecutor implements Executor {
     await _runStaged(
       left,
       be,
-      width: concurrency,
+      width: conc,
       stage: true,
       resuming: false,
       taken: taken,
@@ -484,7 +493,7 @@ class DefaultExecutor implements Executor {
     }
 
     await Future.wait([
-      for (var i = 0; i < concurrency && i < rest.length; i++) worker(),
+      for (var i = 0; i < conc && i < rest.length; i++) worker(),
     ]);
     for (final op in mappedMkdirs) {
       if (cancelled()) return;
@@ -605,10 +614,12 @@ class DefaultExecutor implements Executor {
         await record(op, OpStatus.failed, e.toString());
       }
 
+      final conc = _effectiveConcurrency;
+
       Future<void> retryStaged(List<RenameOp> ops) => _runStaged(
         ops,
         be,
-        width: concurrency,
+        width: conc,
         stage: true,
         resuming: true,
         taken: taken,
@@ -620,7 +631,7 @@ class DefaultExecutor implements Executor {
 
       // mkdirs finish before anything that may move into them; cleanup writes
       // run with bounded concurrency while folder renames stay sequential.
-      final writeWidth = min(concurrency, 4);
+      final writeWidth = min(conc, 4);
       final groups = phase == ExecPhase.cleanup
           ? [
               (
@@ -632,11 +643,11 @@ class DefaultExecutor implements Executor {
           : [
               (
                 inPhase.where((o) => o.kind == OpKind.mkdir).toList(),
-                phase == ExecPhase.files ? concurrency : 1,
+                phase == ExecPhase.files ? conc : 1,
               ),
               (
                 inPhase.where((o) => o.kind != OpKind.mkdir).toList(),
-                phase == ExecPhase.files ? concurrency : 1,
+                phase == ExecPhase.files ? conc : 1,
               ),
             ];
       for (var (group, width) in groups) {
@@ -973,6 +984,35 @@ class DefaultExecutor implements Executor {
         if (resuming && !await be.exists(op.src)) return;
         await be.remove(p.posix.dirname(op.src), [p.posix.basename(op.src)]);
       case OpKind.write:
+        if (op.overwrite) {
+          final bytes = op.src.startsWith(writeTextPrefix)
+              ? utf8.encode(op.src.substring(writeTextPrefix.length))
+              : await _fetchWithRetry(Uri.parse(op.src));
+          final dir = p.posix.dirname(op.dst);
+          final name = p.posix.basename(op.dst);
+          final tmpName = '.tidyreel-tmp-${op.id.value}-$name';
+          final tmpPath = p.posix.join(dir, tmpName);
+          if (await be.exists(tmpPath)) {
+            await be.remove(dir, [tmpName]);
+          }
+          await be.write(tmpPath, bytes);
+          try {
+            if (await be.exists(op.dst)) {
+              await be.remove(dir, [name]);
+            }
+            await be.rename(tmpPath, name);
+          } on Object {
+            try {
+              if (await be.exists(tmpPath)) {
+                await be.remove(dir, [tmpName]);
+              }
+            } on Object {
+              // best effort cleanup
+            }
+            rethrow;
+          }
+          return;
+        }
         // A pending log cannot prove who created an existing file, even when
         // its content matches. Keep it untouched and require manual resolution.
         if (resuming && await be.exists(op.dst)) {

@@ -1161,6 +1161,143 @@ void main() {
         );
       },
     );
+
+    test('OpKind.write with overwrite: true replaces existing file atomically via temp sibling', () async {
+      final f = MemoryStorageBackend();
+      await f.write('/d/movie.nfo', '<movie>old</movie>'.codeUnits);
+      final hook = HookBackend(f);
+      final ex = executor(history);
+      const op = RenameOp(
+        id: OpId('w-over'),
+        kind: OpKind.write,
+        phase: ExecPhase.cleanup,
+        src: '$writeTextPrefix<movie>new</movie>',
+        dst: '/d/movie.nfo',
+        overwrite: true,
+      );
+      await run(ex.execute(task, conn, const RenamePlan(ops: [op]), hook));
+      expect(f.textOf('/d/movie.nfo'), '<movie>new</movie>');
+      expect(f.files, ['/d/movie.nfo']); // no stray temp file
+      final writeIdx = hook.calls.indexWhere(
+        (c) => c.startsWith('write /d/.tidyreel-tmp-w-over-movie.nfo'),
+      );
+      final removeIdx = hook.calls.indexWhere(
+        (c) => c == 'remove /d movie.nfo',
+      );
+      final renameIdx = hook.calls.indexWhere(
+        (c) => c == 'rename /d/.tidyreel-tmp-w-over-movie.nfo movie.nfo',
+      );
+      expect(writeIdx, greaterThanOrEqualTo(0));
+      expect(removeIdx, greaterThan(writeIdx));
+      expect(renameIdx, greaterThan(removeIdx));
+
+      final b = await theBatch(history);
+      expect(statusCounts(await history.records(b)), {OpStatus.done: 1});
+
+      // Undo still removes the written file cleanly.
+      await run(ex.undo(b, f));
+      expect(await f.exists('/d/movie.nfo'), isFalse);
+    });
+
+    test('OpKind.write with overwrite: true keeps original intact on fetch/remove failure and cleans temp', () async {
+      final f = MemoryStorageBackend();
+      await f.write('/d/movie.nfo', '<movie>old</movie>'.codeUnits);
+
+      // 1. Fetch failure never touches existing file.
+      final failFetch = DefaultExecutor(
+        history,
+        minInterval: Duration.zero,
+        backoff: const [],
+        fetch: (_) async =>
+            throw const StorageException(StorageErrorCode.network, 'down'),
+      );
+      await run(
+        failFetch.execute(
+          task,
+          conn,
+          const RenamePlan(
+            ops: [
+              RenameOp(
+                id: OpId('w-fail-fetch'),
+                kind: OpKind.write,
+                phase: ExecPhase.cleanup,
+                src: 'https://example.invalid/movie.nfo',
+                dst: '/d/movie.nfo',
+                overwrite: true,
+              ),
+            ],
+          ),
+          f,
+        ),
+      );
+      expect(f.textOf('/d/movie.nfo'), '<movie>old</movie>');
+      expect(f.files, ['/d/movie.nfo']);
+
+      // 2. Remove failure cleans up temp file and preserves original.
+      final hook = HookBackend(f, (m, a) {
+        if (m == 'remove' && a.contains('movie.nfo')) {
+          throw const StorageException(StorageErrorCode.other, 'locked');
+        }
+      });
+      await run(
+        executor(history).execute(
+          task,
+          conn,
+          const RenamePlan(
+            ops: [
+              RenameOp(
+                id: OpId('w-fail-rm'),
+                kind: OpKind.write,
+                phase: ExecPhase.cleanup,
+                src: '$writeTextPrefix<movie>new</movie>',
+                dst: '/d/movie.nfo',
+                overwrite: true,
+              ),
+            ],
+          ),
+          hook,
+        ),
+      );
+      expect(f.textOf('/d/movie.nfo'), '<movie>old</movie>');
+      expect(f.files, ['/d/movie.nfo']);
+    });
+
+    test(
+      'concurrencyProvider dynamically adjusts max in-flight ops per run',
+      () async {
+        var limit = 1;
+        var inFlight = 0, peak = 0;
+        final ex = DefaultExecutor(
+          history,
+          concurrency: 4,
+          concurrencyProvider: () => limit,
+          minInterval: Duration.zero,
+        );
+
+        Future<int> runBatch(String prefix) async {
+          inFlight = 0;
+          peak = 0;
+          final mem = MemoryStorageBackend({
+            for (var i = 0; i < 6; i++) '/$prefix$i/f': 1,
+          });
+          final be = HookBackend(mem, (m, a) async {
+            if (m != 'rename') return;
+            peak = peak < ++inFlight ? inFlight : peak;
+            await Future<void>.delayed(const Duration(milliseconds: 10));
+            inFlight--;
+          });
+          final ops = [
+            for (var i = 0; i < 6; i++) reloc('/$prefix$i/f', '/$prefix$i/g'),
+          ];
+          await run(ex.execute(task, conn, RenamePlan(ops: ops), be));
+          return peak;
+        }
+
+        expect(await runBatch('a'), 1);
+        limit = 5;
+        expect(await runBatch('b'), 5);
+      },
+    );
   });
 }
 

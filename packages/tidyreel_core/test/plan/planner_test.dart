@@ -278,7 +278,7 @@ void main() {
       final meta = FakeMetadataProvider();
       final paths = [
         '/dl/Inception.2010.1080p.mkv',
-        '/dl/Inception.2010.2160p.mkv',
+        '/dl/Inception (2010) 1080p.mkv',
       ];
       final scan = await AnchorRecognizer(
         const TestParser(),
@@ -1623,6 +1623,559 @@ void main() {
       );
     });
   });
+
+  group('v1.0 planner upgrades', () {
+    test('scrapeOnly writes NFO and artwork beside existing files with zero moves/mkdirs/deletes', () async {
+      final meta = _RichArtMeta();
+      final scan = scanOf(
+        [
+          tvGroup(
+            [
+              video('$root/raw_ep01.mkv', season: 1, episode: 1),
+              other('$root/raw_ep01.chs.srt', FileRole.subtitle),
+            ],
+            rootDir: root,
+            show: null,
+          ),
+        ],
+        unassigned: [other('$root/ad.txt', FileRole.junk)],
+      );
+      final p = await plan(
+        scan,
+        metadata: meta,
+        options: const PlanOptions(
+          scrapeOnly: true,
+          scrape: false,
+          deleteJunk: true,
+        ),
+      );
+      expect(p.ops, isNotEmpty);
+      expect(p.ops.every((o) => o.kind == OpKind.write), isTrue);
+      final dsts = p.ops.map((o) => o.dst).toSet();
+      expect(
+        dsts,
+        containsAll([
+          '$root/tvshow.nfo',
+          '$root/poster.jpg',
+          '$root/fanart.jpg',
+          '$root/clearlogo.png',
+          '$root/landscape.jpg',
+          '$root/raw_ep01.nfo',
+          '$root/raw_ep01-thumb.jpg',
+        ]),
+      );
+      expect(
+        p.ops.singleWhere((o) => o.dst == '$root/clearlogo.png').src,
+        'https://image.tmdb.org/t/p/original/logo.png',
+      );
+      expect(
+        p.ops.singleWhere((o) => o.dst == '$root/landscape.jpg').src,
+        'https://image.tmdb.org/t/p/w1280/land.jpg',
+      );
+    });
+
+    test('overwriteNfo replaces existing .nfo without conflict while skipping existing artwork', () async {
+      final meta = _RichArtMeta();
+      final scan = scanOf([
+        tvGroup(
+          [video('$root/E01.mkv', season: 1, episode: 1)],
+          rootDir: root,
+          show: null,
+        ),
+      ]);
+      const out = '/d/异兽魔都 (2020)';
+      final existing = {'$out/tvshow.nfo', '$out/poster.jpg'};
+
+      final keep = await plan(
+        scan,
+        metadata: meta,
+        existing: existing,
+        options: const PlanOptions(scrape: true, overwriteNfo: false),
+      );
+      final keepNfo = keep.ops.singleWhere((o) => o.dst == '$out/tvshow.nfo');
+      expect(keepNfo.selected, isFalse);
+      expect(keepNfo.overwrite, isFalse);
+      expect(keepNfo.warning, '已存在，保留原文件');
+
+      final over = await plan(
+        scan,
+        metadata: meta,
+        existing: existing,
+        options: const PlanOptions(scrape: true, overwriteNfo: true),
+      );
+      expect(over.canExecute, isTrue);
+      final overNfo = over.ops.singleWhere((o) => o.dst == '$out/tvshow.nfo');
+      expect(overNfo.selected, isTrue);
+      expect(overNfo.overwrite, isTrue);
+      expect(overNfo.warning, isNull);
+      final overPoster = over.ops.singleWhere(
+        (o) => o.dst == '$out/poster.jpg',
+      );
+      expect(overPoster.selected, isFalse);
+      expect(overPoster.overwrite, isFalse);
+      expect(overPoster.warning, '已存在，保留原文件');
+    });
+
+    test('BDMV disc folder relocates intact without extension and writes movie.nfo inside', () async {
+      final meta = _RichArtMeta();
+      final disc = const ScanFile(
+        path: '/dl/Inception.2010.BluRay',
+        name: 'Inception.2010.BluRay',
+        size: 40000,
+        role: FileRole.video,
+        isDiscDir: true,
+        parsed: ParsedName(
+          title: 'Inception',
+          year: 2010,
+          kind: MediaKind.movie,
+          isDisc: true,
+          confidence: 0.92,
+        ),
+      );
+      final scan = scanOf(
+        [
+          MediaGroup(
+            id: const GroupId('g-disc'),
+            kind: MediaKind.movie,
+            anchorTitle: 'Inception',
+            anchorYear: 2010,
+            rootDir: '/dl/Inception.2010.BluRay',
+            files: [disc],
+            match: Demo.inception,
+            matchScore: 0.98,
+          ),
+        ],
+        roots: const ['/dl'],
+      );
+
+      // moveToLibrary + scrape
+      final p = await plan(
+        scan,
+        metadata: meta,
+        options: const PlanOptions(
+          mode: OrganizeMode.moveToLibrary,
+          libraryRoot: '/lib',
+          scrape: true,
+        ),
+      );
+      expect(p.canExecute, isTrue);
+      expect(p.ops.where((o) => o.kind == OpKind.mkdir).map((o) => o.dst), [
+        '/lib/电影',
+      ]);
+      final reloc = p.ops.singleWhere((o) => o.kind == OpKind.relocate);
+      expect(reloc.phase, ExecPhase.folders);
+      expect(reloc.src, '/dl/Inception.2010.BluRay');
+      expect(reloc.dst, '/lib/电影/盗梦空间 (2010)');
+      final writes = {
+        for (final o in p.ops)
+          if (o.kind == OpKind.write) o.dst: o.src,
+      };
+      expect(
+        writes.keys,
+        containsAll([
+          '/lib/电影/盗梦空间 (2010)/movie.nfo',
+          '/lib/电影/盗梦空间 (2010)/poster.jpg',
+          '/lib/电影/盗梦空间 (2010)/clearlogo.png',
+          '/lib/电影/盗梦空间 (2010)/landscape.jpg',
+        ]),
+      );
+
+      // Execute and undo via DefaultExecutor on MemoryStorageBackend.
+      final fs = MemoryStorageBackend({
+        '/dl/Inception.2010.BluRay/BDMV/STREAM/00001.m2ts': 40000,
+      });
+      final hist = MemoryHistoryStore();
+      final ex = DefaultExecutor(
+        hist,
+        minInterval: Duration.zero,
+        fetch: (_) async => [1, 2, 3],
+      );
+      await ex.execute(const TaskId('t-disc'), conn, p, fs).toList();
+      expect(fs.files, contains('/lib/电影/盗梦空间 (2010)/BDMV/STREAM/00001.m2ts'));
+      expect(fs.files, contains('/lib/电影/盗梦空间 (2010)/movie.nfo'));
+      expect(fs.files, contains('/lib/电影/盗梦空间 (2010)/poster.jpg'));
+      final batch = (await hist.batches()).single.id;
+      await ex.undo(batch, fs).toList();
+      expect(fs.files, ['/dl/Inception.2010.BluRay/BDMV/STREAM/00001.m2ts']);
+    });
+
+    test(
+      'multi-part movies append -cd1/-cd2 stacking suffix without conflict',
+      () async {
+        final scan = scanOf([
+          MediaGroup(
+            id: const GroupId('g-mp'),
+            kind: MediaKind.movie,
+            anchorTitle: 'Inception',
+            anchorYear: 2010,
+            rootDir: '/dl/Inception',
+            files: const [
+              ScanFile(
+                path: '/dl/Inception/Inception.2010.CD1.mkv',
+                name: 'Inception.2010.CD1.mkv',
+                size: 100,
+                role: FileRole.video,
+                parsed: ParsedName(
+                  title: 'Inception',
+                  year: 2010,
+                  kind: MediaKind.movie,
+                  part: 1,
+                  partLabel: 'cd1',
+                  confidence: 0.92,
+                ),
+              ),
+              ScanFile(
+                path: '/dl/Inception/Inception.2010.CD2.mkv',
+                name: 'Inception.2010.CD2.mkv',
+                size: 100,
+                role: FileRole.video,
+                parsed: ParsedName(
+                  title: 'Inception',
+                  year: 2010,
+                  kind: MediaKind.movie,
+                  part: 2,
+                  partLabel: 'cd2',
+                  confidence: 0.92,
+                ),
+              ),
+              ScanFile(
+                path: '/dl/Inception/Inception.2010.CD1.chs.srt',
+                name: 'Inception.2010.CD1.chs.srt',
+                size: 10,
+                role: FileRole.subtitle,
+                parsed: ParsedName(lang: 'chs', confidence: 0.9),
+              ),
+            ],
+            match: Demo.inception,
+            matchScore: 0.95,
+          ),
+        ]);
+        final p = await plan(scan);
+        expect(p.canExecute, isTrue);
+        expect(
+          opFor(p, '/dl/Inception/Inception.2010.CD1.mkv').dst,
+          '/dl/Inception/盗梦空间.Inception.2010-cd1.mkv',
+        );
+        expect(
+          opFor(p, '/dl/Inception/Inception.2010.CD2.mkv').dst,
+          '/dl/Inception/盗梦空间.Inception.2010-cd2.mkv',
+        );
+        expect(
+          opFor(p, '/dl/Inception/Inception.2010.CD1.chs.srt').dst,
+          '/dl/Inception/盗梦空间.Inception.2010-cd1.zh-Hans.srt',
+        );
+      },
+    );
+
+    test('multi-version auto-disambiguation distinguishes editions and tech tags while flagging duplicates', () async {
+      // 1. Edition tags: Director's Cut vs Theatrical.
+      final editions = await plan(
+        scanOf([
+          MediaGroup(
+            id: const GroupId('g-ed'),
+            kind: MediaKind.movie,
+            anchorTitle: 'Inception',
+            anchorYear: 2010,
+            rootDir: '/dl/Inception',
+            files: const [
+              ScanFile(
+                path: '/dl/Inception/Inception.DC.mkv',
+                name: 'Inception.DC.mkv',
+                size: 100,
+                role: FileRole.video,
+                parsed: ParsedName(
+                  title: 'Inception',
+                  year: 2010,
+                  kind: MediaKind.movie,
+                  edition: "Director's Cut",
+                  confidence: 0.92,
+                ),
+              ),
+              ScanFile(
+                path: '/dl/Inception/Inception.Theatrical.mkv',
+                name: 'Inception.Theatrical.mkv',
+                size: 100,
+                role: FileRole.video,
+                parsed: ParsedName(
+                  title: 'Inception',
+                  year: 2010,
+                  kind: MediaKind.movie,
+                  edition: 'Theatrical',
+                  confidence: 0.92,
+                ),
+              ),
+            ],
+            match: Demo.inception,
+            matchScore: 0.95,
+          ),
+        ]),
+      );
+      expect(editions.canExecute, isTrue);
+      expect(
+        opFor(editions, '/dl/Inception/Inception.DC.mkv').dst,
+        "/dl/Inception/盗梦空间.Inception.2010 - Director's Cut.mkv",
+      );
+      expect(
+        opFor(editions, '/dl/Inception/Inception.Theatrical.mkv').dst,
+        '/dl/Inception/盗梦空间.Inception.2010 - Theatrical.mkv',
+      );
+
+      // 2. Tech / probe tags: 2160p.DV (probed) vs 1080p.
+      final tech = await plan(
+        scanOf([
+          MediaGroup(
+            id: const GroupId('g-tech'),
+            kind: MediaKind.movie,
+            anchorTitle: 'Inception',
+            anchorYear: 2010,
+            rootDir: '/dl/Inception',
+            files: const [
+              ScanFile(
+                path: '/dl/Inception/Inception.4k.mkv',
+                name: 'Inception.4k.mkv',
+                size: 200,
+                role: FileRole.video,
+                parsed: ParsedName(
+                  title: 'Inception',
+                  year: 2010,
+                  kind: MediaKind.movie,
+                  probe: MediaProbeInfo(width: 3840, height: 2160, hdr: 'DV'),
+                  confidence: 0.92,
+                ),
+              ),
+              ScanFile(
+                path: '/dl/Inception/Inception.1080p.mkv',
+                name: 'Inception.1080p.mkv',
+                size: 100,
+                role: FileRole.video,
+                parsed: ParsedName(
+                  title: 'Inception',
+                  year: 2010,
+                  kind: MediaKind.movie,
+                  resolution: '1080p',
+                  confidence: 0.92,
+                ),
+              ),
+            ],
+            match: Demo.inception,
+            matchScore: 0.95,
+          ),
+        ]),
+      );
+      expect(tech.canExecute, isTrue);
+      expect(
+        opFor(tech, '/dl/Inception/Inception.4k.mkv').dst,
+        '/dl/Inception/盗梦空间.Inception.2010 - 2160p.DV.mkv',
+      );
+      expect(
+        opFor(tech, '/dl/Inception/Inception.1080p.mkv').dst,
+        '/dl/Inception/盗梦空间.Inception.2010 - 1080p.mkv',
+      );
+
+      // 3. True duplicates still conflict.
+      final dups = await plan(
+        scanOf([
+          MediaGroup(
+            id: const GroupId('g-dup'),
+            kind: MediaKind.movie,
+            anchorTitle: 'Inception',
+            anchorYear: 2010,
+            rootDir: '/dl/Inception',
+            files: const [
+              ScanFile(
+                path: '/dl/Inception/copy1.mkv',
+                name: 'copy1.mkv',
+                size: 100,
+                role: FileRole.video,
+                parsed: ParsedName(
+                  title: 'Inception',
+                  year: 2010,
+                  kind: MediaKind.movie,
+                  resolution: '1080p',
+                  confidence: 0.92,
+                ),
+              ),
+              ScanFile(
+                path: '/dl/Inception/copy2.mkv',
+                name: 'copy2.mkv',
+                size: 100,
+                role: FileRole.video,
+                parsed: ParsedName(
+                  title: 'Inception',
+                  year: 2010,
+                  kind: MediaKind.movie,
+                  resolution: '1080p',
+                  confidence: 0.92,
+                ),
+              ),
+            ],
+            match: Demo.inception,
+            matchScore: 0.95,
+          ),
+        ]),
+      );
+      expect(dups.canExecute, isFalse);
+      expect(dups.conflicts, hasLength(1));
+    });
+
+    test('preserves subtitle forced/default/sdh flags and avoids bilingual collisions', () async {
+      final scan = scanOf([
+        tvGroup([
+          video('$root/ep1.mkv', season: 1, episode: 1),
+          const ScanFile(
+            path: '$root/ep1.chs.forced.srt',
+            name: 'ep1.chs.forced.srt',
+            size: 1,
+            role: FileRole.subtitle,
+            parsed: ParsedName(
+              lang: 'chs',
+              subFlags: ['forced'],
+              confidence: 0.9,
+            ),
+          ),
+          const ScanFile(
+            path: '$root/ep1.en.sdh.srt',
+            name: 'ep1.en.sdh.srt',
+            size: 1,
+            role: FileRole.subtitle,
+            parsed: ParsedName(lang: 'en', subFlags: ['sdh'], confidence: 0.9),
+          ),
+          const ScanFile(
+            path: '$root/ep1.multi.srt',
+            name: 'ep1.multi.srt',
+            size: 1,
+            role: FileRole.subtitle,
+            parsed: ParsedName(
+              lang: 'chs',
+              subFlags: ['sdh', 'default', 'forced'],
+              confidence: 0.9,
+            ),
+          ),
+          const ScanFile(
+            path: '$root/ep1.chs.srt',
+            name: 'ep1.chs.srt',
+            size: 1,
+            role: FileRole.subtitle,
+            parsed: ParsedName(lang: 'chs', confidence: 0.9),
+          ),
+          const ScanFile(
+            path: '$root/ep1.chs-eng.srt',
+            name: 'ep1.chs-eng.srt',
+            size: 1,
+            role: FileRole.subtitle,
+            parsed: ParsedName(
+              lang: 'chs',
+              subFlags: ['bilingual'],
+              confidence: 0.9,
+            ),
+          ),
+        ]),
+      ]);
+      final p = await plan(scan);
+      expect(p.canExecute, isTrue);
+      const base = '$root/Season 01/$name.S01E01';
+      expect(
+        opFor(p, '$root/ep1.chs.forced.srt').dst,
+        '$base.zh-Hans.forced.srt',
+      );
+      expect(opFor(p, '$root/ep1.en.sdh.srt').dst, '$base.en.sdh.srt');
+      expect(
+        opFor(p, '$root/ep1.multi.srt').dst,
+        '$base.zh-Hans.forced.default.sdh.srt',
+      );
+      expect(opFor(p, '$root/ep1.chs.srt').dst, '$base.zh-Hans.srt');
+      expect(
+        opFor(p, '$root/ep1.chs-eng.srt').dst,
+        '$base.zh-Hans.bilingual.srt',
+      );
+
+      // Single bilingual subtitle with no plain sibling keeps clean .zh-Hans.srt.
+      final solo = await plan(
+        scanOf([
+          tvGroup([
+            video('$root/ep1.mkv', season: 1, episode: 1),
+            const ScanFile(
+              path: '$root/ep1.chs-eng.srt',
+              name: 'ep1.chs-eng.srt',
+              size: 1,
+              role: FileRole.subtitle,
+              parsed: ParsedName(
+                lang: 'chs',
+                subFlags: ['bilingual'],
+                confidence: 0.9,
+              ),
+            ),
+          ]),
+        ]),
+      );
+      expect(opFor(solo, '$root/ep1.chs-eng.srt').dst, '$base.zh-Hans.srt');
+    });
+
+    test('unassignedDeletes overrides per-file junk deletion', () async {
+      final scan = scanOf(
+        [
+          tvGroup([video('$root/a.mkv', season: 1, episode: 1)]),
+        ],
+        unassigned: [
+          other('$root/ad.txt', FileRole.junk),
+          other('$root/keep.txt', FileRole.junk),
+          other('/d/notes.pdf', FileRole.other),
+        ],
+      );
+      final p = await plan(
+        scan,
+        options: const PlanOptions(
+          deleteJunk: true,
+          unassignedDeletes: {'$root/keep.txt': false, '/d/notes.pdf': true},
+        ),
+      );
+      final dels = {
+        for (final o in p.ops)
+          if (o.kind == OpKind.delete) o.src: o.selected,
+      };
+      expect(dels['/d/异兽魔都 (2020)/ad.txt'], isTrue);
+      expect(dels['/d/异兽魔都 (2020)/keep.txt'], isFalse);
+      expect(dels['/d/notes.pdf'], isTrue);
+    });
+  });
+}
+
+class _RichArtMeta extends FakeMetadataProvider {
+  @override
+  Future<ShowDetail> show(int tmdbId) async => const ShowDetail(
+    info: Candidate(
+      tmdbId: 94954,
+      kind: MediaKind.episode,
+      title: '异兽魔都',
+      englishTitle: 'Dorohedoro',
+      year: 2020,
+      posterPath: '/p.jpg',
+      backdropPath: '/b.jpg',
+      clearLogoPath: '/logo.png',
+      landscapePath: '/land.jpg',
+    ),
+    seasons: [SeasonInfo(number: 1, episodeCount: 12, posterPath: '/s1.jpg')],
+  );
+
+  @override
+  Future<MovieDetail> movie(int tmdbId) async => const MovieDetail(
+    info: Candidate(
+      tmdbId: 27205,
+      kind: MediaKind.movie,
+      title: '盗梦空间',
+      englishTitle: 'Inception',
+      year: 2010,
+      posterPath: '/mp.jpg',
+      backdropPath: '/mb.jpg',
+      clearLogoPath: '/mlogo.png',
+      landscapePath: '/mland.jpg',
+    ),
+  );
+
+  @override
+  Future<List<Episode>> season(int tmdbId, int season) async => [
+    Episode(season: 1, number: 1, title: '洞窟', stillPath: '/e1.jpg'),
+  ];
 }
 
 class _TwoSeasonTitleMeta extends FakeMetadataProvider {

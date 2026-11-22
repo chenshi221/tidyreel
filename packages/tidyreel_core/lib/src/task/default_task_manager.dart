@@ -7,9 +7,12 @@ import '../exec/executor.dart';
 import '../model/history.dart';
 import '../model/ids.dart';
 import '../model/media.dart';
+import '../model/metadata.dart';
 import '../model/plan.dart';
 import '../model/scan.dart';
 import '../model/task.dart';
+import '../parser/parser.dart';
+import '../plan/empty_dirs.dart';
 import '../plan/follow.dart';
 import '../plan/planner.dart';
 import '../plan/recognizer.dart';
@@ -29,6 +32,7 @@ class _Task {
   TaskSummary summary;
   ScanResult? scan;
   Map<GroupId, GroupDecision> decisions;
+  Map<String, bool> unassignedDeletes = const {};
   RenamePlan? plan;
   PlanOptions? planOptions;
   ({int editGen, PlanOptions options, Future<RenamePlan> future})? inFlightPlan;
@@ -247,12 +251,14 @@ class DefaultTaskManager implements TaskManager {
     if (scan == null) throw StateError('任务尚未识别完成');
     final gen = ++t.editGen;
     final decisions = {...t.decisions, group: decision};
+    final unassignedDeletes = t.unassignedDeletes;
     t.pendingEdits++;
     try {
       final (plan, opts) = await _buildPlanWithOptions(
         t.summary,
         scan,
         decisions,
+        unassignedDeletes: unassignedDeletes,
       );
       if (t.editGen == gen &&
           t.summary.stage == TaskStage.awaitingReview &&
@@ -280,9 +286,15 @@ class DefaultTaskManager implements TaskManager {
     final next = _with(t.summary, mode: mode, message: t.summary.message);
     final gen = ++t.editGen;
     final decisions = t.decisions;
+    final unassignedDeletes = t.unassignedDeletes;
     t.pendingEdits++;
     try {
-      final (plan, opts) = await _buildPlanWithOptions(next, scan, decisions);
+      final (plan, opts) = await _buildPlanWithOptions(
+        next,
+        scan,
+        decisions,
+        unassignedDeletes: unassignedDeletes,
+      );
       if (t.editGen == gen &&
           t.summary.stage == TaskStage.awaitingReview &&
           _tasks[id] == t) {
@@ -297,36 +309,560 @@ class DefaultTaskManager implements TaskManager {
     }
   }
 
+  FilenameParser get _parser => recognizer is AnchorRecognizer
+      ? (recognizer as AnchorRecognizer).parser
+      : const RuleBasedParser();
+
+  static MediaGroup _copyGroup(
+    MediaGroup g, {
+    MediaKind? kind,
+    String? anchorTitle,
+    int? Function()? anchorYear,
+    String? rootDir,
+    List<ScanFile>? files,
+    Candidate? Function()? match,
+    double? matchScore,
+    ShowDetail? Function()? show,
+    SeasonStrategy? Function()? suggestedStrategy,
+    String? Function()? suggestedStrategyReason,
+  }) => MediaGroup(
+    id: g.id,
+    kind: kind ?? g.kind,
+    anchorTitle: anchorTitle ?? g.anchorTitle,
+    anchorYear: anchorYear != null ? anchorYear() : g.anchorYear,
+    rootDir: rootDir ?? g.rootDir,
+    files: files ?? g.files,
+    match: match != null ? match() : g.match,
+    matchScore: matchScore ?? g.matchScore,
+    show: show != null ? show() : g.show,
+    suggestedStrategy: suggestedStrategy != null
+        ? suggestedStrategy()
+        : g.suggestedStrategy,
+    suggestedStrategyReason: suggestedStrategyReason != null
+        ? suggestedStrategyReason()
+        : g.suggestedStrategyReason,
+  );
+
+  static String _commonParentDir(List<ScanFile> files, String fallback) {
+    if (files.isEmpty) return fallback;
+    List<String> segs(String d) =>
+        d.split('/').where((s) => s.isNotEmpty).toList();
+    String dirFor(ScanFile f) => f.isDiscDir ? f.path : dirOf(f.path);
+    var prefix = segs(dirFor(files.first));
+    for (final f in files.skip(1)) {
+      final cur = segs(dirFor(f));
+      var i = 0;
+      while (i < prefix.length && i < cur.length && prefix[i] == cur[i]) {
+        i++;
+      }
+      prefix = prefix.sublist(0, i);
+    }
+    return prefix.isEmpty ? '/' : '/${prefix.join('/')}';
+  }
+
+  static List<String> _parentDirNames(String path, List<String> roots) {
+    final dir = dirOf(path);
+    final normRoots = [for (final r in roots) _normDirPath(r)];
+    String? matchedRoot;
+    for (final r in normRoots) {
+      if ((dir == r || dir.startsWith(r == '/' ? '/' : '$r/')) &&
+          (matchedRoot == null || r.length > matchedRoot.length)) {
+        matchedRoot = r;
+      }
+    }
+    final names = <String>[];
+    for (var d = dir; ; d = dirOf(d)) {
+      if (d != '/') names.add(baseOf(d));
+      if (matchedRoot == null || d == matchedRoot || d == '/') break;
+    }
+    return names;
+  }
+
+  String _anchorTitleFor(
+    List<ScanFile> files,
+    String rootDir,
+    String fallback,
+  ) {
+    final counts = <String, int>{};
+    final first = <String, String>{};
+    for (final f in files) {
+      if (f.role != FileRole.video) continue;
+      final t = f.parsed?.title?.trim();
+      if (t == null || t.isEmpty) continue;
+      final k = normTitle(t);
+      if (k.isEmpty) continue;
+      counts.update(k, (v) => v + 1, ifAbsent: () => 1);
+      first.putIfAbsent(k, () => t);
+    }
+    if (counts.isNotEmpty) {
+      final best = counts.entries.reduce((a, b) => b.value > a.value ? b : a);
+      return first[best.key]!;
+    }
+    if (rootDir != '/') {
+      final parsed = _parser.parse(baseOf(rootDir)).title?.trim();
+      if (parsed != null && parsed.isNotEmpty) return parsed;
+    }
+    return files.isNotEmpty ? stem(files.first.name) : fallback;
+  }
+
+  TaskSummary _withCounts(TaskSummary s, ScanResult scan) {
+    final all = [for (final g in scan.groups) ...g.files, ...scan.unassigned];
+    return _with(
+      s,
+      videos: all.where((f) => f.role == FileRole.video).length,
+      subtitles: all.where((f) => f.role == FileRole.subtitle).length,
+      folders: {for (final f in all) p.posix.dirname(f.path)}.length,
+    );
+  }
+
   @override
   Future<TaskReview> assignUnassigned(
     TaskId id,
     String filePath,
     GroupId targetGroup,
-  ) => review(id);
+  ) async {
+    final t = await _get(id);
+    _requireStage(t, TaskStage.awaitingReview);
+    if (t.busy) throw StateError('任务正在处理中');
+    final scan = t.scan;
+    if (scan == null) throw StateError('任务尚未识别完成');
+    final uIdx = scan.unassigned.indexWhere((f) => f.path == filePath);
+    if (uIdx < 0) throw ArgumentError('未找到未分组文件：$filePath');
+    final gIdx = scan.groups.indexWhere((g) => g.id == targetGroup);
+    if (gIdx < 0) throw ArgumentError('未找到目标分组：${targetGroup.value}');
+
+    final orig = scan.unassigned[uIdx];
+    final parsed =
+        orig.parsed ??
+        _parser.parse(
+          orig.name,
+          parentDirs: _parentDirNames(orig.path, scan.roots),
+        );
+    var role = orig.role;
+    if (role == FileRole.junk || role == FileRole.other) {
+      final classified = _parser.classify(orig.name);
+      if (classified != FileRole.junk && classified != FileRole.other) {
+        role = classified;
+      }
+    }
+    final assigned = orig.copyWith(role: role, parsed: () => parsed);
+    final nextUnassigned = [...scan.unassigned]..removeAt(uIdx);
+    final target = scan.groups[gIdx];
+    final nextFiles = [...target.files, assigned]
+      ..sort((a, b) => a.path.compareTo(b.path));
+    final nextGroups = [...scan.groups]
+      ..[gIdx] = _copyGroup(target, files: nextFiles);
+    final nextScan = ScanResult(
+      connection: scan.connection,
+      roots: scan.roots,
+      groups: nextGroups,
+      unassigned: nextUnassigned,
+    );
+    final nextDeletes = {...t.unassignedDeletes}..remove(filePath);
+    final decisions = t.decisions;
+    final gen = ++t.editGen;
+    t.pendingEdits++;
+    try {
+      final (plan, opts) = await _buildPlanWithOptions(
+        t.summary,
+        nextScan,
+        decisions,
+        unassignedDeletes: nextDeletes,
+      );
+      if (t.editGen == gen &&
+          t.summary.stage == TaskStage.awaitingReview &&
+          _tasks[id] == t) {
+        t
+          ..scan = nextScan
+          ..unassignedDeletes = nextDeletes
+          ..plan = plan
+          ..planOptions = opts
+          ..inFlightPlan = null;
+        await _saveReview(t, nextScan, decisions);
+        await _set(t, _withCounts(t.summary, nextScan));
+      }
+      return await _review(t);
+    } finally {
+      t.pendingEdits--;
+    }
+  }
 
   @override
   Future<TaskReview> setUnassignedDelete(
     TaskId id,
     String filePath,
     bool delete,
-  ) => review(id);
+  ) async {
+    final t = await _get(id);
+    _requireStage(t, TaskStage.awaitingReview);
+    if (t.busy) throw StateError('任务正在处理中');
+    final scan = t.scan;
+    if (scan == null) throw StateError('任务尚未识别完成');
+    if (!scan.unassigned.any((f) => f.path == filePath)) {
+      throw ArgumentError('未找到未分组文件：$filePath');
+    }
+    final nextDeletes = {...t.unassignedDeletes, filePath: delete};
+    final decisions = t.decisions;
+    final gen = ++t.editGen;
+    t.pendingEdits++;
+    try {
+      final (plan, opts) = await _buildPlanWithOptions(
+        t.summary,
+        scan,
+        decisions,
+        unassignedDeletes: nextDeletes,
+      );
+      if (t.editGen == gen &&
+          t.summary.stage == TaskStage.awaitingReview &&
+          _tasks[id] == t) {
+        t
+          ..unassignedDeletes = nextDeletes
+          ..plan = plan
+          ..planOptions = opts
+          ..inFlightPlan = null;
+        _emit(t, t.summary);
+      }
+      return await _review(t);
+    } finally {
+      t.pendingEdits--;
+    }
+  }
 
   @override
-  Future<TaskReview> mergeGroups(TaskId id, GroupId keep, GroupId absorb) =>
-      review(id);
+  Future<TaskReview> mergeGroups(
+    TaskId id,
+    GroupId keep,
+    GroupId absorb,
+  ) async {
+    final t = await _get(id);
+    _requireStage(t, TaskStage.awaitingReview);
+    if (t.busy) throw StateError('任务正在处理中');
+    final scan = t.scan;
+    if (scan == null) throw StateError('任务尚未识别完成');
+    if (keep == absorb) throw ArgumentError('不能将分组与自身合并');
+    final keepIdx = scan.groups.indexWhere((g) => g.id == keep);
+    final absorbIdx = scan.groups.indexWhere((g) => g.id == absorb);
+    if (keepIdx < 0) throw ArgumentError('未找到保留分组：${keep.value}');
+    if (absorbIdx < 0) throw ArgumentError('未找到被合并分组：${absorb.value}');
+
+    final keepGroup = scan.groups[keepIdx];
+    final absorbGroup = scan.groups[absorbIdx];
+    final byPath = <String, ScanFile>{
+      for (final f in keepGroup.files) f.path: f,
+      for (final f in absorbGroup.files) f.path: f,
+    };
+    final combined = byPath.values.toList()
+      ..sort((a, b) => a.path.compareTo(b.path));
+    final nextRoot = _commonParentDir(combined, keepGroup.rootDir);
+    final nextGroups = <MediaGroup>[];
+    for (final g in scan.groups) {
+      if (g.id == absorb) continue;
+      if (g.id == keep) {
+        nextGroups.add(_copyGroup(g, rootDir: nextRoot, files: combined));
+      } else {
+        nextGroups.add(g);
+      }
+    }
+    final nextScan = ScanResult(
+      connection: scan.connection,
+      roots: scan.roots,
+      groups: nextGroups,
+      unassigned: scan.unassigned,
+    );
+    final nextDecisions = {...t.decisions};
+    final absorbedDecision = nextDecisions.remove(absorb);
+    if (absorbedDecision != null && absorbedDecision.overrides.isNotEmpty) {
+      final keepDecision = nextDecisions[keep] ?? const GroupDecision();
+      nextDecisions[keep] = keepDecision.copyWith(
+        overrides: {...absorbedDecision.overrides, ...keepDecision.overrides},
+      );
+    }
+    final unassignedDeletes = t.unassignedDeletes;
+    final gen = ++t.editGen;
+    t.pendingEdits++;
+    try {
+      final (plan, opts) = await _buildPlanWithOptions(
+        t.summary,
+        nextScan,
+        nextDecisions,
+        unassignedDeletes: unassignedDeletes,
+      );
+      if (t.editGen == gen &&
+          t.summary.stage == TaskStage.awaitingReview &&
+          _tasks[id] == t) {
+        t
+          ..scan = nextScan
+          ..decisions = nextDecisions
+          ..plan = plan
+          ..planOptions = opts
+          ..inFlightPlan = null;
+        await _saveReview(t, nextScan, nextDecisions);
+        await _set(t, _withCounts(t.summary, nextScan));
+      }
+      return await _review(t);
+    } finally {
+      t.pendingEdits--;
+    }
+  }
 
   @override
   Future<TaskReview> splitGroup(
     TaskId id,
     GroupId group,
     Set<String> filePaths,
-  ) => review(id);
+  ) async {
+    final t = await _get(id);
+    _requireStage(t, TaskStage.awaitingReview);
+    if (t.busy) throw StateError('任务正在处理中');
+    final scan = t.scan;
+    if (scan == null) throw StateError('任务尚未识别完成');
+    final gIdx = scan.groups.indexWhere((g) => g.id == group);
+    if (gIdx < 0) throw ArgumentError('未找到分组：${group.value}');
+
+    final orig = scan.groups[gIdx];
+    final moved = <ScanFile>[];
+    final kept = <ScanFile>[];
+    for (final f in orig.files) {
+      if (filePaths.contains(f.path)) {
+        moved.add(f);
+      } else {
+        kept.add(f);
+      }
+    }
+    if (moved.isEmpty || kept.isEmpty) {
+      throw ArgumentError('拆分必须选择分组中的部分文件，且至少保留 1 个文件');
+    }
+
+    final keptRoot = _commonParentDir(kept, orig.rootDir);
+    final movedRoot = _commonParentDir(moved, orig.rootDir);
+    final keptAnchor = _anchorTitleFor(kept, keptRoot, orig.anchorTitle);
+    final movedAnchor = _anchorTitleFor(moved, movedRoot, orig.anchorTitle);
+
+    final movedVideos = [
+      for (final f in moved)
+        if (f.role == FileRole.video && f.parsed?.kind != MediaKind.extra) f,
+    ];
+    final movedTvVotes = movedVideos.where((v) {
+      final p = v.parsed;
+      return p != null &&
+          (p.kind == MediaKind.episode ||
+              p.kind == MediaKind.special ||
+              p.season != null ||
+              p.episodes.isNotEmpty ||
+              p.absolute != null);
+    }).length;
+    final movedKind = movedVideos.isEmpty
+        ? orig.kind
+        : (movedTvVotes * 2 > movedVideos.length
+              ? MediaKind.episode
+              : MediaKind.movie);
+    final movedYear = [for (final v in movedVideos) ?v.parsed?.year]
+        .firstOrNull;
+
+    final existingIds = {for (final g in scan.groups) g.id.value};
+    final baseKey =
+        '$movedRoot|${movedKind.name}|${normTitle(movedAnchor)}|split';
+    var newId = 'g-${stableHash(baseKey)}';
+    for (var n = 2; existingIds.contains(newId); n++) {
+      newId = 'g-${stableHash('$baseKey|$n')}';
+    }
+    final newGroupId = GroupId(newId);
+
+    final updatedOrig = _copyGroup(
+      orig,
+      rootDir: keptRoot,
+      anchorTitle: keptAnchor,
+      files: kept,
+    );
+    final newGroup = MediaGroup(
+      id: newGroupId,
+      kind: movedKind,
+      anchorTitle: movedAnchor,
+      anchorYear: movedYear,
+      rootDir: movedRoot,
+      files: moved,
+    );
+    final nextGroups = [...scan.groups]
+      ..[gIdx] = updatedOrig
+      ..insert(gIdx + 1, newGroup);
+    final nextScan = ScanResult(
+      connection: scan.connection,
+      roots: scan.roots,
+      groups: nextGroups,
+      unassigned: scan.unassigned,
+    );
+    final nextDecisions = {...t.decisions};
+    final origDecision = nextDecisions[group];
+    if (origDecision != null && origDecision.overrides.isNotEmpty) {
+      final movedSet = {for (final f in moved) f.path};
+      final keptOverrides = {
+        for (final e in origDecision.overrides.entries)
+          if (!movedSet.contains(e.key)) e.key: e.value,
+      };
+      nextDecisions[group] = origDecision.copyWith(overrides: keptOverrides);
+    }
+    nextDecisions[newGroupId] = const GroupDecision();
+
+    final unassignedDeletes = t.unassignedDeletes;
+    final gen = ++t.editGen;
+    t.pendingEdits++;
+    try {
+      final (plan, opts) = await _buildPlanWithOptions(
+        t.summary,
+        nextScan,
+        nextDecisions,
+        unassignedDeletes: unassignedDeletes,
+      );
+      if (t.editGen == gen &&
+          t.summary.stage == TaskStage.awaitingReview &&
+          _tasks[id] == t) {
+        t
+          ..scan = nextScan
+          ..decisions = nextDecisions
+          ..plan = plan
+          ..planOptions = opts
+          ..inFlightPlan = null;
+        await _saveReview(t, nextScan, nextDecisions);
+        await _set(t, _withCounts(t.summary, nextScan));
+      }
+      return await _review(t);
+    } finally {
+      t.pendingEdits--;
+    }
+  }
+
+  static String _normDirPath(String raw) {
+    var s = raw.trim();
+    while (s.length > 1 && s.endsWith('/')) {
+      s = s.substring(0, s.length - 1);
+    }
+    return s;
+  }
+
+  static String _applyFolderRenames(String path, List<RenameOp> folders) {
+    var cur = path;
+    for (final f in folders) {
+      if (cur == f.src) {
+        cur = f.dst;
+      } else if (cur.startsWith('${f.src}/')) {
+        cur = '${f.dst}${cur.substring(f.src.length)}';
+      }
+    }
+    return cur;
+  }
+
+  Set<String> _protectedRootsFor(_Task t) {
+    final opts = _effectiveOptions(t.summary, t.unassignedDeletes);
+    return {
+      '/',
+      for (final r in t.summary.paths)
+        if (r.trim().isNotEmpty) _normDirPath(r),
+      if (opts.libraryRoot != null && opts.libraryRoot!.trim().isNotEmpty)
+        _normDirPath(opts.libraryRoot!),
+    };
+  }
 
   @override
-  Future<List<String>> findEmptyDirs(TaskId id) async => const [];
+  Future<List<String>> findEmptyDirs(TaskId id) async {
+    final t = await _get(id);
+    final batch = t.summary.batch ?? await _batchOf(id, includeUndone: false);
+    if (batch == null) return const [];
+    final records = await history.records(batch);
+    final doneFolders = [
+      for (final r in records)
+        if (r.status == OpStatus.done &&
+            r.op.phase == ExecPhase.folders &&
+            r.op.kind == OpKind.relocate)
+          r.op,
+    ];
+    final protectedRoots = _protectedRootsFor(t);
+    final normTaskRoots = [
+      for (final r in t.summary.paths)
+        if (r.trim().isNotEmpty) _normDirPath(r),
+    ];
+    final candidates = <String>{};
+
+    void addWithAncestors(String rawDir) {
+      final start = _normDirPath(rawDir);
+      if (start.isEmpty || start == '/' || protectedRoots.contains(start)) {
+        return;
+      }
+      String? bound;
+      for (final r in normTaskRoots) {
+        if ((start == r || start.startsWith(r == '/' ? '/' : '$r/')) &&
+            (bound == null || r.length > bound.length)) {
+          bound = r;
+        }
+      }
+      if (bound == null) {
+        candidates.add(start);
+        return;
+      }
+      for (
+        var d = start;
+        d != '/' && d != bound && !protectedRoots.contains(d);
+        d = dirOf(d)
+      ) {
+        candidates.add(d);
+      }
+    }
+
+    for (final r in records) {
+      if (r.status != OpStatus.done) continue;
+      final op = r.op;
+      if (op.kind == OpKind.relocate && op.src != op.dst) {
+        final srcParent = dirOf(op.src);
+        if (op.phase == ExecPhase.files || dirOf(op.src) != dirOf(op.dst)) {
+          addWithAncestors(srcParent);
+          final mapped = _applyFolderRenames(srcParent, doneFolders);
+          if (mapped != srcParent) addWithAncestors(mapped);
+        }
+      } else if (op.kind == OpKind.delete && op.src.isNotEmpty) {
+        addWithAncestors(dirOf(op.src));
+      }
+    }
+    if (candidates.isEmpty) return const [];
+    return findEmptySourceDirs(
+      backendFor(t.summary.connection),
+      candidates,
+      protectedRoots: protectedRoots,
+    );
+  }
 
   @override
-  Future<int> removeEmptyDirs(TaskId id, List<String> dirs) async => 0;
+  Future<int> removeEmptyDirs(TaskId id, List<String> dirs) async {
+    final t = await _get(id);
+    final be = backendFor(t.summary.connection);
+    final protectedRoots = _protectedRootsFor(t);
+    final unique = <String>{
+      for (final raw in dirs)
+        if (raw.trim().isNotEmpty) _normDirPath(raw),
+    }..removeWhere((d) => d.isEmpty || d == '/' || protectedRoots.contains(d));
+    final sorted = unique.toList()
+      ..sort((a, b) {
+        final dc = '/'.allMatches(b).length.compareTo('/'.allMatches(a).length);
+        return dc != 0 ? dc : a.compareTo(b);
+      });
+    var removed = 0;
+    for (final dir in sorted) {
+      try {
+        final entries = await be.list(dir, refresh: true);
+        final hasReal = entries.any(
+          (e) =>
+              e.isDir || !ignorableEmptyDirFiles.contains(e.name.toLowerCase()),
+        );
+        if (hasReal) continue;
+        if (entries.isNotEmpty) {
+          await be.remove(dir, [for (final e in entries) e.name]);
+        }
+        await be.remove(dirOf(dir), [baseOf(dir)]);
+        removed++;
+      } on StorageException {
+        continue;
+      }
+    }
+    return removed;
+  }
 
   @override
   Future<void> run(TaskId id, {bool onlyConfident = false}) async {
@@ -423,6 +959,7 @@ class DefaultTaskManager implements TaskManager {
       ..cancelled = false
       ..scan = null
       ..decisions = const {}
+      ..unassignedDeletes = const {}
       ..plan = null
       ..planOptions = null
       ..inFlightPlan = null
@@ -605,6 +1142,7 @@ class DefaultTaskManager implements TaskManager {
         s.paths,
         files,
         read: be.read,
+        backend: be,
       );
       if (stale()) return;
       _emit(
@@ -621,6 +1159,7 @@ class DefaultTaskManager implements TaskManager {
         t.summary,
         scan,
         decisions,
+        unassignedDeletes: t.unassignedDeletes,
       );
       if (stale()) return;
 
@@ -718,8 +1257,31 @@ class DefaultTaskManager implements TaskManager {
     }
     if (!stale()) {
       await walkDirs(dirs, (dir) async {
+        final children = await listFresh(be, dir);
+        if (stale()) return const [];
+        final discMarker = children
+            .where(
+              (e) =>
+                  e.isDir &&
+                  (e.name.toUpperCase() == 'BDMV' ||
+                      e.name.toUpperCase() == 'VIDEO_TS'),
+            )
+            .firstOrNull;
+        if (discMarker != null) {
+          if (dir != '/') {
+            add(RemoteEntry(path: dir, name: baseOf(dir), isDir: true));
+          }
+          add(discMarker);
+          for (final e in children) {
+            if (stale()) break;
+            if (!e.isDir && e.name.toLowerCase().endsWith('.nfo')) {
+              add(e);
+            }
+          }
+          return const [];
+        }
         final subs = <String>[];
-        for (final e in await listFresh(be, dir)) {
+        for (final e in children) {
           if (stale()) break;
           e.isDir ? subs.add(e.path) : add(e);
         }
@@ -740,27 +1302,43 @@ class DefaultTaskManager implements TaskManager {
     return out;
   }
 
-  PlanOptions _effectiveOptions(TaskSummary s) {
+  PlanOptions _effectiveOptions(
+    TaskSummary s, [
+    Map<String, bool> taskUnassignedDeletes = const {},
+  ]) {
     final o = options(s.connection, s.mode);
-    return !s.scrape
-        ? o
-        : PlanOptions(
-            mode: o.mode,
-            libraryRoot: o.libraryRoot,
-            naming: o.naming,
-            deleteJunk: o.deleteJunk,
-            confidenceThreshold: o.confidenceThreshold,
-            scrape: true,
-          );
+    final mergedDeletes = taskUnassignedDeletes.isEmpty
+        ? o.unassignedDeletes
+        : {...o.unassignedDeletes, ...taskUnassignedDeletes};
+    final scrape = o.scrape || s.scrape || s.scrapeOnly;
+    final scrapeOnly = o.scrapeOnly || s.scrapeOnly;
+    if (scrape == o.scrape &&
+        scrapeOnly == o.scrapeOnly &&
+        identical(mergedDeletes, o.unassignedDeletes)) {
+      return o;
+    }
+    return PlanOptions(
+      mode: o.mode,
+      libraryRoot: o.libraryRoot,
+      naming: o.naming,
+      deleteJunk: o.deleteJunk,
+      confidenceThreshold: o.confidenceThreshold,
+      scrape: scrape,
+      scrapeOnly: scrapeOnly,
+      overwriteNfo: o.overwriteNfo,
+      probeMedia: o.probeMedia,
+      unassignedDeletes: Map.unmodifiable(mergedDeletes),
+    );
   }
 
   /// Planner output plus a conflict check against what already exists at the targets.
   Future<(RenamePlan, PlanOptions)> _buildPlanWithOptions(
     TaskSummary s,
     ScanResult scan,
-    Map<GroupId, GroupDecision> decisions,
-  ) async {
-    final opts = _effectiveOptions(s);
+    Map<GroupId, GroupDecision> decisions, {
+    Map<String, bool> unassignedDeletes = const {},
+  }) async {
+    final opts = _effectiveOptions(s, unassignedDeletes);
     final be = backendFor(s.connection);
     // What's already in each target folder: for conflicts (never overwrite),
     // and so a show folder already there is merged into. Planning again can
@@ -798,7 +1376,8 @@ class DefaultTaskManager implements TaskManager {
 
   Future<RenamePlan> _ensurePlan(_Task t) {
     final scan = t.scan!;
-    final opts = _effectiveOptions(t.summary);
+    final unassignedDeletes = t.unassignedDeletes;
+    final opts = _effectiveOptions(t.summary, unassignedDeletes);
     if (t.plan != null && t.planOptions == opts) return Future.value(t.plan!);
     final gen = t.editGen;
     final pending = t.inFlightPlan;
@@ -814,6 +1393,7 @@ class DefaultTaskManager implements TaskManager {
           summary,
           scan,
           decisions,
+          unassignedDeletes: unassignedDeletes,
         );
         if (t.editGen == gen &&
             t.summary.mode == summary.mode &&
@@ -872,16 +1452,14 @@ class DefaultTaskManager implements TaskManager {
     final keptGroups = <GroupId>{};
     final keptIds = <OpId>{};
 
-    // Pass 1: video relocates.
+    // Pass 1: video relocates (including BDMV/VIDEO_TS disc folder relocates).
     for (final o in plan.ops) {
-      if (o.phase != ExecPhase.files ||
-          o.kind != OpKind.relocate ||
-          !o.selected) {
-        continue;
-      }
+      if (o.kind != OpKind.relocate || !o.selected) continue;
+      if (o.phase != ExecPhase.files && o.phase != ExecPhase.folders) continue;
       final g = o.group == null ? null : groups[o.group];
       final f = g?.files.where((x) => x.path == o.src).firstOrNull;
       if (g == null || f?.role != FileRole.video) continue;
+      if (o.phase == ExecPhase.folders && !f!.isDiscDir) continue;
       final d = t.decisions[g.id] ?? const GroupDecision();
       final ov = d.overrides[o.src];
       final confirmed = ov != null && !ov.ignore;
@@ -891,6 +1469,20 @@ class DefaultTaskManager implements TaskManager {
         keptFileOps.add(o);
         keptVideoSrcs.add(o.src);
         keptGroups.add(g.id);
+      }
+    }
+
+    // In scrapeOnly mode there are no relocate ops; keep confident groups' writes.
+    final isScrapeOnlyPlan =
+        t.summary.scrapeOnly ||
+        !plan.ops.any((o) => o.selected && o.kind == OpKind.relocate);
+    if (isScrapeOnlyPlan) {
+      for (final g in t.scan!.groups) {
+        final d = t.decisions[g.id] ?? const GroupDecision();
+        if (!d.selected || (d.match ?? g.match) == null) continue;
+        if (d.match != null || g.matchScore >= threshold) {
+          keptGroups.add(g.id);
+        }
       }
     }
 
@@ -1032,6 +1624,14 @@ class DefaultTaskManager implements TaskManager {
       for (final o in keptFileOps)
         if (keptVideoSrcs.contains(o.src))
           '${dirOf(postFolder(o.dst))}/${stem(baseOf(o.dst))}',
+      if (isScrapeOnlyPlan)
+        for (final g in t.scan!.groups)
+          if (keptGroups.contains(g.id))
+            for (final f in g.files)
+              if (f.role == FileRole.video)
+                f.isDiscDir
+                    ? '${f.path}/movie'
+                    : '${dirOf(f.path)}/${stem(f.name)}',
     };
     final keptMergeDirs = <String>{
       for (final m in plan.merges)
@@ -1047,8 +1647,11 @@ class DefaultTaskManager implements TaskManager {
       final lowerName = name.toLowerCase();
       final isShowArt =
           lowerName == 'tvshow.nfo' ||
+          lowerName == 'movie.nfo' ||
           lowerName == 'poster.jpg' ||
-          lowerName == 'fanart.jpg';
+          lowerName == 'fanart.jpg' ||
+          lowerName == 'clearlogo.png' ||
+          lowerName == 'landscape.jpg';
       final isGroupArt = isShowArt || _seasonArtRe.hasMatch(lowerName);
       final belongsToKept =
           o.group == null ||
@@ -1120,6 +1723,7 @@ class DefaultTaskManager implements TaskManager {
                 group: o.group,
                 selected: false,
                 warning: o.warning,
+                overwrite: o.overwrite,
               ),
     ];
     return RenamePlan(
@@ -1391,6 +1995,7 @@ class DefaultTaskManager implements TaskManager {
     paths: s.paths,
     mode: mode ?? s.mode,
     scrape: s.scrape,
+    scrapeOnly: s.scrapeOnly,
     stage: stage ?? s.stage,
     message: message ?? s.message,
     importedCount: imported ?? s.importedCount,
