@@ -74,11 +74,23 @@ List<MapCell> layoutOrganic(
   final w0 = area / n * 0.1;
   final weights = List.filled(n, w0);
   var cells = List<List<Offset>>.filled(n, const []);
+  final areas = List<double>.filled(n, 0);
+  var converged = false;
 
   for (var round = 0; round < iterations; round++) {
     cells = _powerCells(frame, sites, weights);
+    var maxRelErr = 0.0;
     for (var i = 0; i < n; i++) {
-      final a = polygonArea(cells[i]);
+      final a = areas[i] = polygonArea(cells[i]);
+      final err = (a - target[i]).abs() / math.max(target[i], 1.0);
+      if (err > maxRelErr) maxRelErr = err;
+    }
+    if (round >= 25 && maxRelErr < 0.015) {
+      converged = true;
+      break;
+    }
+    for (var i = 0; i < n; i++) {
+      final a = areas[i];
       if (a > 1e-6) sites[i] = polygonCentroid(cells[i]);
       // A cell of area A acts like a circle with r² = A/π, and a power cell's
       // weight is that r². Additive, unlike scaling the weight by target/A,
@@ -96,10 +108,74 @@ List<MapCell> layoutOrganic(
       }
     }
   }
-  cells = _powerCells(frame, sites, weights);
+  if (!converged) {
+    cells = _powerCells(frame, sites, weights);
+  }
   return [
     for (var i = 0; i < n; i++)
       if (cells[i].length >= 3) MapCell(live[i].id, live[i].value, cells[i]),
+  ];
+}
+
+/// Serializable primitive request for [layoutOrganicInIsolate] so `compute()` /
+/// `Isolate.run()` never sends `dart:ui` objects across isolate boundaries.
+typedef OrganicLayoutRequest = (
+  List<(String, double)> items,
+  (double left, double top, double right, double bottom) bounds,
+  int iterations,
+  Map<String, (double, double)>? seeds,
+);
+
+/// Serializable primitive cell returned by [layoutOrganicInIsolate]:
+/// `(id, value, polygonVertices)`.
+typedef OrganicLayoutCell = (String, double, List<(double, double)>);
+
+/// Packs typed layout arguments into a primitive [OrganicLayoutRequest].
+OrganicLayoutRequest packOrganicLayoutRequest(
+  List<MapItem> items,
+  Rect bounds, {
+  int iterations = 120,
+  Map<String, Offset>? seeds,
+}) => (
+  [for (final i in items) (i.id, i.value)],
+  (bounds.left, bounds.top, bounds.right, bounds.bottom),
+  iterations,
+  seeds == null
+      ? null
+      : {for (final e in seeds.entries) e.key: (e.value.dx, e.value.dy)},
+);
+
+/// Unpacks primitive [OrganicLayoutCell] rows back into [MapCell] objects.
+List<MapCell> unpackOrganicLayoutCells(List<OrganicLayoutCell> raw) => [
+  for (final (id, value, pts) in raw)
+    MapCell(id, value, [for (final (x, y) in pts) Offset(x, y)]),
+];
+
+/// Pure top-level isolate entrypoint for [layoutOrganic].
+List<OrganicLayoutCell> layoutOrganicInIsolate(OrganicLayoutRequest req) {
+  final (rawItems, rawBounds, iterations, rawSeeds) = req;
+  final items = [for (final (id, v) in rawItems) MapItem(id, v)];
+  final bounds = Rect.fromLTRB(
+    rawBounds.$1,
+    rawBounds.$2,
+    rawBounds.$3,
+    rawBounds.$4,
+  );
+  final seeds = rawSeeds == null
+      ? null
+      : {
+          for (final e in rawSeeds.entries)
+            e.key: Offset(e.value.$1, e.value.$2),
+        };
+  final cells = layoutOrganic(
+    items,
+    bounds,
+    iterations: iterations,
+    seeds: seeds,
+  );
+  return [
+    for (final c in cells)
+      (c.id, c.value, [for (final p in c.polygon) (p.dx, p.dy)]),
   ];
 }
 

@@ -18,6 +18,23 @@ import 'size_scanner.dart';
 const _maxBlocks = 150;
 const restId = '__rest__';
 
+String _blockTooltip(String name, FolderStats st) {
+  final size = fmtSize(st.total);
+  final header = size.isEmpty ? name : '$name · $size';
+  final String progress;
+  if (st.video == 0) {
+    progress = '非视频文件';
+  } else if (st.unorganized == 0) {
+    progress = '全部已整理';
+  } else if (st.organized == 0) {
+    progress = '全部未整理';
+  } else {
+    final pct = (st.organized * 100 / st.video).round().clamp(1, 99);
+    progress = '已整理 $pct% · 未整理 ${fmtSize(st.unorganized)}';
+  }
+  return '$header\n$progress\n共 ${st.files} 个文件';
+}
+
 /// Folder [dir] as blocks: one per child, area = recursive size, tone =
 /// organize state; only past [_maxBlocks] does the tail fold into 「其余」.
 List<MapBlock> mapBlocksFor(SizeScanner s, String dir) {
@@ -37,6 +54,7 @@ List<MapBlock> mapBlocksFor(SizeScanner s, String dir) {
           bytes: st.total,
           state: blockStateOf(st),
           caption: fmtSize(st.total),
+          tooltip: _blockTooltip(e.name, st),
         ),
       );
     } else {
@@ -45,13 +63,15 @@ List<MapBlock> mapBlocksFor(SizeScanner s, String dir) {
     }
   }
   if (restCount > 0) {
+    final restLabel = '其余 $restCount 项';
     keep.add(
       MapBlock(
         id: restId,
-        label: '其余 $restCount 项',
+        label: restLabel,
         bytes: rest.total,
         state: blockStateOf(rest),
         caption: fmtSize(rest.total),
+        tooltip: _blockTooltip(restLabel, rest),
       ),
     );
   }
@@ -167,7 +187,19 @@ class _RepoMapViewState extends ConsumerState<RepoMapView> {
     final dir = widget.dir;
     final blocks = mapBlocksFor(s, dir);
     final busy = s.running != null;
-    final byPath = {for (final e in s.entriesOf(dir)) e.path: e};
+    final entries = s.entriesOf(dir);
+    final byPath = {for (final e in entries) e.path: e};
+    final unorganizedPaths = <String>[
+      for (final e in entries)
+        if (switch (blockStateOf(s.statsOf(e))) {
+          BlockState.unorganized || BlockState.mixed => true,
+          BlockState.organized || BlockState.other => false,
+        })
+          e.path,
+    ];
+    final allUnorganizedSelected =
+        unorganizedPaths.isNotEmpty &&
+        unorganizedPaths.every(widget.selected.contains);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -180,6 +212,47 @@ class _RepoMapViewState extends ConsumerState<RepoMapView> {
               Expanded(
                 child: RepoMapSummary(scanner: s, dir: dir),
               ),
+              if (unorganizedPaths.isNotEmpty) ...[
+                const SizedBox(width: 12),
+                OutlinedButton.icon(
+                  key: const ValueKey('map-select-unorganized'),
+                  style: OutlinedButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    textStyle: const TextStyle(fontSize: TypeScale.small),
+                  ),
+                  onPressed: () {
+                    if (allUnorganizedSelected) {
+                      for (final path in unorganizedPaths) {
+                        if (widget.selected.contains(path)) {
+                          widget.onToggleSelect(path);
+                        }
+                      }
+                    } else {
+                      for (final path in unorganizedPaths) {
+                        if (!widget.selected.contains(path)) {
+                          widget.onToggleSelect(path);
+                        }
+                      }
+                    }
+                  },
+                  icon: Icon(
+                    allUnorganizedSelected
+                        ? CupertinoIcons.checkmark_square_fill
+                        : CupertinoIcons.checkmark_square,
+                    size: 13,
+                  ),
+                  label: Text(
+                    allUnorganizedSelected
+                        ? '取消选中未整理'
+                        : '选中未整理 (${unorganizedPaths.length})',
+                  ),
+                ),
+                const SizedBox(width: 14),
+              ],
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 mainAxisSize: MainAxisSize.min,

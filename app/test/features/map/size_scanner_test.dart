@@ -1,4 +1,7 @@
+import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tidyreel/data/database.dart';
+import 'package:tidyreel/data/folder_stats_store.dart';
 import 'package:tidyreel/features/map/repo_map_view.dart';
 import 'package:tidyreel/features/map/size_scanner.dart';
 import 'package:tidyreel_core/testing.dart';
@@ -224,6 +227,353 @@ void main() {
       expect(looksOrganized(dir('/下载/Season 01')), isFalse);
       expect(looksOrganized(dir('/下载/The.Bear.S03.2160p')), isFalse);
       expect(looksOrganized(dir('/下载')), isFalse);
+    });
+
+    test('custom seasonFolderTemplate (S01, 第 1 季, season 01)', () {
+      const s01Profile = NamingProfile(
+        tv: NamingOptions(seasonFolderTemplate: 'S{season:02}'),
+      );
+      expect(
+        looksOrganized(
+          file('/剧/三体 (2023)/S01/三体 - S01E02.mkv'),
+          profile: s01Profile,
+        ),
+        isTrue,
+      );
+      expect(
+        looksOrganized(
+          file('/剧/三体 (2023)/S02/三体 - S01E02.mkv'),
+          profile: s01Profile,
+        ),
+        isFalse,
+      );
+      expect(
+        looksOrganized(dir('/剧/三体 (2023)/S01'), profile: s01Profile),
+        isTrue,
+      );
+      expect(looksOrganized(dir('/下载/S01'), profile: s01Profile), isFalse);
+      // Default Season 01 and Specials still count alongside custom templates.
+      expect(
+        looksOrganized(
+          file('/剧/三体 (2023)/Season 01/三体 - S01E02.mkv'),
+          profile: s01Profile,
+        ),
+        isTrue,
+      );
+      expect(
+        looksOrganized(
+          file('/剧/三体 (2023)/Specials/三体 - S00E01.mkv'),
+          profile: s01Profile,
+        ),
+        isTrue,
+      );
+
+      const cnSeasonProfile = NamingProfile(
+        tv: NamingOptions(seasonFolderTemplate: '第 {season} 季'),
+      );
+      expect(
+        looksOrganized(
+          file('/剧/三体 (2023)/第 1 季/三体 - S01E02.mkv'),
+          profile: cnSeasonProfile,
+        ),
+        isTrue,
+      );
+      expect(
+        looksOrganized(
+          file('/剧/三体 (2023)/第 2 季/三体 - S01E02.mkv'),
+          profile: cnSeasonProfile,
+        ),
+        isFalse,
+      );
+      expect(
+        looksOrganized(dir('/剧/三体 (2023)/第 1 季'), profile: cnSeasonProfile),
+        isTrue,
+      );
+
+      const lowerSeasonProfile = NamingProfile(
+        tv: NamingOptions(seasonFolderTemplate: 'season {season:02}'),
+      );
+      expect(
+        looksOrganized(
+          file('/剧/三体 (2023)/season 01/三体 - S01E02.mkv'),
+          profile: lowerSeasonProfile,
+        ),
+        isTrue,
+      );
+    });
+
+    test('custom episodeStyle (1x02, s1e2, s01.e02)', () {
+      const crossProfile = NamingProfile(
+        tv: NamingOptions(episodeStyle: EpisodeStyle.cross),
+      );
+      expect(
+        looksOrganized(
+          file('/剧/老友记 (1994)/Season 01/老友记.1994.1x02.mkv'),
+          profile: crossProfile,
+        ),
+        isTrue,
+      );
+      expect(
+        looksOrganized(
+          file('/剧/老友记 (1994)/Season 02/老友记.1994.1x02.mkv'),
+          profile: crossProfile,
+        ),
+        isFalse,
+      );
+      expect(
+        looksOrganized(
+          file('/剧/老友记 (1994)/老友记.1x02.mkv'),
+          profile: crossProfile,
+        ),
+        isTrue,
+      );
+
+      const shortProfile = NamingProfile(
+        tv: NamingOptions(episodeStyle: EpisodeStyle.lowerShort),
+      );
+      expect(
+        looksOrganized(
+          file('/剧/老友记 (1994)/Season 01/老友记.s1e2.mkv'),
+          profile: shortProfile,
+        ),
+        isTrue,
+      );
+
+      const dottedProfile = NamingProfile(
+        tv: NamingOptions(episodeStyle: EpisodeStyle.lowerDotted),
+      );
+      expect(
+        looksOrganized(
+          file('/剧/老友记 (1994)/Season 01/老友记.s01.e02.mkv'),
+          profile: dottedProfile,
+        ),
+        isTrue,
+      );
+    });
+
+    test('no-year folderTemplate and includeYear == false', () {
+      const noYearTemplate = NamingProfile(
+        movie: NamingOptions(folderTemplate: '{title}'),
+        tv: NamingOptions(folderTemplate: '{title}'),
+      );
+      expect(
+        looksOrganized(
+          file('/日漫/未来日记/Season 01/未来日记 - S01E02.mkv'),
+          profile: noYearTemplate,
+        ),
+        isTrue,
+      );
+      expect(
+        looksOrganized(file('/电影/盗梦空间/盗梦空间.mkv'), profile: noYearTemplate),
+        isTrue,
+      );
+      expect(looksOrganized(dir('/日漫/未来日记'), profile: noYearTemplate), isTrue);
+      // Raw downloads and generic container dirs still read as unorganized.
+      expect(
+        looksOrganized(
+          file('/下载/The.Bear.S03E02.2160p.mkv'),
+          profile: noYearTemplate,
+        ),
+        isFalse,
+      );
+      expect(
+        looksOrganized(
+          file('/下载/[Nekomoe] Dandadan/[Nekomoe] Dandadan - 01.mkv'),
+          profile: noYearTemplate,
+        ),
+        isFalse,
+      );
+      expect(
+        looksOrganized(file('/电影/盗梦空间/movie.mkv'), profile: noYearTemplate),
+        isFalse,
+      );
+      expect(looksOrganized(dir('/下载'), profile: noYearTemplate), isFalse);
+      expect(
+        looksOrganized(dir('/下载/The.Bear.S03.2160p'), profile: noYearTemplate),
+        isFalse,
+      );
+
+      const includeYearFalse = NamingProfile(
+        movie: NamingOptions(includeYear: false),
+        tv: NamingOptions(includeYear: false),
+      );
+      expect(
+        looksOrganized(
+          file('/电影/盗梦空间 (2010)/盗梦空间.mkv'),
+          profile: includeYearFalse,
+        ),
+        isTrue,
+      );
+      expect(
+        looksOrganized(file('/电影/盗梦空间/盗梦空间.mkv'), profile: includeYearFalse),
+        isTrue,
+      );
+    });
+
+    test('tmdbIdTag folders and BDMV / VIDEO_TS disc folders', () {
+      const tmdbProfile = NamingProfile(
+        movie: NamingOptions(
+          tmdbIdTag: true,
+          folderTemplate: '{title} ({year}) {tmdb_tag}',
+        ),
+      );
+      expect(
+        looksOrganized(
+          file('/电影/盗梦空间 (2010) {tmdb-27205}/盗梦空间 (2010) {tmdb-27205}.mkv'),
+          profile: tmdbProfile,
+        ),
+        isTrue,
+      );
+      expect(
+        looksOrganized(dir('/电影/盗梦空间 (2010)/BDMV'), profile: tmdbProfile),
+        isTrue,
+      );
+      expect(
+        looksOrganized(
+          file('/电影/盗梦空间 (2010)/BDMV/STREAM/00001.m2ts'),
+          profile: tmdbProfile,
+        ),
+        isTrue,
+      );
+      expect(
+        looksOrganized(
+          file('/电影/盗梦空间 (2010)/VIDEO_TS/VTS_01_1.VOB'),
+          profile: tmdbProfile,
+        ),
+        isTrue,
+      );
+      expect(
+        looksOrganized(
+          file('/下载/Inception.2010.BluRay.REMUX/BDMV/STREAM/00001.m2ts'),
+          profile: tmdbProfile,
+        ),
+        isFalse,
+      );
+    });
+  });
+
+  group('FolderStatsStore cache persistence', () {
+    const connId = ConnectionId('conn-cache');
+
+    test(
+      'hydrate restores cached listings and skips redundant backend.list',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final store = FolderStatsStore(db);
+
+        final be1 = _Counting(MemoryStorageBackend(fakeLibrary));
+        final s1 = SizeScanner(
+          backend: be1,
+          organizedOf: (paths) async =>
+              paths.where(fakeOrganized.contains).toSet(),
+          cacheStore: store,
+          connectionId: connId,
+        );
+        addTearDown(s1.dispose);
+        await s1.scan(root);
+        expect(be1.lists, greaterThan(0));
+        expect(s1.isComplete(root), isTrue);
+
+        // Second scanner instance hydrates from Drift cache without touching backend.
+        final be2 = _Counting(MemoryStorageBackend(fakeLibrary));
+        final s2 = SizeScanner(
+          backend: be2,
+          organizedOf: (paths) async =>
+              paths.where(fakeOrganized.contains).toSet(),
+          cacheStore: store,
+          connectionId: connId,
+        );
+        addTearDown(s2.dispose);
+        await s2.hydrate();
+        expect(s2.isComplete(root), isTrue);
+        expect(s2.statsOfDir(root).total, s1.statsOfDir(root).total);
+        expect(s2.statsOfDir(root).files, s1.statsOfDir(root).files);
+        expect(blockStateOf(s2.statsOfDir('$root/电影')), BlockState.organized);
+        expect(blockStateOf(s2.statsOfDir('$root/下载')), BlockState.unorganized);
+        await s2.scan(root);
+        expect(be2.lists, 0);
+
+        // Third scanner relies on lazy hydrate() inside scan() without explicit hydrate().
+        final be3 = _Counting(MemoryStorageBackend(fakeLibrary));
+        final s3 = SizeScanner(
+          backend: be3,
+          organizedOf: (paths) async =>
+              paths.where(fakeOrganized.contains).toSet(),
+          cacheStore: store,
+          connectionId: connId,
+        );
+        addTearDown(s3.dispose);
+        await s3.scan(root);
+        expect(be3.lists, 0);
+        expect(s3.isComplete(root), isTrue);
+        expect(s3.statsOfDir(root).total, _sumUnder(root));
+      },
+    );
+
+    test(
+      'forget invalidates SQLite cache subtree and marks ancestors incomplete',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final store = FolderStatsStore(db);
+
+        final be1 = _Counting(MemoryStorageBackend(fakeLibrary));
+        final s1 = SizeScanner(
+          backend: be1,
+          organizedOf: (paths) async =>
+              paths.where(fakeOrganized.contains).toSet(),
+          cacheStore: store,
+          connectionId: connId,
+        );
+        addTearDown(s1.dispose);
+        await s1.scan(root);
+        await s1.forget('$root/下载');
+
+        final be2 = _Counting(MemoryStorageBackend(fakeLibrary));
+        final s2 = SizeScanner(
+          backend: be2,
+          organizedOf: (paths) async =>
+              paths.where(fakeOrganized.contains).toSet(),
+          cacheStore: store,
+          connectionId: connId,
+        );
+        addTearDown(s2.dispose);
+        await s2.hydrate();
+        expect(s2.isComplete(root), isFalse);
+        expect(s2.isListed('$root/下载'), isFalse);
+        expect(s2.isListed('$root/剧集'), isTrue);
+
+        // Re-scanning root only lists the invalidated subtree, not untouched folders.
+        await s2.scan(root);
+        expect(be2.lists, greaterThan(0));
+        expect(be2.lists, lessThan(be1.lists));
+        expect(s2.isComplete(root), isTrue);
+        expect(s2.statsOfDir(root).total, _sumUnder(root));
+      },
+    );
+
+    test('SizeScanner re-evaluates stats when namingProfile changes', () async {
+      var profile = NamingProfile.vidhub;
+      final s = SizeScanner(
+        backend: MemoryStorageBackend({
+          '/库/三体 (2023)/第 1 季/三体 - 1x01.mkv': 1000,
+        }),
+        organizedOf: (_) async => const {},
+        namingProfile: () => profile,
+      );
+      addTearDown(s.dispose);
+      await s.scan('/库');
+      expect(blockStateOf(s.statsOfDir('/库')), BlockState.unorganized);
+
+      profile = const NamingProfile(
+        tv: NamingOptions(
+          seasonFolderTemplate: '第 {season} 季',
+          episodeStyle: EpisodeStyle.cross,
+        ),
+      );
+      s.marksChanged();
+      expect(blockStateOf(s.statsOfDir('/库')), BlockState.organized);
     });
   });
 }

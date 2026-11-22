@@ -67,8 +67,12 @@ final sizeScannerProvider = Provider.family<SizeScanner, ConnectionId>((
     backend: ref.watch(connectionBackendProvider(id)),
     organizedOf: ref.watch(mapOrganizedOfProvider(id)),
     marks: () => ref.read(organizedMarksProvider(id)),
+    namingProfile: () => ref.read(namingProfileProvider),
+    cacheStore: ref.watch(folderStatsStoreProvider),
+    connectionId: id,
   );
   ref.listen(organizedMarksProvider(id), (_, _) => scanner.marksChanged());
+  ref.listen(namingProfileProvider, (_, _) => scanner.marksChanged());
   ref.listen(tasksProvider, (prev, next) {
     final before = {
       for (final t in prev?.value ?? const <TaskSummary>[]) t.id: t.stage,
