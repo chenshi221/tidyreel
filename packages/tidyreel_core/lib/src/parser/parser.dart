@@ -23,8 +23,8 @@ abstract interface class FilenameParser {
 ///   `2160p.DV.Atmos`. Source and codec are left out.
 /// * A date ("向往的生活.20240503") with no episode number is a variety-show
 ///   episode identified by [ParsedName.airDate]; the planner looks it up on TMDB.
-/// * Season-0 content (OVA/SP/特别篇, `Specials/`) is kind `special` with season 0;
-///   NCOP/NCED/花絮/Making/PV/特典 are kind `extra`.
+/// * Season-0 content (OVA/SP/特别篇/先导片/recap `.5`, `Specials/`) is kind `special`
+///   with season 0; NCOP/NCED/花絮/Making/PV/特典/加更版/纯享版 are kind `extra`.
 class RuleBasedParser implements FilenameParser {
   const RuleBasedParser();
 
@@ -36,14 +36,18 @@ class RuleBasedParser implements FilenameParser {
     final a = analyze(fileName.split('/').last.split('\\').last, file: true);
 
     // Folder info: nearest folder with a title wins; season/special/extra folders
-    // contribute flags.
+    // contribute flags; explicit external IDs and edition tags inherit too.
     String? dTitle;
     int? dYear;
     int? dSeason;
+    String? dEdition;
+    ExternalId? dExternalId;
     var dSpecial = false, dExtra = false, dirsSeen = false;
     for (final raw in parentDirs) {
       if (raw.trim().isEmpty) continue;
       final d = analyze(raw, file: false);
+      dExternalId ??= d.externalId;
+      dEdition ??= d.edition;
       if (d.title.isEmpty) {
         if (d.extraKw) dExtra = true;
         if (d.specialKw) dSpecial = true;
@@ -60,15 +64,22 @@ class RuleBasedParser implements FilenameParser {
       dSeason ??= d.season;
     }
 
-    // Leading "01 Pilot.mkv" only counts as an episode when folders give context.
+    // Leading "01 Pilot.mkv" and bare 4-digit "海贼王/1080.mkv" only count as
+    // episodes when parent folders provide show/season context.
     var episodes = a.episodes;
     int? bare = a.bare;
     var bareFrom = a.bareFrom;
     var fileTitle = a.title;
-    if (bare == null && episodes.isEmpty && a.leadNum != null && dirsSeen) {
-      bare = a.leadNum;
-      bareFrom = 'lead';
-      fileTitle = '';
+    if (bare == null && episodes.isEmpty && dirsSeen) {
+      if (a.leadNum != null) {
+        bare = a.leadNum;
+        bareFrom = 'lead';
+        fileTitle = '';
+      } else if (a.loneFourDigit != null) {
+        bare = a.loneFourDigit;
+        bareFrom = 'lone';
+        fileTitle = '';
+      }
     }
     final title = fileTitle.isNotEmpty ? fileTitle : (dTitle ?? '');
     final titleFromDir = fileTitle.isEmpty && title.isNotEmpty;
@@ -88,6 +99,9 @@ class RuleBasedParser implements FilenameParser {
 
     final isSpecial = a.specialKw || dSpecial || season == 0;
     final isExtra = a.extraKw || dExtra;
+    final edition = a.edition ?? dEdition;
+    final externalId = a.externalId ?? dExternalId;
+
     MediaKind kind;
     if (isExtra) {
       kind = MediaKind.extra;
@@ -104,7 +118,7 @@ class RuleBasedParser implements FilenameParser {
         a.batch ||
         (a.airDate != null && title.isNotEmpty)) {
       kind = MediaKind.episode; // season-only = season pack, low confidence
-    } else if (year != null || a.hasTech) {
+    } else if (year != null || a.hasTech || a.part != null || edition != null) {
       kind = MediaKind.movie;
     } else {
       kind = MediaKind.unknown;
@@ -156,6 +170,11 @@ class RuleBasedParser implements FilenameParser {
       extraInfo: a.extra,
       confidence: double.parse(conf.toStringAsFixed(2)),
       airDate: kind == MediaKind.episode ? a.airDate : null,
+      edition: edition,
+      part: a.part,
+      partLabel: a.partLabel,
+      subFlags: a.subFlags,
+      externalId: externalId,
     );
   }
 

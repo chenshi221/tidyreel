@@ -1,16 +1,15 @@
 # Parser known failures
 
-Fixture pass rate: 406 / 411 (98.8%). The five misses below carry a `known:` reason in
-`fixtures.dart`; the test still runs them and prints them, but does not fail on them.
-A non-`known` miss fails the test.
+Fixture pass rate: 415 / 415 (100.0%). All five previously documented known
+failures have been resolved:
 
-| Input | Expected | Got | Why |
-|---|---|---|---|
-| `[Group] Title vol.1 [1080p].mkv` | title `Title` | `Title vol` | `vol.N` is not a recognised marker; the `1` is left as a stray number. |
-| `1080.mkv` in `海贼王/` | title `海贼王`, absolute 1080 | title `1080` | A bare 4-digit stem is indistinguishable from a resolution/year; only `- 1080` (dash form) is read as an episode. |
-| `The Movie 2019.mkv` in `Season 1/Show/` | title `The Movie` | title `2019` | "The Movie" is a strip-able keyword (`... The Movie` anime films); a real title with that phrase loses it. |
-| `Blade.Runner.2049.mkv` | title `Blade Runner 2049`, no year | title `Blade Runner`, year 2049 | A year-like number is a year when it is the only one. With a second real year (`...2049.2017`) it stays in the title. |
-| `Show.S01E01.zh_CN.srt` | lang `zh_CN` | `zh-CN` | Separators are normalised before the language is read, so the underscore is lost. |
+| Input | Resolution |
+|---|---|
+| `[Group] Title vol.1 [1080p].mkv` | Recognised `vol.N` / `Volume N` markers (when not inside a movie title before a release year like `Kill Bill Vol.1 2003`) so `vol.1` is stripped cleanly from `title`. |
+| `1080.mkv` in `海贼王/` | Bare 4-digit non-year stems (`1000..1899`, without `p`/`i`) now resolve as absolute/episode numbers when parent folders supply show/season context; `1080p.mkv` and standalone `1080.mkv` remain untouched. |
+| `The Movie 2019.mkv` in `Season 1/Show/` | `"The Movie"` is only stripped as an anime film suffix when a title precedes it (`Pokemon The Movie 2019`); a title starting with `"The Movie"` is preserved. |
+| `Blade.Runner.2049.mkv` | Release year candidates are capped at `currentYear + 2`, so futuristic numbers like `2049` stay in the title when no valid release year is present. |
+| `Show.S01E01.zh_CN.srt` | Underscores inside locale tags (`zh_CN`, `zh_TW`, `zh_Hans`, `zh_Hant`, `en_US`, `en_GB`) are preserved through separator normalization and normalized to canonical BCP-47 tags by `normalizeLang`. |
 
 ## Deliberate behaviours (not failures, but worth knowing)
 

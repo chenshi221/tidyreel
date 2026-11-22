@@ -664,11 +664,7 @@ const anime = <Case>[
   Case('[Group] Title - S01E05.mkv', t: 'Title', s: 1, e: [5], hi: true),
   Case('[Group] Title - 05 [Fix].mkv', t: 'Title', a: 5),
   Case('[Group] Title - 05 [1080p][HEVC].mkv', t: 'Title', a: 5, r: '1080p'),
-  Case(
-    '[Group] Title vol.1 [1080p].mkv',
-    t: 'Title',
-    known: 'volume numbers are not episodes; result is title-only',
-  ),
+  Case('[Group] Title vol.1 [1080p].mkv', t: 'Title', e: [1]),
   Case('[Group] Title S3 - 12 [1080p].mkv', t: 'Title', s: 3, e: [12]),
   Case('[Group] Title 3rd Season - 12.mkv', t: 'Title', s: 3, e: [12]),
   Case('[Group] Title 第三季 - 12.mkv', t: 'Title', s: 3, e: [12]),
@@ -816,18 +812,12 @@ const folders = <Case>[
     s: 2,
     e: [1],
   ),
-  Case(
-    '1080.mkv',
-    dirs: ['海贼王'],
-    t: '海贼王',
-    a: none,
-    known: '4-digit bare number without dash is ambiguous with resolution',
-  ),
+  Case('1080.mkv', dirs: ['海贼王'], t: '海贼王', a: 1080, k: _ep),
   Case(
     'The Movie 2019.mkv',
     dirs: ['Season 1', 'Show'],
     t: 'The Movie',
-    known: '"The Movie" keyword pattern shadows a real title',
+    y: 2019,
   ),
 ];
 
@@ -923,12 +913,7 @@ const noise = <Case>[
   Case('1408.2007.mkv', t: '1408', y: 2007),
   Case('2046.2004.mkv', t: '2046', y: 2004),
   Case('Ocean\'s.Eleven.2001.mkv', t: "Ocean's Eleven", y: 2001),
-  Case(
-    'Blade.Runner.2049.mkv',
-    t: 'Blade Runner 2049',
-    y: none,
-    known: 'a title ending in a year-like number is read as a year when it is the only one',
-  ),
+  Case('Blade.Runner.2049.mkv', t: 'Blade Runner 2049', y: none),
   Case('Fahrenheit.9.11.2004.mkv', t: 'Fahrenheit 9 11', y: 2004),
   Case(
     'The.Show.S01E01.1080p.WEB-DL.x264-GRP.nfo',
@@ -1133,14 +1118,7 @@ const subtitles = <Case>[
   Case('Show.S01E01.ENG.srt', t: 'Show', l: 'ENG'),
   Case('Show.S01E01.1080p.BluRay.简体中文.srt', t: 'Show', s: 1, e: [1], l: '简体中文'),
   Case('Show.S01E01.big5.srt', t: 'Show', s: 1, e: [1], l: 'big5'),
-  Case(
-    'Show.S01E01.zh_CN.srt',
-    t: 'Show',
-    s: 1,
-    e: [1],
-    l: 'zh_CN',
-    known: 'underscore lang tags are normalised to "zh-CN"',
-  ),
+  Case('Show.S01E01.zh_CN.srt', t: 'Show', s: 1, e: [1], l: 'zh_CN'),
 ];
 
 /// Extras and specials.
