@@ -2,7 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
+import 'package:tidyreel/data/providers.dart';
 import 'package:tidyreel/features/tasks/task_detail_page.dart';
 import 'package:tidyreel/features/tasks/tasks_page.dart';
 import 'package:tidyreel_core/testing.dart';
@@ -218,6 +221,177 @@ void main() {
     expect(find.text('去设置'), findsOneWidget);
     expect(find.text('重新识别'), findsWidgets);
   });
+
+  testWidgets('scrapeOnly task shows 仅刮削 badge distinct from 刮削', (
+    tester,
+  ) async {
+    final scrapeBoth = TaskSummary(
+      id: const TaskId('T-scrape'),
+      connection: const ConnectionId('demo-alist'),
+      paths: const ['/下载/三体'],
+      mode: OrganizeMode.inPlace,
+      scrape: true,
+      scrapeOnly: false,
+      stage: TaskStage.done,
+      createdAt: DateTime(2026),
+    );
+    await pumpPage(tester, TaskCard(task: scrapeBoth));
+    expect(find.textContaining('刮削'), findsOneWidget);
+    expect(find.byKey(const ValueKey('scrape-only-T-scrape')), findsNothing);
+
+    final scrapeOnly = TaskSummary(
+      id: const TaskId('T-scrape-only'),
+      connection: const ConnectionId('demo-alist'),
+      paths: const ['/下载/三体'],
+      mode: OrganizeMode.inPlace,
+      scrape: true,
+      scrapeOnly: true,
+      stage: TaskStage.done,
+      createdAt: DateTime(2026),
+    );
+    await pumpPage(tester, TaskCard(task: scrapeOnly));
+    expect(
+      find.byKey(const ValueKey('scrape-only-T-scrape-only')),
+      findsOneWidget,
+    );
+    expect(find.text('仅刮削'), findsOneWidget);
+
+    final tm = _StaticTaskManager([scrapeOnly]);
+    await pumpPage(
+      tester,
+      const TaskDetailPage(taskId: 'T-scrape-only'),
+      tm: tm,
+    );
+    expect(
+      find.byKey(const ValueKey('scrape-only-T-scrape-only')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('cleanup-empty-dirs')), findsNothing);
+  });
+
+  testWidgets(
+    'TaskDetailPage single-op undo calls undo(id, only: {opId}) and hides undo on deletes',
+    (tester) async {
+      tester.view.physicalSize = const Size(1280, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+
+      const tid = TaskId('T-ops');
+      final history = MemoryHistoryStore();
+      final bid = await history.beginBatch(
+        tid,
+        const ConnectionId('demo-alist'),
+        const [
+          RenameOp(
+            id: OpId('op-move'),
+            kind: OpKind.relocate,
+            phase: ExecPhase.files,
+            src: '/下载/a.mkv',
+            dst: '/媒体库/异兽魔都/Season 01/异兽魔都.S01E01.mkv',
+          ),
+          RenameOp(
+            id: OpId('op-del'),
+            kind: OpKind.delete,
+            phase: ExecPhase.cleanup,
+            src: '/下载/ad.txt',
+            dst: '',
+          ),
+        ],
+      );
+      await history.mark(bid, const OpId('op-move'), OpStatus.done);
+      await history.mark(bid, const OpId('op-del'), OpStatus.done);
+
+      final task = TaskSummary(
+        id: tid,
+        connection: const ConnectionId('demo-alist'),
+        paths: const ['/下载'],
+        mode: OrganizeMode.moveToLibrary,
+        stage: TaskStage.done,
+        batch: bid,
+        createdAt: DateTime(2026),
+      );
+      final tm = _DetailActionsTaskManager(task, history: history);
+      addTearDown(tm.dispose);
+
+      final router = GoRouter(
+        initialLocation: '/',
+        routes: [
+          GoRoute(
+            path: '/',
+            builder: (_, _) =>
+                const Scaffold(body: TaskDetailPage(taskId: 'T-ops')),
+          ),
+        ],
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            taskManagerProvider.overrideWithValue(tm),
+            historyProvider.overrideWithValue(history),
+          ],
+          child: MaterialApp.router(routerConfig: router),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Relocate op exposes single-op undo; delete op does not.
+      expect(find.byKey(const ValueKey('undo-op-op-move')), findsOneWidget);
+      expect(find.byKey(const ValueKey('undo-op-op-del')), findsNothing);
+
+      await tester.tap(find.byKey(const ValueKey('undo-op-op-move')));
+      await tester.pumpAndSettle();
+
+      expect(tm.undoCalls, hasLength(1));
+      expect(tm.undoCalls.single.$1, tid);
+      expect(tm.undoCalls.single.$2, {const OpId('op-move')});
+      expect(find.text('已撤销该操作'), findsOneWidget);
+      expect(find.byKey(const ValueKey('undo-op-op-move')), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'TaskDetailPage cleanup-empty-dirs shows empty snackbar or dialog with selection',
+    (tester) async {
+      const tid = TaskId('T-clean');
+      final task = TaskSummary(
+        id: tid,
+        connection: const ConnectionId('demo-alist'),
+        paths: const ['/下载'],
+        mode: OrganizeMode.moveToLibrary,
+        stage: TaskStage.done,
+        batch: const BatchId('B-clean'),
+        createdAt: DateTime(2026),
+      );
+      final tm = _DetailActionsTaskManager(task, emptyDirs: const []);
+      await pumpPage(tester, const TaskDetailPage(taskId: 'T-clean'), tm: tm);
+
+      expect(find.byKey(const ValueKey('cleanup-empty-dirs')), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('cleanup-empty-dirs')));
+      await tester.pumpAndSettle();
+      expect(find.text('没有可清理的空目录'), findsOneWidget);
+
+      // Now return two empty dirs and uncheck one before confirming.
+      tm.emptyDirs = ['/下载/old1', '/下载/old2'];
+      await tester.tap(find.byKey(const ValueKey('cleanup-empty-dirs')));
+      await tester.pumpAndSettle();
+      expect(find.text('清理所选 (2)'), findsOneWidget);
+      expect(find.byKey(const ValueKey('empty-dir-/下载/old1')), findsOneWidget);
+      expect(find.byKey(const ValueKey('empty-dir-/下载/old2')), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('empty-dir-/下载/old2')));
+      await tester.pumpAndSettle();
+      expect(find.text('清理所选 (1)'), findsOneWidget);
+
+      await tester.tap(
+        find.byKey(const ValueKey('confirm-cleanup-empty-dirs')),
+      );
+      await tester.pumpAndSettle();
+      expect(tm.removedDirsCalls, [
+        ['/下载/old1'],
+      ]);
+      expect(find.text('已清理 1 个空目录'), findsOneWidget);
+    },
+  );
 }
 
 class _StaticTaskManager extends FakeTaskManager {
@@ -226,4 +400,44 @@ class _StaticTaskManager extends FakeTaskManager {
 
   @override
   Stream<List<TaskSummary>> watchAll() => Stream.value(_items);
+}
+
+class _DetailActionsTaskManager extends FakeTaskManager {
+  final TaskSummary _task;
+  final MemoryHistoryStore? history;
+  List<String> emptyDirs;
+  final undoCalls = <(TaskId, Set<OpId>?)>[];
+  final removedDirsCalls = <List<String>>[];
+
+  _DetailActionsTaskManager(
+    this._task, {
+    this.history,
+    this.emptyDirs = const [],
+  }) : super(step: Duration.zero);
+
+  @override
+  Stream<List<TaskSummary>> watchAll() => Stream.value([_task]);
+
+  @override
+  Future<TaskReview> review(TaskId id) async =>
+      throw StateError('not recognized');
+
+  @override
+  Future<void> undo(TaskId id, {Set<OpId>? only}) async {
+    undoCalls.add((id, only));
+    if (history != null && _task.batch != null && only != null) {
+      for (final opId in only) {
+        await history!.mark(_task.batch!, opId, OpStatus.undone);
+      }
+    }
+  }
+
+  @override
+  Future<List<String>> findEmptyDirs(TaskId id) async => emptyDirs;
+
+  @override
+  Future<int> removeEmptyDirs(TaskId id, List<String> dirs) async {
+    removedDirsCalls.add(List.of(dirs));
+    return dirs.length;
+  }
 }

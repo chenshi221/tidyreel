@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -28,6 +30,13 @@ class ReviewPage extends ConsumerStatefulWidget {
 class _ReviewPageState extends ConsumerState<ReviewPage> {
   /// 0 = 可整理, 1 = 待手动识别.
   var _tab = 0;
+
+  /// Left-pane quick filter on the matched tab.
+  var _filter = ReviewFilter.all;
+
+  /// Live local pane widths while dragging split dividers.
+  double? _dragLeftWidth;
+  double? _dragRightWidth;
 
   /// Main area shows the files no work claimed instead of a work.
   var _showUnassigned = false;
@@ -65,6 +74,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
       _review = null;
       _error = null;
       _selected = null;
+      _filter = ReviewFilter.all;
       _showUnassigned = false;
       _detailTab = folderTab - 1;
       _pendingUpdates = 0;
@@ -117,7 +127,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
 
   // ---- derived lists
 
-  List<MediaGroup> _groups({required bool matched}) {
+  List<MediaGroup> _baseGroups({required bool matched}) {
     final r = _review;
     if (r == null) return const [];
     final q = _search.text.trim();
@@ -134,6 +144,27 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
     ];
   }
 
+  List<MediaGroup> _groups({required bool matched}) {
+    final base = _baseGroups(matched: matched);
+    if (!matched || _filter == ReviewFilter.all) return base;
+    final r = _review;
+    if (r == null) return base;
+    final conflicts = conflictGroups(r);
+    final threshold = ref.read(settingsProvider).confidenceThreshold;
+    return [
+      for (final g in base)
+        if (matchesReviewFilter(
+          g,
+          r.decisions[g.id],
+          r,
+          _filter,
+          conflicts: conflicts,
+          threshold: threshold,
+        ))
+          g,
+    ];
+  }
+
   List<MediaGroup> get _visible => _groups(matched: _tab == 0);
 
   void _selectFirstVisible() {
@@ -146,12 +177,13 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
 
   void _changeTab(int tab) {
     _tab = tab;
+    _filter = ReviewFilter.all;
     _showUnassigned = false;
     _selectFirstVisible();
   }
 
   void _returnToWorks() {
-    if (_visible.isEmpty && _groups(matched: _tab != 0).isNotEmpty) {
+    if (_visible.isEmpty && _baseGroups(matched: _tab != 0).isNotEmpty) {
       _changeTab(1 - _tab);
     } else {
       _showUnassigned = false;
@@ -168,6 +200,9 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
     setState(() {
       if (_search.text.isNotEmpty) _search.clear();
       _tab = matched ? 0 : 1;
+      if (_filter != ReviewFilter.all && _filter != ReviewFilter.conflict) {
+        _filter = ReviewFilter.all;
+      }
       _showUnassigned = false;
       _selected = loc.group;
       _detailTab = loc.season ?? folderTab;
@@ -188,6 +223,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
     if (g == null || id == null) return g;
     final show = ref.read(showDetailProvider(id)).value;
     if (show == null) return g;
+    final sameMatch = g.match?.tmdbId == show.info.tmdbId;
     return MediaGroup(
       id: g.id,
       kind: g.kind,
@@ -198,6 +234,8 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
       match: g.match,
       matchScore: g.matchScore,
       show: show,
+      suggestedStrategy: sameMatch ? g.suggestedStrategy : null,
+      suggestedStrategyReason: sameMatch ? g.suggestedStrategyReason : null,
     );
   }
 
@@ -224,7 +262,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
         );
         // The last unmatched work got matched: nothing left on this tab, and
         // what's next is organizing it.
-        if (_tab == 1 && _groups(matched: false).isEmpty) _tab = 0;
+        if (_tab == 1 && _baseGroups(matched: false).isEmpty) _tab = 0;
         _selectFirstVisible();
       }
     });
@@ -241,6 +279,182 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
     } finally {
       if (mounted) setState(() => _pendingUpdates--);
     }
+  }
+
+  Future<void> _updateMany(Map<GroupId, GroupDecision> updates) async {
+    if (updates.isEmpty) return;
+    final seq = ++_updateSeq;
+    final cur = _review;
+    setState(() {
+      _pendingUpdates++;
+      if (cur != null) {
+        _review = TaskReview(
+          id: cur.id,
+          scan: cur.scan,
+          decisions: {...cur.decisions, ...updates},
+          preview: cur.preview,
+        );
+      }
+    });
+    try {
+      TaskReview? latest;
+      for (final e in updates.entries) {
+        latest = await _tm.updateDecision(_id, e.key, e.value);
+      }
+      if (!mounted) return;
+      ref.invalidate(taskWorksProvider(_id));
+      ref.invalidate(taskDetailProvider(_id));
+      if (seq != _updateSeq || latest == null) return;
+      setState(() {
+        _review = latest;
+        _selectFirstVisible();
+      });
+    } finally {
+      if (mounted) setState(() => _pendingUpdates--);
+    }
+  }
+
+  Future<TaskReview?> _mutateReview(
+    Future<TaskReview> Function() action, {
+    void Function(TaskReview r)? after,
+  }) async {
+    final seq = ++_updateSeq;
+    setState(() => _pendingUpdates++);
+    try {
+      final r = await action();
+      if (!mounted) return null;
+      ref.invalidate(taskWorksProvider(_id));
+      ref.invalidate(taskDetailProvider(_id));
+      if (seq != _updateSeq) return r;
+      setState(() {
+        _review = r;
+        after?.call(r);
+        _selectFirstVisible();
+      });
+      return r;
+    } on Object catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(content: Text('$e')));
+      }
+      return null;
+    } finally {
+      if (mounted) setState(() => _pendingUpdates--);
+    }
+  }
+
+  Future<void> _setUnassignedDelete(String filePath, bool delete) =>
+      _mutateReview(() => _tm.setUnassignedDelete(_id, filePath, delete));
+
+  Future<void> _assignUnassigned(String filePath, GroupId targetGroup) async {
+    final cur = _review;
+    final target = cur?.scan.groups
+        .where((g) => g.id == targetGroup)
+        .firstOrNull;
+    final targetTitle = target == null
+        ? ''
+        : (effectiveMatch(target, cur!.decisions[target.id])?.title ??
+              target.anchorTitle);
+    final r = await _mutateReview(
+      () => _tm.assignUnassigned(_id, filePath, targetGroup),
+      after: (next) {
+        if (next.scan.unassigned.isEmpty) {
+          _showUnassigned = false;
+          final g = next.scan.groups
+              .where((x) => x.id == targetGroup)
+              .firstOrNull;
+          if (g != null) {
+            _tab = isMatched(g, next.decisions[g.id]) ? 0 : 1;
+            _filter = ReviewFilter.all;
+            _selected = targetGroup;
+            _detailTab = folderTab - 1;
+          }
+        }
+      },
+    );
+    if (r != null && mounted && targetTitle.isNotEmpty) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text('已归入「$targetTitle」')));
+    }
+  }
+
+  Future<void> _mergeGroup(MediaGroup source) async {
+    final cur = _review;
+    if (cur == null) return;
+    final others = [
+      for (final g in cur.scan.groups)
+        if (g.id != source.id) g,
+    ];
+    if (others.isEmpty) return;
+    final keepId = await showMergeGroupPicker(
+      context,
+      source: source,
+      candidates: others,
+      decisions: cur.decisions,
+    );
+    if (keepId == null || !mounted) return;
+    final target = others.where((g) => g.id == keepId).firstOrNull;
+    final targetTitle = target == null
+        ? ''
+        : (effectiveMatch(target, cur.decisions[target.id])?.title ??
+              target.anchorTitle);
+    final r = await _mutateReview(
+      () => _tm.mergeGroups(_id, keepId, source.id),
+      after: (next) {
+        final kept = next.scan.groups.where((x) => x.id == keepId).firstOrNull;
+        if (kept != null) {
+          _tab = isMatched(kept, next.decisions[kept.id]) ? 0 : 1;
+          _filter = ReviewFilter.all;
+          _showUnassigned = false;
+          _selected = keepId;
+          _detailTab = folderTab - 1;
+        }
+      },
+    );
+    if (r != null && mounted && targetTitle.isNotEmpty) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text('已合并到「$targetTitle」')));
+    }
+  }
+
+  Future<void> _splitGroup(MediaGroup source) async {
+    final cur = _review;
+    if (cur == null) return;
+    final picked = await showSplitGroupDialog(context, group: source);
+    if (picked == null || picked.isEmpty || !mounted) return;
+    final beforeIds = {for (final g in cur.scan.groups) g.id};
+    final r = await _mutateReview(() => _tm.splitGroup(_id, source.id, picked));
+    if (r == null || !mounted) return;
+    final created = r.scan.groups
+        .where((g) => !beforeIds.contains(g.id))
+        .firstOrNull;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: const Text('已拆分为新作品'),
+          action: created == null
+              ? null
+              : SnackBarAction(
+                  label: '去查看',
+                  onPressed: () {
+                    if (!mounted) return;
+                    setState(() {
+                      _tab = isMatched(created, r.decisions[created.id])
+                          ? 0
+                          : 1;
+                      _filter = ReviewFilter.all;
+                      _showUnassigned = false;
+                      _selected = created.id;
+                      _detailTab = folderTab - 1;
+                    });
+                  },
+                ),
+        ),
+      );
   }
 
   GroupDecision _decisionOf(GroupId id) =>
@@ -611,13 +825,14 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
       (_, _) => _reloadIfReviewing(),
     );
     ref.listen(connectionsProvider, (_, _) => _reloadIfReviewing());
-    final paths = ref
+    final taskSummary = ref
         .watch(tasksProvider)
         .asData
         ?.value
         .where((t) => t.id == _id)
-        .firstOrNull
-        ?.paths;
+        .firstOrNull;
+    final paths = taskSummary?.paths;
+    final scrapeOnly = taskSummary?.scrapeOnly ?? false;
     return PageScaffold(
       title: '识别结果',
       subtitle: [
@@ -625,6 +840,12 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
         if (paths != null && paths.length > 1) '${paths.length} 个文件夹',
       ].join('  ·  '),
       actions: [
+        if (scrapeOnly)
+          Tag(
+            '仅刮削',
+            key: const ValueKey('scrape-only-tag'),
+            color: Palette.of(context).accent,
+          ),
         if (paths != null && paths.length > 1)
           Tooltip(
             message: paths.join('\n'),
@@ -680,8 +901,10 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
 
   Widget _body(TaskReview r) {
     final g = _selectedGroup;
+    final matchedBase = _baseGroups(matched: true);
+    final unmatchedBase = _baseGroups(matched: false);
     final visible = _visible;
-    final otherGroups = _groups(matched: _tab != 0);
+    final otherGroups = _tab == 0 ? unmatchedBase : matchedBase;
     final p = Palette.of(context);
     final theme = Theme.of(context);
     final hairlineSide = BorderSide(color: p.line, width: hairline);
@@ -689,240 +912,566 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
       r.scan.unassigned,
       r.preview,
     ).length;
+
+    final (savedLeft, savedRight, threshold) = ref.watch(
+      settingsProvider.select(
+        (s) => (s.reviewLeftWidth, s.reviewRightWidth, s.confidenceThreshold),
+      ),
+    );
+    final conflicts = conflictGroups(r);
+    final conflictCount = matchedBase
+        .where((x) => conflicts.contains(x.id))
+        .length;
+    final incompleteCount = matchedBase
+        .where((x) => isGroupIncomplete(x, r.decisions[x.id]))
+        .length;
+    final lowConfCount = matchedBase
+        .where(
+          (x) => isGroupLowConfidence(
+            x,
+            r.decisions[x.id],
+            r,
+            threshold: threshold,
+          ),
+        )
+        .length;
+    final showRight = _showActions && !_showUnassigned && g != null;
+    final canMerge = r.scan.groups.length >= 2;
+    final selectedVisibleCount = visible
+        .where((x) => _decisionOf(x.id).selected)
+        .length;
+
     return DecoratedBox(
       decoration: BoxDecoration(border: Border(top: hairlineSide)),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Container(
-            width: 312,
-            decoration: BoxDecoration(
-              color: p.sidebar.withValues(alpha: 0.5),
-              border: Border(right: hairlineSide),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-                  child: TextField(
-                    key: const ValueKey('review-search'),
-                    controller: _search,
-                    focusNode: _searchFocus,
-                    style: const TextStyle(fontSize: 13),
-                    decoration: InputDecoration(
-                      prefixIcon: const Icon(CupertinoIcons.search, size: 14),
-                      hintText: '搜索作品  ⌘F',
-                      suffixIcon: _search.text.isEmpty
-                          ? null
-                          : IconButton(
-                              key: const ValueKey('review-search-clear'),
-                              tooltip: '清空搜索',
-                              iconSize: 14,
-                              icon: const Icon(
-                                CupertinoIcons.xmark_circle_fill,
-                              ),
-                              onPressed: () {
-                                _search.clear();
-                                setState(_selectFirstVisible);
-                              },
-                            ),
-                    ),
-                    onChanged: (_) => setState(_selectFirstVisible),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-                  child: Segmented<int>(
-                    options: {
-                      0: '可整理 ${_groups(matched: true).length}',
-                      1: '需手动匹配 ${_groups(matched: false).length}',
-                    },
-                    value: _tab,
-                    onChanged: (v) => setState(() => _changeTab(v)),
-                  ),
-                ),
-                Expanded(
-                  child: visible.isEmpty
-                      ? EmptyState(
-                          icon: CupertinoIcons.tray,
-                          title: _search.text.trim().isNotEmpty
-                              ? '没有符合搜索条件的作品'
-                              : _tab == 0
-                              ? '没有可整理的作品'
-                              : '没有需要手动匹配的作品',
-                          action: otherGroups.isEmpty
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          const minCenterWidth = 320.0;
+          final totalWidth = constraints.maxWidth;
+          final dividerTotal = showRight ? 12.0 : 6.0;
+          final rawLeft = (_dragLeftWidth ?? savedLeft).clamp(240.0, 460.0);
+          final rawRight = (_dragRightWidth ?? savedRight).clamp(220.0, 420.0);
+
+          var effectiveLeft = rawLeft;
+          var effectiveRight = showRight ? rawRight : 0.0;
+          if (totalWidth.isFinite) {
+            final availableForSides = math.max(
+              0.0,
+              totalWidth - dividerTotal - minCenterWidth,
+            );
+            if (effectiveLeft + effectiveRight > availableForSides) {
+              if (!showRight) {
+                effectiveLeft = math.min(effectiveLeft, availableForSides);
+                if (effectiveLeft < 180 && totalWidth > dividerTotal + 180) {
+                  effectiveLeft = math.min(
+                    180.0,
+                    totalWidth - dividerTotal - 160.0,
+                  );
+                }
+              } else {
+                final excess =
+                    effectiveLeft + effectiveRight - availableForSides;
+                final leftRoom = math.max(0.0, effectiveLeft - 240.0);
+                final rightRoom = math.max(0.0, effectiveRight - 220.0);
+                if (leftRoom + rightRoom >= excess &&
+                    leftRoom + rightRoom > 0) {
+                  final takeRight = math.min(
+                    rightRoom,
+                    excess * (rightRoom / (leftRoom + rightRoom)),
+                  );
+                  final takeLeft = math.min(leftRoom, excess - takeRight);
+                  effectiveRight -= takeRight;
+                  effectiveLeft -= takeLeft;
+                } else {
+                  final maxSides = math.max(
+                    0.0,
+                    totalWidth - dividerTotal - 200.0,
+                  );
+                  final sum = effectiveLeft + effectiveRight;
+                  if (sum > 0 && sum > maxSides) {
+                    final scale = maxSides / sum;
+                    effectiveLeft *= scale;
+                    effectiveRight *= scale;
+                  }
+                }
+              }
+            }
+          }
+
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                key: const ValueKey('review-left-pane'),
+                width: effectiveLeft,
+                color: p.sidebar.withValues(alpha: 0.5),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+                      child: TextField(
+                        key: const ValueKey('review-search'),
+                        controller: _search,
+                        focusNode: _searchFocus,
+                        style: const TextStyle(fontSize: 13),
+                        decoration: InputDecoration(
+                          prefixIcon: const Icon(
+                            CupertinoIcons.search,
+                            size: 14,
+                          ),
+                          hintText: '搜索作品  ⌘F',
+                          suffixIcon: _search.text.isEmpty
                               ? null
-                              : TextButton(
-                                  onPressed: () =>
-                                      setState(() => _changeTab(1 - _tab)),
-                                  child: Text(
-                                    _tab == 1
-                                        ? '查看可整理的 ${otherGroups.length} 个作品'
-                                        : '查看需手动匹配的 ${otherGroups.length} 个作品',
+                              : IconButton(
+                                  key: const ValueKey('review-search-clear'),
+                                  tooltip: '清空搜索',
+                                  iconSize: 14,
+                                  icon: const Icon(
+                                    CupertinoIcons.xmark_circle_fill,
                                   ),
+                                  onPressed: () {
+                                    _search.clear();
+                                    setState(_selectFirstVisible);
+                                  },
                                 ),
-                        )
-                      : GroupList(
-                          groups: visible,
-                          review: r,
-                          selected: _showUnassigned ? null : _selected,
-                          onSelect: (id) => setState(() {
-                            if (_selected != id) _detailTab = folderTab - 1;
-                            _selected = id;
-                            _showUnassigned = false;
-                          }),
-                          onCheck: (id, v) => _update(
-                            id,
-                            _decisionOf(id).copyWith(selected: v),
-                          ),
-                          onPick: (grp, c) => _update(
-                            grp.id,
-                            _decisionOf(grp.id)
-                                .copyWith(match: c, selected: true),
-                          ),
                         ),
-                ),
-                if (r.scan.unassigned.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
-                    child: Hoverable(
-                      key: const ValueKey('unassigned-link'),
-                      onTap: () => setState(() => _showUnassigned = true),
-                      builder: (context, hover) => AnimatedContainer(
-                        duration: const Duration(milliseconds: 120),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 8,
-                        ),
-                        decoration: BoxDecoration(
-                          color: _showUnassigned
-                              ? p.selected
-                              : (hover ? p.hover : Colors.transparent),
-                          borderRadius: BorderRadius.circular(Radii.lg),
-                          border: Border.all(
-                            color: _showUnassigned
-                                ? p.text.withValues(alpha: 0.35)
-                                : Colors.transparent,
-                          ),
-                        ),
-                        child: Row(
+                        onChanged: (_) => setState(_selectFirstVisible),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                      child: Segmented<int>(
+                        options: {
+                          0: '可整理 ${matchedBase.length}',
+                          1: '需手动匹配 ${unmatchedBase.length}',
+                        },
+                        value: _tab,
+                        onChanged: (v) => setState(() => _changeTab(v)),
+                      ),
+                    ),
+                    if (_tab == 0 && matchedBase.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            Icon(
-                              CupertinoIcons.tray,
-                              size: 16,
-                              color: _showUnassigned ? p.text : p.textMuted,
+                            Wrap(
+                              spacing: 5,
+                              runSpacing: 5,
+                              children: [
+                                ReviewFilterChip(
+                                  key: const ValueKey('filter-all'),
+                                  label: '全部',
+                                  selected: _filter == ReviewFilter.all,
+                                  onTap: () => setState(() {
+                                    _filter = ReviewFilter.all;
+                                    _selectFirstVisible();
+                                  }),
+                                ),
+                                if (conflictCount > 0 ||
+                                    _filter == ReviewFilter.conflict)
+                                  ReviewFilterChip(
+                                    key: const ValueKey('filter-conflict'),
+                                    label: '冲突 $conflictCount',
+                                    color: p.danger,
+                                    selected: _filter == ReviewFilter.conflict,
+                                    onTap: () => setState(() {
+                                      _filter = ReviewFilter.conflict;
+                                      _selectFirstVisible();
+                                    }),
+                                  ),
+                                if (incompleteCount > 0 ||
+                                    _filter == ReviewFilter.incomplete)
+                                  ReviewFilterChip(
+                                    key: const ValueKey('filter-incomplete'),
+                                    label: '缺集 $incompleteCount',
+                                    color: p.warning,
+                                    selected:
+                                        _filter == ReviewFilter.incomplete,
+                                    onTap: () => setState(() {
+                                      _filter = ReviewFilter.incomplete;
+                                      _selectFirstVisible();
+                                    }),
+                                  ),
+                                if (lowConfCount > 0 ||
+                                    _filter == ReviewFilter.lowConfidence)
+                                  ReviewFilterChip(
+                                    key: const ValueKey('filter-lowConfidence'),
+                                    label: '低置信 $lowConfCount',
+                                    color: p.warning,
+                                    selected:
+                                        _filter == ReviewFilter.lowConfidence,
+                                    onTap: () => setState(() {
+                                      _filter = ReviewFilter.lowConfidence;
+                                      _selectFirstVisible();
+                                    }),
+                                  ),
+                              ],
                             ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                mainAxisSize: MainAxisSize.min,
+                            if (visible.isNotEmpty) ...[
+                              const SizedBox(height: 6),
+                              Row(
                                 children: [
                                   Text(
-                                    '未归类 ${r.scan.unassigned.length} 个文件',
-                                    style: theme.textTheme.bodyMedium?.copyWith(
-                                      fontWeight: FontWeight.w500,
+                                    '已选 $selectedVisibleCount/${visible.length}',
+                                    style: TextStyle(
+                                      fontSize: 11.5,
+                                      color: p.textFaint,
                                     ),
                                   ),
-                                  const SizedBox(height: 1),
-                                  Text(
-                                    unassignedDeletes > 0
-                                        ? '其中 $unassignedDeletes 个垃圾文件将被永久删除'
-                                        : '没归进任何作品，不会被整理',
-                                    style: theme.textTheme.bodySmall?.copyWith(
-                                      color: unassignedDeletes > 0
-                                          ? p.danger
-                                          : p.textMuted,
+                                  const Spacer(),
+                                  Hoverable(
+                                    key: const ValueKey('select-all-visible'),
+                                    onTap: () => _updateMany({
+                                      for (final x in visible)
+                                        if (!_decisionOf(x.id).selected)
+                                          x.id: _decisionOf(x.id)
+                                              .copyWith(selected: true),
+                                    }),
+                                    builder: (_, hover) => Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 5,
+                                        vertical: 2,
+                                      ),
+                                      child: Text(
+                                        '全选',
+                                        style: TextStyle(
+                                          fontSize: 11.5,
+                                          color: hover ? p.text : p.textMuted,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
                                     ),
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Hoverable(
+                                    key: const ValueKey(
+                                      'invert-select-visible',
+                                    ),
+                                    onTap: () => _updateMany({
+                                      for (final x in visible)
+                                        x.id: _decisionOf(x.id).copyWith(
+                                          selected: !_decisionOf(x.id).selected,
+                                        ),
+                                    }),
+                                    builder: (_, hover) => Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 5,
+                                        vertical: 2,
+                                      ),
+                                      child: Text(
+                                        '反选',
+                                        style: TextStyle(
+                                          fontSize: 11.5,
+                                          color: hover ? p.text : p.textMuted,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                    ),
                                   ),
                                 ],
                               ),
-                            ),
-                            const SizedBox(width: 6),
-                            Icon(
-                              CupertinoIcons.chevron_right,
-                              size: 12,
-                              color: p.textFaint,
-                            ),
+                            ],
                           ],
                         ),
                       ),
-                    ),
-                  ),
-                const SizedBox(height: 104),
-              ],
-            ),
-          ),
-          Expanded(
-            child: _showUnassigned
-                ? Padding(
-                    padding: const EdgeInsets.only(top: 12, bottom: 104),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: TextButton.icon(
-                            key: const ValueKey('return-to-works'),
-                            onPressed: () => setState(_returnToWorks),
-                            icon: const Icon(
-                              CupertinoIcons.chevron_left,
-                              size: 14,
+                    Expanded(
+                      child: visible.isEmpty
+                          ? EmptyState(
+                              icon: CupertinoIcons.tray,
+                              title: _search.text.trim().isNotEmpty
+                                  ? '没有符合搜索条件的作品'
+                                  : _tab == 0 && _filter != ReviewFilter.all
+                                  ? '没有符合筛选条件的作品'
+                                  : _tab == 0
+                                  ? '没有可整理的作品'
+                                  : '没有需要手动匹配的作品',
+                              action: _tab == 0 && _filter != ReviewFilter.all
+                                  ? TextButton(
+                                      onPressed: () => setState(() {
+                                        _filter = ReviewFilter.all;
+                                        _selectFirstVisible();
+                                      }),
+                                      child: const Text('显示全部作品'),
+                                    )
+                                  : otherGroups.isEmpty
+                                  ? null
+                                  : TextButton(
+                                      onPressed: () =>
+                                          setState(() => _changeTab(1 - _tab)),
+                                      child: Text(
+                                        _tab == 1
+                                            ? '查看可整理的 ${otherGroups.length} 个作品'
+                                            : '查看需手动匹配的 ${otherGroups.length} 个作品',
+                                      ),
+                                    ),
+                            )
+                          : GroupList(
+                              groups: visible,
+                              review: r,
+                              selected: _showUnassigned ? null : _selected,
+                              canMerge: canMerge,
+                              onSelect: (id) => setState(() {
+                                if (_selected != id) _detailTab = folderTab - 1;
+                                _selected = id;
+                                _showUnassigned = false;
+                              }),
+                              onCheck: (id, v) => _update(
+                                id,
+                                _decisionOf(id).copyWith(selected: v),
+                              ),
+                              onPick: (grp, c) => _update(
+                                grp.id,
+                                _decisionOf(grp.id)
+                                    .copyWith(match: c, selected: true),
+                              ),
+                              onCorrect: _correct,
+                              onMergeGroup: _mergeGroup,
+                              onSplitGroup: _splitGroup,
                             ),
-                            label: const Text('返回作品'),
+                    ),
+                    if (r.scan.unassigned.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+                        child: Hoverable(
+                          key: const ValueKey('unassigned-link'),
+                          onTap: () => setState(() => _showUnassigned = true),
+                          builder: (context, hover) => AnimatedContainer(
+                            duration: const Duration(milliseconds: 120),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 8,
+                            ),
+                            decoration: BoxDecoration(
+                              color: _showUnassigned
+                                  ? p.selected
+                                  : (hover ? p.hover : Colors.transparent),
+                              borderRadius: BorderRadius.circular(Radii.lg),
+                              border: Border.all(
+                                color: _showUnassigned
+                                    ? p.text.withValues(alpha: 0.35)
+                                    : Colors.transparent,
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  CupertinoIcons.tray,
+                                  size: 16,
+                                  color: _showUnassigned ? p.text : p.textMuted,
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        '未归类 ${r.scan.unassigned.length} 个文件',
+                                        style: theme.textTheme.bodyMedium
+                                            ?.copyWith(
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                      ),
+                                      const SizedBox(height: 1),
+                                      Text(
+                                        unassignedDeletes > 0
+                                            ? '其中 $unassignedDeletes 个垃圾文件将被永久删除'
+                                            : '没归进任何作品，不会被整理',
+                                        style: theme.textTheme.bodySmall
+                                            ?.copyWith(
+                                              color: unassignedDeletes > 0
+                                                  ? p.danger
+                                                  : p.textMuted,
+                                            ),
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                Icon(
+                                  CupertinoIcons.chevron_right,
+                                  size: 12,
+                                  color: p.textFaint,
+                                ),
+                              ],
+                            ),
                           ),
                         ),
-                        Expanded(
-                          child: UnassignedPane(
-                            files: r.scan.unassigned,
-                            plan: r.preview,
-                          ),
-                        ),
-                      ],
-                    ),
-                  )
-                : g == null
-                ? const EmptyState(
-                    icon: CupertinoIcons.rectangle_stack,
-                    title: '选择左侧的作品查看明细',
-                  )
-                : Padding(
-                    padding: const EdgeInsets.only(top: 12, bottom: 104),
-                    child: DetailPane(
-                      group: g,
-                      decision: r.decisions[g.id],
-                      review: r,
-                      tab: _detailTab,
-                      onTab: (t) => setState(() => _detailTab = t),
-                      onEdit: (row) => _editRow(g, row),
-                      onCheck: (row, v) => _checkRow(g, row, v),
-                      onShift: (row, to) => _shift(g, row, to),
-                      showActions: _showActions,
-                      onShowActions: () => setState(() => _showActions = true),
-                      onCorrect: () => _correct(g),
-                    ),
-                  ),
-          ),
-          if (_showActions && !_showUnassigned && g != null)
-            Container(
-              width: 284,
-              decoration: BoxDecoration(border: Border(left: hairlineSide)),
-              padding: const EdgeInsets.only(bottom: 104),
-              // Own layer: stale strips were seen here while scrolling.
-              child: RepaintBoundary(
-                child: ActionPane(
-                  key: ValueKey(g.id),
-                  group: g,
-                  decision: _decisionOf(g.id),
-                  onChange: (d) => _update(g.id, d),
-                  onCorrect: () => _correct(g),
+                      ),
+                    const SizedBox(height: 104),
+                  ],
                 ),
               ),
-            ),
-        ],
+              SplitDivider(
+                key: const ValueKey('split-divider-left'),
+                onDragStart: () => _dragLeftWidth = effectiveLeft,
+                onDragUpdate: (dx) {
+                  final maxLeft = totalWidth.isFinite
+                      ? math.min(
+                          460.0,
+                          math.max(
+                            240.0,
+                            totalWidth -
+                                dividerTotal -
+                                minCenterWidth -
+                                effectiveRight,
+                          ),
+                        )
+                      : 460.0;
+                  setState(() {
+                    _dragLeftWidth = ((_dragLeftWidth ?? effectiveLeft) + dx)
+                        .clamp(240.0, maxLeft);
+                  });
+                },
+                onDragEnd: () {
+                  final committed = _dragLeftWidth;
+                  if (committed != null) {
+                    final clamped = committed.clamp(240.0, 460.0);
+                    ref
+                        .read(settingsProvider.notifier)
+                        .update((s) => s.copyWith(reviewLeftWidth: clamped));
+                  }
+                  setState(() => _dragLeftWidth = null);
+                },
+              ),
+              Expanded(
+                child: _showUnassigned
+                    ? Padding(
+                        padding: const EdgeInsets.only(top: 12, bottom: 104),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: TextButton.icon(
+                                key: const ValueKey('return-to-works'),
+                                onPressed: () => setState(_returnToWorks),
+                                icon: const Icon(
+                                  CupertinoIcons.chevron_left,
+                                  size: 14,
+                                ),
+                                label: const Text('返回作品'),
+                              ),
+                            ),
+                            Expanded(
+                              child: UnassignedPane(
+                                files: r.scan.unassigned,
+                                plan: r.preview,
+                                groups: r.scan.groups,
+                                decisions: r.decisions,
+                                onToggleDelete: _setUnassignedDelete,
+                                onAssign: _assignUnassigned,
+                              ),
+                            ),
+                          ],
+                        ),
+                      )
+                    : g == null
+                    ? const EmptyState(
+                        icon: CupertinoIcons.rectangle_stack,
+                        title: '选择左侧的作品查看明细',
+                      )
+                    : Padding(
+                        padding: const EdgeInsets.only(top: 12, bottom: 104),
+                        child: DetailPane(
+                          group: g,
+                          decision: r.decisions[g.id],
+                          review: r,
+                          tab: _detailTab,
+                          onTab: (t) => setState(() => _detailTab = t),
+                          onEdit: (row) => _editRow(g, row),
+                          onCheck: (row, v) => _checkRow(g, row, v),
+                          onShift: (row, to) => _shift(g, row, to),
+                          showActions: _showActions,
+                          onShowActions: () =>
+                              setState(() => _showActions = true),
+                          onCorrect: () => _correct(g),
+                          onApplySuggestedStrategy: (strategy) => _update(
+                            g.id,
+                            _decisionOf(g.id).copyWith(strategy: strategy),
+                          ),
+                          onResolveKeepLargest: (dupConflicts) {
+                            final d = _decisionOf(g.id);
+                            _update(
+                              g.id,
+                              d.copyWith(
+                                overrides: resolveKeepLargestOverrides(
+                                  d,
+                                  dupConflicts,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+              ),
+              if (showRight) ...[
+                SplitDivider(
+                  key: const ValueKey('split-divider-right'),
+                  onDragStart: () => _dragRightWidth = effectiveRight,
+                  onDragUpdate: (dx) {
+                    final maxRight = totalWidth.isFinite
+                        ? math.min(
+                            420.0,
+                            math.max(
+                              220.0,
+                              totalWidth -
+                                  dividerTotal -
+                                  minCenterWidth -
+                                  effectiveLeft,
+                            ),
+                          )
+                        : 420.0;
+                    setState(() {
+                      _dragRightWidth =
+                          ((_dragRightWidth ?? effectiveRight) - dx).clamp(
+                            220.0,
+                            maxRight,
+                          );
+                    });
+                  },
+                  onDragEnd: () {
+                    final committed = _dragRightWidth;
+                    if (committed != null) {
+                      final clamped = committed.clamp(220.0, 420.0);
+                      ref
+                          .read(settingsProvider.notifier)
+                          .update((s) => s.copyWith(reviewRightWidth: clamped));
+                    }
+                    setState(() => _dragRightWidth = null);
+                  },
+                ),
+                Container(
+                  key: const ValueKey('review-right-pane'),
+                  width: effectiveRight,
+                  padding: const EdgeInsets.only(bottom: 104),
+                  // Own layer: stale strips were seen here while scrolling.
+                  child: RepaintBoundary(
+                    child: ActionPane(
+                      key: ValueKey(g.id),
+                      group: g,
+                      decision: _decisionOf(g.id),
+                      onChange: (d) => _update(g.id, d),
+                      onCorrect: () => _correct(g),
+                      onMergeGroup: canMerge ? () => _mergeGroup(g) : null,
+                      onSplitGroup:
+                          g.files
+                                  .where((f) => f.role == FileRole.video)
+                                  .length >=
+                              2
+                          ? () => _splitGroup(g)
+                          : null,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          );
+        },
       ),
     );
   }
@@ -934,17 +1483,18 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
       for (final m in r.preview.merges)
         if (r.decisions[m.group]?.selected ?? true) m,
     ];
-    final mode = ref
+    final task = ref
         .watch(tasksProvider)
         .asData
         ?.value
         .where((t) => t.id == _id)
-        .map((t) => t.mode)
         .firstOrNull;
+    final mode = task?.mode;
+    final scrapeOnly = task?.scrapeOnly ?? false;
     final ops = r.preview.ops.where((o) => o.selected).length;
     String? blockedReason;
     if (_executing) {
-      blockedReason = '正在整理，请稍候';
+      blockedReason = scrapeOnly ? '正在刮削，请稍候' : '正在整理，请稍候';
     } else if (_pendingUpdates > 0) {
       blockedReason = '正在更新整理计划，请稍候';
     } else if (conflicts > 0 && merges.isEmpty) {
@@ -1016,30 +1566,33 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Segmented<OrganizeMode>(
-            options: const {
-              OrganizeMode.inPlace: '原地整理',
-              OrganizeMode.moveToLibrary: '移动到媒体库',
-            },
-            value: mode ?? OrganizeMode.inPlace,
-            onChanged: (v) async {
-              setState(() => _pendingUpdates++);
-              try {
-                final nr = await _tm.setMode(_id, v);
-                if (mounted) setState(() => _review = nr);
-              } on Object catch (e) {
-                if (!mounted) return;
-                final msg = '$e'.contains('libraryRoot')
-                    ? '这个连接还没设置媒体库，去「来源」编辑连接后再选'
-                    : '没能切换整理方式，请重试';
-                ScaffoldMessenger.of(context)
-                  ..hideCurrentSnackBar()
-                  ..showSnackBar(SnackBar(content: Text(msg)));
-              } finally {
-                if (mounted) setState(() => _pendingUpdates--);
-              }
-            },
-          ),
+          if (scrapeOnly)
+            Tag('仅刮削 · 保留原文件名', color: p.accent)
+          else
+            Segmented<OrganizeMode>(
+              options: const {
+                OrganizeMode.inPlace: '原地整理',
+                OrganizeMode.moveToLibrary: '移动到媒体库',
+              },
+              value: mode ?? OrganizeMode.inPlace,
+              onChanged: (v) async {
+                setState(() => _pendingUpdates++);
+                try {
+                  final nr = await _tm.setMode(_id, v);
+                  if (mounted) setState(() => _review = nr);
+                } on Object catch (e) {
+                  if (!mounted) return;
+                  final msg = '$e'.contains('libraryRoot')
+                      ? '这个连接还没设置媒体库，去「来源」编辑连接后再选'
+                      : '没能切换整理方式，请重试';
+                  ScaffoldMessenger.of(context)
+                    ..hideCurrentSnackBar()
+                    ..showSnackBar(SnackBar(content: Text(msg)));
+                } finally {
+                  if (mounted) setState(() => _pendingUpdates--);
+                }
+              },
+            ),
           const SizedBox(width: 16),
           if (conflicts > 0)
             Tooltip(
@@ -1069,7 +1622,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
             child: FilledButton(
               key: const ValueKey('execute-button'),
               onPressed: canStart ? _execute : null,
-              child: const Text('开始整理'),
+              child: Text(scrapeOnly ? '开始刮削' : '开始整理'),
             ),
           ),
         ],

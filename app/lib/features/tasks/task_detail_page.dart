@@ -78,6 +78,23 @@ class TaskDetailPage extends ConsumerWidget {
         task != null &&
         task.stage.isActive &&
         task.stage != TaskStage.awaitingReview;
+    final hasDoneRelocate =
+        detail.value?.records.any(
+          (r) => r.status == OpStatus.done && r.op.kind == OpKind.relocate,
+        ) ??
+        false;
+    final canCleanupEmptyDirs =
+        task != null &&
+        !task.scrapeOnly &&
+        (task.stage == TaskStage.done ||
+            task.stage == TaskStage.partiallyFailed) &&
+        (task.mode == OrganizeMode.moveToLibrary || hasDoneRelocate);
+    final canSingleUndo =
+        task != null &&
+        canUndo(task) &&
+        (task.stage == TaskStage.done ||
+            task.stage == TaskStage.partiallyFailed ||
+            task.stage == TaskStage.cancelled);
     return PageScaffold(
       title: '任务详情',
       subtitle: task == null ? null : stageLabel(task.stage),
@@ -113,6 +130,13 @@ class TaskDetailPage extends ConsumerWidget {
             onPressed: () => retryTask(context, ref, id),
             icon: const Icon(CupertinoIcons.arrow_clockwise, size: 13),
             label: const Text('重新识别'),
+          ),
+        if (canCleanupEmptyDirs)
+          OutlinedButton.icon(
+            key: const ValueKey('cleanup-empty-dirs'),
+            onPressed: () => _cleanupEmptyDirs(context, ref, id),
+            icon: const Icon(CupertinoIcons.folder_badge_minus, size: 13),
+            label: const Text('清理空目录'),
           ),
         if (undoable)
           OutlinedButton.icon(
@@ -159,6 +183,9 @@ class TaskDetailPage extends ConsumerWidget {
                 awaiting: task?.stage == TaskStage.awaitingReview ? id : null,
                 onRetry: task != null && canRetry(task)
                     ? () => retryTask(context, ref, id)
+                    : null,
+                onUndoOp: canSingleUndo
+                    ? (opId) => _undoSingleOp(context, ref, id, opId)
                     : null,
               ),
             ),
@@ -239,15 +266,29 @@ class _TaskSummaryHeader extends ConsumerWidget {
                 Row(
                   children: [
                     Expanded(
-                      child: Text(
-                        title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w500,
-                          color: p.text,
-                        ),
+                      child: Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w500,
+                                color: p.text,
+                              ),
+                            ),
+                          ),
+                          if (t.scrapeOnly) ...[
+                            const SizedBox(width: 8),
+                            Tag(
+                              '仅刮削',
+                              key: ValueKey('scrape-only-${t.id.value}'),
+                              color: p.accent,
+                            ),
+                          ],
+                        ],
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -266,8 +307,9 @@ class _TaskSummaryHeader extends ConsumerWidget {
                   child: Text(
                     [
                       connName ?? t.connection.value,
-                      t.mode == OrganizeMode.inPlace ? '原地整理' : '移动到媒体库',
-                      if (t.scrape) '刮削',
+                      if (!t.scrapeOnly)
+                        t.mode == OrganizeMode.inPlace ? '原地整理' : '移动到媒体库',
+                      if (t.scrape && !t.scrapeOnly) '刮削',
                       if (recognized) counts else where,
                     ].join('，'),
                     style: theme.textTheme.bodySmall,
@@ -320,6 +362,7 @@ class _Body extends StatelessWidget {
   /// Set while the task waits for review.
   final TaskId? awaiting;
   final VoidCallback? onRetry;
+  final ValueChanged<OpId>? onUndoOp;
 
   const _Body({
     required this.task,
@@ -328,6 +371,7 @@ class _Body extends StatelessWidget {
     required this.busy,
     required this.awaiting,
     required this.onRetry,
+    this.onUndoOp,
   });
 
   @override
@@ -444,11 +488,17 @@ class _Body extends StatelessWidget {
             match: review!.decisions[g.id]?.match ?? g.match,
             fallbackTitle: g.anchorTitle,
             records: rs,
+            onUndoOp: onUndoOp,
           ),
           const SizedBox(height: 12),
         ],
         if (other != null)
-          _WorkSection(match: null, fallbackTitle: '文件夹和其他', records: other),
+          _WorkSection(
+            match: null,
+            fallbackTitle: '文件夹和其他',
+            records: other,
+            onUndoOp: onUndoOp,
+          ),
       ],
     );
   }
@@ -458,11 +508,13 @@ class _WorkSection extends StatelessWidget {
   final Candidate? match;
   final String fallbackTitle;
   final List<HistoryRecord> records;
+  final ValueChanged<OpId>? onUndoOp;
 
   const _WorkSection({
     required this.match,
     required this.fallbackTitle,
     required this.records,
+    this.onUndoOp,
   });
 
   @override
@@ -521,7 +573,7 @@ class _WorkSection extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 10),
-          for (final r in records) _OpRow(record: r),
+          for (final r in records) _OpRow(record: r, onUndo: onUndoOp),
         ],
       ),
     );
@@ -541,8 +593,9 @@ String _name(String path) =>
 
 class _OpRow extends StatelessWidget {
   final HistoryRecord record;
+  final ValueChanged<OpId>? onUndo;
 
-  const _OpRow({required this.record});
+  const _OpRow({required this.record, this.onUndo});
 
   @override
   Widget build(BuildContext context) {
@@ -560,51 +613,282 @@ class _OpRow extends StatelessWidget {
       OpKind.delete => (op.src, '删除'),
       _ => (op.src, op.dst),
     };
+    final canUndoRow =
+        onUndo != null &&
+        record.status == OpStatus.done &&
+        op.kind != OpKind.delete;
     return Tooltip(
       message: [
         '$from\n→ $to',
         if (record.error != null) record.error!,
       ].join('\n'),
       waitDuration: const Duration(milliseconds: 500),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 5),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(width: 52, child: Tag(label, color: color)),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    _name(from),
-                    style: TextStyle(
-                      fontSize: TypeScale.small,
-                      color: p.textMuted,
-                    ),
-                  ),
-                  Text(
-                    '→ ${_name(to)}',
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  if (record.error != null)
+      child: Hoverable(
+        builder: (context, hover) => Container(
+          decoration: BoxDecoration(
+            color: hover ? p.hover : Colors.transparent,
+            borderRadius: BorderRadius.circular(Radii.sm),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 5),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(width: 52, child: Tag(label, color: color)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                     Text(
-                      _explain(record.error!),
+                      _name(from),
                       style: TextStyle(
                         fontSize: TypeScale.small,
-                        color: p.danger,
+                        color: p.textMuted,
                       ),
                     ),
-                ],
+                    Text(
+                      '→ ${_name(to)}',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    if (record.error != null)
+                      Text(
+                        _explain(record.error!),
+                        style: TextStyle(
+                          fontSize: TypeScale.small,
+                          color: p.danger,
+                        ),
+                      ),
+                  ],
+                ),
               ),
-            ),
-          ],
+              if (canUndoRow) ...[
+                const SizedBox(width: 8),
+                AnimatedOpacity(
+                  duration: const Duration(milliseconds: 120),
+                  opacity: hover ? 1.0 : 0.72,
+                  child: TextButton.icon(
+                    key: ValueKey('undo-op-${op.id.value}'),
+                    onPressed: () => onUndo!(op.id),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    icon: const Icon(CupertinoIcons.arrow_uturn_left, size: 12),
+                    label: const Text('撤销', style: TextStyle(fontSize: 12)),
+                  ),
+                ),
+              ],
+            ],
+          ),
         ),
       ),
     );
   }
+}
+
+final _busyDetailOps = <String>{};
+
+Future<void> _undoSingleOp(
+  BuildContext context,
+  WidgetRef ref,
+  TaskId id,
+  OpId opId,
+) async {
+  final key = '${id.value}:${opId.value}';
+  if (!_busyDetailOps.add(key)) return;
+  try {
+    await ref.read(taskManagerProvider).undo(id, only: {opId});
+    ref.invalidate(taskDetailProvider(id));
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('已撤销该操作')));
+    }
+  } on StateError catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(e.message)));
+    }
+  } on Object catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text('$e')));
+    }
+  } finally {
+    _busyDetailOps.remove(key);
+  }
+}
+
+Future<void> _cleanupEmptyDirs(
+  BuildContext context,
+  WidgetRef ref,
+  TaskId id,
+) async {
+  final key = 'cleanup:${id.value}';
+  if (!_busyDetailOps.add(key)) return;
+  try {
+    final dirs = await ref.read(taskManagerProvider).findEmptyDirs(id);
+    if (!context.mounted) return;
+    if (dirs.isEmpty) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('没有可清理的空目录')));
+      return;
+    }
+    final selected = await _showEmptyDirsDialog(context, dirs);
+    if (selected == null || selected.isEmpty || !context.mounted) return;
+    final removed = await ref
+        .read(taskManagerProvider)
+        .removeEmptyDirs(id, selected);
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text('已清理 $removed 个空目录')));
+    }
+  } on Object catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text('$e')));
+    }
+  } finally {
+    _busyDetailOps.remove(key);
+  }
+}
+
+Future<List<String>?> _showEmptyDirsDialog(
+  BuildContext context,
+  List<String> dirs,
+) {
+  final selected = <String>{...dirs};
+  return showDialog<List<String>>(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setState) {
+        final p = Palette.of(ctx);
+        final theme = Theme.of(ctx);
+        return MacSheet(
+          child: SizedBox(
+            width: 500,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text('清理空目录', style: theme.textTheme.titleMedium),
+                  const SizedBox(height: 6),
+                  Text(
+                    '仅删除完全为空或仅含系统残留文件（如 .DS_Store、Thumbs.db）的目录，不会删除包含媒体文件的目录。',
+                    style: theme.textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 12),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 320),
+                    child: Panel(
+                      framed: true,
+                      child: ListView(
+                        shrinkWrap: true,
+                        children: [
+                          for (final d in dirs)
+                            Builder(
+                              builder: (context) {
+                                final checked = selected.contains(d);
+                                void toggle() => setState(() {
+                                  if (checked) {
+                                    selected.remove(d);
+                                  } else {
+                                    selected.add(d);
+                                  }
+                                });
+                                return Hoverable(
+                                  onTap: toggle,
+                                  builder: (context, hover) => Container(
+                                    color: hover ? p.hover : Colors.transparent,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                      vertical: 6,
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        SizedBox(
+                                          width: 28,
+                                          child: Checkbox(
+                                            key: ValueKey('empty-dir-$d'),
+                                            value: checked,
+                                            onChanged: (_) => toggle(),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Icon(
+                                          CupertinoIcons.folder,
+                                          size: 14,
+                                          color: p.textMuted,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            d,
+                                            style: const TextStyle(
+                                              fontSize: 13,
+                                            ),
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      Text(
+                        '共 ${dirs.length} 个空目录',
+                        style: TextStyle(
+                          fontSize: TypeScale.small,
+                          color: p.textMuted,
+                        ),
+                      ),
+                      const Spacer(),
+                      OutlinedButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        child: const Text('取消'),
+                      ),
+                      const SizedBox(width: 8),
+                      FilledButton(
+                        key: const ValueKey('confirm-cleanup-empty-dirs'),
+                        onPressed: selected.isEmpty
+                            ? null
+                            : () => Navigator.pop(ctx, [
+                                for (final d in dirs)
+                                  if (selected.contains(d)) d,
+                              ]),
+                        child: Text('清理所选 (${selected.length})'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    ),
+  );
 }

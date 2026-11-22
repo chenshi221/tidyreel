@@ -401,15 +401,29 @@ class TaskCard extends ConsumerWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w500,
-                        color: p.text,
-                      ),
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w500,
+                              color: p.text,
+                            ),
+                          ),
+                        ),
+                        if (t.scrapeOnly) ...[
+                          const SizedBox(width: 8),
+                          Tag(
+                            '仅刮削',
+                            key: ValueKey('scrape-only-${t.id.value}'),
+                            color: p.accent,
+                          ),
+                        ],
+                      ],
                     ),
                     const SizedBox(height: 3),
                     Tooltip(
@@ -417,8 +431,9 @@ class TaskCard extends ConsumerWidget {
                       child: Text(
                         [
                           connName ?? t.connection.value,
-                          t.mode == OrganizeMode.inPlace ? '原地整理' : '移动到媒体库',
-                          if (t.scrape) '刮削',
+                          if (!t.scrapeOnly)
+                            t.mode == OrganizeMode.inPlace ? '原地整理' : '移动到媒体库',
+                          if (t.scrape && !t.scrapeOnly) '刮削',
                           if (recognized) counts else where,
                         ].join('，'),
                         style: theme.textTheme.bodySmall,

@@ -12,6 +12,7 @@ bool isMatched(MediaGroup g, GroupDecision? d) => effectiveMatch(g, d) != null;
 MediaGroup effectiveGroup(MediaGroup g, GroupDecision? d) {
   final m = effectiveMatch(g, d);
   if (m == null || m.kind == g.kind) return g;
+  final sameMatch = d?.match == null || d?.match?.tmdbId == g.match?.tmdbId;
   return MediaGroup(
     id: g.id,
     kind: m.kind,
@@ -21,6 +22,9 @@ MediaGroup effectiveGroup(MediaGroup g, GroupDecision? d) {
     files: g.files,
     match: g.match,
     matchScore: g.matchScore,
+    show: sameMatch ? g.show : null,
+    suggestedStrategy: sameMatch ? g.suggestedStrategy : null,
+    suggestedStrategyReason: sameMatch ? g.suggestedStrategyReason : null,
   );
 }
 
@@ -352,4 +356,324 @@ Map<String, FileOverride> shiftFrom(
     }
   }
   return best;
+}
+
+// ---------------------------------------------------------------- filters
+
+/// Left-pane quick filter chips on the matched ("可整理") tab.
+enum ReviewFilter { all, conflict, incomplete, lowConfidence }
+
+/// Whether [g] is a TV show missing episodes compared to TMDB.
+bool isGroupIncomplete(MediaGroup g, GroupDecision? d) {
+  final eg = effectiveGroup(g, d);
+  return eg.kind == MediaKind.episode && completeness(eg, d).incomplete;
+}
+
+/// Whether [g] has a low match score or any non-ignored low-confidence file.
+bool isGroupLowConfidence(
+  MediaGroup g,
+  GroupDecision? d,
+  TaskReview r, {
+  double threshold = 0.7,
+}) {
+  final lowMatch =
+      d?.match == null && g.match != null && g.matchScore < threshold;
+  if (lowMatch) return true;
+  final bySrc = {for (final o in r.preview.ops) o.src: o};
+  for (final f in g.files) {
+    final ov = d?.overrides[f.path];
+    if (ov?.ignore ?? false) continue;
+    final op = bySrc[f.path];
+    if (op?.warning != null && op!.warning!.contains('置信度')) {
+      return true;
+    }
+    if (d?.match == null &&
+        f.role == FileRole.video &&
+        ov == null &&
+        f.parsed != null &&
+        f.parsed!.confidence < threshold) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// Whether [g] passes [filter] on the review list.
+bool matchesReviewFilter(
+  MediaGroup g,
+  GroupDecision? d,
+  TaskReview r,
+  ReviewFilter filter, {
+  Set<GroupId>? conflicts,
+  double threshold = 0.7,
+}) {
+  return switch (filter) {
+    ReviewFilter.all => true,
+    ReviewFilter.conflict => (conflicts ?? conflictGroups(r)).contains(g.id),
+    ReviewFilter.incomplete => isGroupIncomplete(g, d),
+    ReviewFilter.lowConfidence => isGroupLowConfidence(
+      g,
+      d,
+      r,
+      threshold: threshold,
+    ),
+  };
+}
+
+// ---------------------------------------------------------------- tech badges & diff
+
+/// Compact technical badges derived from [file] and its [ParsedName] / [MediaProbeInfo].
+List<String> fileTechBadges(ScanFile file) {
+  final p = file.parsed;
+  final badges = <String>[];
+  if (file.isDiscDir || (p?.isDisc ?? false)) {
+    badges.add('原盘');
+  }
+  if (p != null) {
+    final tech = <String>[];
+    final seenTech = <String>{};
+    void addTech(String? raw) {
+      final t = raw?.trim();
+      if (t == null || t.isEmpty) return;
+      if (seenTech.add(t.toLowerCase())) tech.add(t);
+    }
+
+    addTech(p.resolution ?? p.probe?.resolution);
+    if (p.extraInfo != null && p.extraInfo!.trim().isNotEmpty) {
+      for (final part in p.extraInfo!.trim().split(RegExp(r'[._\s]+'))) {
+        addTech(part);
+      }
+    }
+    if (p.probe != null) {
+      addTech(p.probe!.hdr);
+      addTech(p.probe!.audioCodec);
+      if (tech.length <= 1) {
+        addTech(p.probe!.videoCodec);
+      }
+    }
+    if (tech.isNotEmpty) {
+      badges.add(tech.join(' · '));
+    }
+
+    final edition = p.edition?.trim();
+    if (edition != null && edition.isNotEmpty) {
+      badges.add(edition);
+    }
+
+    final part = p.partLabel?.trim();
+    if (part != null && part.isNotEmpty) {
+      badges.add(part);
+    }
+
+    final seenFlags = <String>{};
+    for (final raw in p.subFlags) {
+      final norm = raw.trim().toLowerCase();
+      if (norm.isEmpty) continue;
+      final label = norm == 'bilingual' ? '双语' : norm;
+      if (seenFlags.add(label)) badges.add(label);
+    }
+  }
+  return badges;
+}
+
+enum DiffTokenKind { unchanged, changed, episodeTag, extension, subFlag }
+
+class DiffToken {
+  final String text;
+  final DiffTokenKind kind;
+
+  const DiffToken(this.text, this.kind);
+}
+
+const _subExtensions = {'.srt', '.ass', '.ssa', '.vtt', '.sub', '.idx', '.sup'};
+
+const _subSuffixTags = {
+  'forced',
+  'sdh',
+  'default',
+  'bilingual',
+  'hi',
+  'cc',
+  'zh',
+  'zh-cn',
+  'zh-tw',
+  'zh-hk',
+  'chs',
+  'cht',
+  'sc',
+  'tc',
+  'en',
+  'eng',
+  'ja',
+  'jpn',
+  'ko',
+  'kor',
+  'chi',
+  'zho',
+  'chs-eng',
+  'cht-eng',
+  'zh-en',
+};
+
+final _extRe = RegExp(r'^\.[A-Za-z0-9]{1,5}$');
+final _sepSplitRe = RegExp(r'[\s._\-\[\]()（）【】{}]+');
+final _diffChunkRe = RegExp(
+  r'S\d{1,2}E\d{1,3}(?:-E?\d{1,3})?|[\s._\-\[\]()（）【】{}]+|[^\s._\-\[\]()（）【】{}]+',
+  caseSensitive: false,
+);
+final _epTagRe = RegExp(
+  r'^S\d{1,2}E\d{1,3}(?:-E?\d{1,3})?$',
+  caseSensitive: false,
+);
+
+/// Tokenizes [newName] relative to [oldName] for structured diff highlighting.
+/// Concatenating all returned tokens always reproduces [newName] verbatim.
+List<DiffToken> diffFilenameTokens(String oldName, String newName) {
+  if (newName.isEmpty ||
+      newName == oldName ||
+      newName == '已忽略' ||
+      newName == '（名称不变）' ||
+      newName == '（无改动）') {
+    return [DiffToken(newName, DiffTokenKind.unchanged)];
+  }
+
+  var body = newName;
+  var ext = '';
+  final lastDot = newName.lastIndexOf('.');
+  if (lastDot > 0) {
+    final maybeExt = newName.substring(lastDot);
+    if (_extRe.hasMatch(maybeExt)) {
+      body = newName.substring(0, lastDot);
+      ext = maybeExt;
+    }
+  }
+
+  final isSub = _subExtensions.contains(ext.toLowerCase());
+  final subTokens = <String>[];
+  if (isSub) {
+    while (true) {
+      final dot = body.lastIndexOf('.');
+      if (dot <= 0) break;
+      final seg = body.substring(dot + 1);
+      if (!_subSuffixTags.contains(seg.toLowerCase())) break;
+      subTokens.insert(0, body.substring(dot));
+      body = body.substring(0, dot);
+    }
+  }
+
+  final oldLastDot = oldName.lastIndexOf('.');
+  final oldStem =
+      oldLastDot > 0 && _extRe.hasMatch(oldName.substring(oldLastDot))
+      ? oldName.substring(0, oldLastDot)
+      : oldName;
+  final oldWords = {
+    for (final w in oldStem.split(_sepSplitRe))
+      if (w.isNotEmpty) w.toLowerCase(),
+  };
+
+  final raw = <DiffToken>[];
+  for (final m in _diffChunkRe.allMatches(body)) {
+    final chunk = m.group(0)!;
+    final DiffTokenKind kind;
+    if (_epTagRe.hasMatch(chunk)) {
+      kind = DiffTokenKind.episodeTag;
+    } else if (_sepSplitRe.hasMatch(chunk) &&
+        chunk.replaceAll(_sepSplitRe, '').isEmpty) {
+      kind = DiffTokenKind.unchanged;
+    } else if (oldWords.contains(chunk.toLowerCase())) {
+      kind = DiffTokenKind.unchanged;
+    } else {
+      kind = DiffTokenKind.changed;
+    }
+    raw.add(DiffToken(chunk, kind));
+  }
+  for (final st in subTokens) {
+    raw.add(DiffToken(st, DiffTokenKind.subFlag));
+  }
+  if (ext.isNotEmpty) {
+    raw.add(DiffToken(ext, DiffTokenKind.extension));
+  }
+
+  // Merge adjacent tokens of the same kind for cleaner spans.
+  final merged = <DiffToken>[];
+  for (final t in raw) {
+    if (merged.isNotEmpty && merged.last.kind == t.kind) {
+      merged[merged.length - 1] = DiffToken(merged.last.text + t.text, t.kind);
+    } else {
+      merged.add(t);
+    }
+  }
+  return merged;
+}
+
+// ---------------------------------------------------------------- conflict quick-resolve
+
+/// Same-group duplicate collision: 2+ files in one group planned to the same path.
+class GroupDuplicateConflict {
+  final String targetPath;
+  final String reason;
+
+  /// Colliding rows sorted by file size descending (largest first).
+  final List<ReviewRow> rows;
+
+  const GroupDuplicateConflict({
+    required this.targetPath,
+    required this.reason,
+    required this.rows,
+  });
+
+  ReviewRow get largest => rows.first;
+  List<ReviewRow> get smaller => rows.sublist(1);
+}
+
+/// Finds same-group duplicate conflicts where 2+ non-ignored files in [g]
+/// target the same destination path.
+List<GroupDuplicateConflict> groupDuplicateConflicts(
+  MediaGroup g,
+  GroupDecision? d,
+  TaskReview r,
+) {
+  if (r.preview.conflicts.isEmpty) return const [];
+  final rows = rowsOf(g, d, r);
+  final byOpId = <OpId, ReviewRow>{
+    for (final row in rows)
+      if (row.op != null && !row.ignored) row.op!.id: row,
+  };
+  final out = <GroupDuplicateConflict>[];
+  for (final c in r.preview.conflicts) {
+    final matched = <ReviewRow>[for (final id in c.ops) ?byOpId[id]];
+    if (matched.length < 2) continue;
+    matched.sort((a, b) {
+      final sz = b.file.size.compareTo(a.file.size);
+      return sz != 0 ? sz : a.file.path.compareTo(b.file.path);
+    });
+    out.add(
+      GroupDuplicateConflict(
+        targetPath: c.path,
+        reason: c.reason,
+        rows: matched,
+      ),
+    );
+  }
+  return out;
+}
+
+/// Returns updated overrides ignoring the smaller duplicate(s) in each conflict.
+Map<String, FileOverride> resolveKeepLargestOverrides(
+  GroupDecision current,
+  List<GroupDuplicateConflict> conflicts,
+) {
+  final next = {...current.overrides};
+  for (final c in conflicts) {
+    for (final row in c.smaller) {
+      final old = next[row.file.path] ?? row.override;
+      next[row.file.path] = FileOverride(
+        season: old?.season,
+        episode: old?.episode,
+        kind: old?.kind,
+        ignore: true,
+      );
+    }
+  }
+  return next;
 }

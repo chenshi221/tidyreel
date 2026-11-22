@@ -12,10 +12,120 @@ import 'review_logic.dart';
 import 'tmdb_search_dialog.dart';
 
 export 'edit_row_sheet.dart';
+export 'group_actions_dialog.dart';
 export 'merge_dialog.dart';
 export 'tmdb_search_dialog.dart';
 
 String _pad(int n) => n.toString().padLeft(2, '0');
+
+// ---------------------------------------------------------------- split divider & filter chip
+
+/// 6px interactive drag divider between resizable panes.
+class SplitDivider extends StatefulWidget {
+  final VoidCallback? onDragStart;
+  final ValueChanged<double> onDragUpdate;
+  final VoidCallback? onDragEnd;
+
+  const SplitDivider({
+    super.key,
+    this.onDragStart,
+    required this.onDragUpdate,
+    this.onDragEnd,
+  });
+
+  @override
+  State<SplitDivider> createState() => _SplitDividerState();
+}
+
+class _SplitDividerState extends State<SplitDivider> {
+  var _hover = false;
+  var _dragging = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    final active = _hover || _dragging;
+    return MouseRegion(
+      cursor: SystemMouseCursors.resizeColumn,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onHorizontalDragStart: (_) {
+          setState(() => _dragging = true);
+          widget.onDragStart?.call();
+        },
+        onHorizontalDragUpdate: (d) => widget.onDragUpdate(d.delta.dx),
+        onHorizontalDragEnd: (_) {
+          setState(() => _dragging = false);
+          widget.onDragEnd?.call();
+        },
+        onHorizontalDragCancel: () {
+          setState(() => _dragging = false);
+          widget.onDragEnd?.call();
+        },
+        child: SizedBox(
+          width: 6,
+          child: Center(
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 100),
+              width: active ? 2 : hairline,
+              color: _dragging ? p.accent : (_hover ? p.lineStrong : p.line),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Compact pill chip for left-pane quick filters (全部 / 冲突 / 缺集 / 低置信).
+class ReviewFilterChip extends StatelessWidget {
+  final String label;
+  final Color? color;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const ReviewFilterChip({
+    super.key,
+    required this.label,
+    this.color,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    final c = color ?? p.text;
+    final selectedFg = color == null
+        ? p.canvas
+        : (color!.computeLuminance() > 0.45 ? p.canvas : Colors.white);
+    return Hoverable(
+      onTap: onTap,
+      builder: (context, hover) => AnimatedContainer(
+        duration: const Duration(milliseconds: 100),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: selected ? c : (hover ? c.withValues(alpha: 0.09) : p.panel),
+          borderRadius: BorderRadius.circular(Radii.sm),
+          border: Border.all(
+            color: selected ? c : (color?.withValues(alpha: 0.35) ?? p.line),
+            width: hairline,
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 11.5,
+            fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+            color: selected ? selectedFg : (color ?? p.textMuted),
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 // ---------------------------------------------------------------- left pane
 
@@ -26,6 +136,10 @@ class GroupList extends StatelessWidget {
   final ValueChanged<GroupId> onSelect;
   final void Function(GroupId, bool) onCheck;
   final void Function(MediaGroup, Candidate) onPick;
+  final ValueChanged<MediaGroup>? onCorrect;
+  final ValueChanged<MediaGroup>? onMergeGroup;
+  final ValueChanged<MediaGroup>? onSplitGroup;
+  final bool canMerge;
 
   const GroupList({
     super.key,
@@ -35,6 +149,10 @@ class GroupList extends StatelessWidget {
     required this.onSelect,
     required this.onCheck,
     required this.onPick,
+    this.onCorrect,
+    this.onMergeGroup,
+    this.onSplitGroup,
+    this.canMerge = false,
   });
 
   @override
@@ -49,7 +167,9 @@ class GroupList extends StatelessWidget {
       itemBuilder: (_, i) {
         final g = groups[i];
         final d = review.decisions[g.id];
-        return _GroupCard(
+        final canSplit =
+            g.files.where((f) => f.role == FileRole.video).length >= 2;
+        final card = _GroupCard(
           group: g,
           decision: d,
           selected: g.id == selected,
@@ -57,6 +177,34 @@ class GroupList extends StatelessWidget {
           onSelect: () => onSelect(g.id),
           onCheck: (v) => onCheck(g.id, v),
           onPick: (c) => onPick(g, c),
+        );
+        final hasMenu =
+            onCorrect != null ||
+            (canMerge && onMergeGroup != null) ||
+            (canSplit && onSplitGroup != null);
+        if (!hasMenu) return card;
+        return ContextMenuArea(
+          items: () => [
+            if (onCorrect != null)
+              MenuAction(
+                '重新搜索 TMDB',
+                () => onCorrect!(g),
+                icon: CupertinoIcons.search,
+              ),
+            if (canMerge && onMergeGroup != null)
+              MenuAction(
+                '合并到其他作品…',
+                () => onMergeGroup!(g),
+                icon: CupertinoIcons.arrow_merge,
+              ),
+            if (canSplit && onSplitGroup != null)
+              MenuAction(
+                '拆分分组…',
+                () => onSplitGroup!(g),
+                icon: CupertinoIcons.scissors,
+              ),
+          ],
+          child: card,
         );
       },
     );
@@ -616,6 +764,8 @@ class DetailPane extends StatelessWidget {
   final bool showActions;
   final VoidCallback? onShowActions;
   final VoidCallback? onCorrect;
+  final ValueChanged<SeasonStrategy>? onApplySuggestedStrategy;
+  final ValueChanged<List<GroupDuplicateConflict>>? onResolveKeepLargest;
 
   const DetailPane({
     super.key,
@@ -630,12 +780,16 @@ class DetailPane extends StatelessWidget {
     this.showActions = true,
     this.onShowActions,
     this.onCorrect,
+    this.onApplySuggestedStrategy,
+    this.onResolveKeepLargest,
   });
 
   @override
   Widget build(BuildContext context) {
     final brightness = Theme.of(context).brightness;
     final rows = rowsOf(group, decision, review);
+    final dupConflicts = groupDuplicateConflicts(group, decision, review);
+    final conflictedRowCount = rows.where((r) => r.conflict).length;
     final seasons = ({for (final r in rows) r.season}.toList()..sort());
     final current = tab == folderTab || seasons.contains(tab)
         ? tab
@@ -745,6 +899,93 @@ class DetailPane extends StatelessWidget {
                   TextButton(
                     onPressed: onShowActions,
                     child: const Text('展开作品操作'),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+        if (group.suggestedStrategy != null &&
+            (decision?.strategy ?? SeasonStrategy.asParsed) !=
+                group.suggestedStrategy &&
+            onApplySuggestedStrategy != null) ...[
+          const SizedBox(height: 10),
+          Container(
+            key: const ValueKey('suggested-strategy-banner'),
+            padding: const EdgeInsets.fromLTRB(12, 7, 8, 7),
+            decoration: BoxDecoration(
+              color: Palette.of(context).accent.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(Radii.sm),
+              border: Border.all(
+                color: Palette.of(context).accent.withValues(alpha: 0.25),
+                width: hairline,
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  CupertinoIcons.sparkles,
+                  size: 14,
+                  color: Palette.of(context).accent,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    group.suggestedStrategyReason ??
+                        '建议使用「${strategyInfo[group.suggestedStrategy!]?.$1 ?? group.suggestedStrategy!.name}」',
+                    style: const TextStyle(fontSize: TypeScale.small),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                FilledButton(
+                  key: const ValueKey('apply-suggested-strategy'),
+                  onPressed: () =>
+                      onApplySuggestedStrategy!(group.suggestedStrategy!),
+                  child: const Text('一键应用'),
+                ),
+              ],
+            ),
+          ),
+        ],
+        if (conflictedRowCount > 0) ...[
+          const SizedBox(height: 10),
+          Container(
+            key: const ValueKey('group-conflict-banner'),
+            padding: const EdgeInsets.fromLTRB(12, 7, 8, 7),
+            decoration: BoxDecoration(
+              color: Palette.of(context).danger.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(Radii.sm),
+              border: Border.all(
+                color: Palette.of(context).danger.withValues(alpha: 0.25),
+                width: hairline,
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  CupertinoIcons.exclamationmark_triangle_fill,
+                  size: 14,
+                  color: Palette.of(context).danger,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    dupConflicts.isNotEmpty
+                        ? '本作品存在 ${dupConflicts.length} 处同名冲突，可保留体积较大者或逐个修改集号/忽略'
+                        : '本作品有 $conflictedRowCount 个文件存在目标路径冲突，请修改集号或忽略',
+                    style: TextStyle(
+                      fontSize: TypeScale.small,
+                      color: Palette.of(context).danger,
+                    ),
+                  ),
+                ),
+                if (dupConflicts.isNotEmpty &&
+                    onResolveKeepLargest != null) ...[
+                  const SizedBox(width: 8),
+                  FilledButton(
+                    key: const ValueKey('conflict-keep-largest'),
+                    onPressed: () => onResolveKeepLargest!(dupConflicts),
+                    child: const Text('保留体积较大者'),
                   ),
                 ],
               ],
@@ -1138,6 +1379,193 @@ class _EpBadge extends StatelessWidget {
   }
 }
 
+/// Compact micro-pills for technical metadata (2160p · DV · Atmos, edition,
+/// partLabel, 原盘, subtitle flags).
+class _TechBadgeRow extends StatelessWidget {
+  final List<String> badges;
+
+  const _TechBadgeRow({required this.badges});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    return Wrap(
+      spacing: 4,
+      runSpacing: 4,
+      children: [
+        for (final b in badges)
+          Builder(
+            builder: (context) {
+              final isDisc = b == '原盘';
+              final isSubFlag =
+                  b == 'forced' || b == 'sdh' || b == 'default' || b == '双语';
+              final Color fg = isDisc
+                  ? p.accent
+                  : (isSubFlag ? p.success : p.textMuted);
+              final Color bg = isDisc
+                  ? p.accent.withValues(alpha: 0.12)
+                  : (isSubFlag
+                        ? p.success.withValues(alpha: 0.10)
+                        : p.selected);
+              return Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                decoration: BoxDecoration(
+                  color: bg,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  b,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                    color: fg,
+                    fontFamilyFallback: sansFallback,
+                  ),
+                ),
+              );
+            },
+          ),
+      ],
+    );
+  }
+}
+
+/// Renders [newName] with structured diff highlights relative to [oldName].
+/// Uses [Text.rich] so plain-text finders still match [newName] verbatim.
+class _DiffFilename extends StatelessWidget {
+  final String oldName;
+  final String newName;
+  final String prefix;
+  final TextStyle baseStyle;
+  final int maxLines;
+  final bool ignored;
+  final bool conflict;
+  final bool hasWarning;
+  final Color? episodeColor;
+
+  const _DiffFilename({
+    required this.oldName,
+    required this.newName,
+    this.prefix = '',
+    required this.baseStyle,
+    this.maxLines = 3,
+    this.ignored = false,
+    this.conflict = false,
+    this.hasWarning = false,
+    this.episodeColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (ignored) {
+      return Text(
+        '$prefix$newName',
+        maxLines: maxLines,
+        overflow: TextOverflow.ellipsis,
+        style: baseStyle,
+      );
+    }
+    final p = Palette.of(context);
+    final tokens = diffFilenameTokens(oldName, newName);
+    final epColor = conflict ? p.danger : (episodeColor ?? p.accent);
+    final changeColor = conflict ? p.danger : (hasWarning ? p.warning : p.text);
+    final changeBg = (conflict ? p.danger : (hasWarning ? p.warning : p.accent))
+        .withValues(alpha: 0.09);
+    return Text.rich(
+      TextSpan(
+        style: baseStyle,
+        children: [
+          if (prefix.isNotEmpty) TextSpan(text: prefix),
+          for (final t in tokens)
+            switch (t.kind) {
+              DiffTokenKind.unchanged => TextSpan(text: t.text),
+              DiffTokenKind.changed => TextSpan(
+                text: t.text,
+                style: TextStyle(
+                  color: changeColor,
+                  fontWeight: FontWeight.w600,
+                  backgroundColor: changeBg,
+                ),
+              ),
+              DiffTokenKind.episodeTag => TextSpan(
+                text: t.text,
+                style: TextStyle(
+                  color: epColor,
+                  fontWeight: FontWeight.w700,
+                  backgroundColor: epColor.withValues(alpha: 0.13),
+                ),
+              ),
+              DiffTokenKind.subFlag => TextSpan(
+                text: t.text,
+                style: TextStyle(
+                  color: p.success,
+                  fontWeight: FontWeight.w600,
+                  backgroundColor: p.success.withValues(alpha: 0.10),
+                ),
+              ),
+              DiffTokenKind.extension => TextSpan(
+                text: t.text,
+                style: TextStyle(color: p.textFaint),
+              ),
+            },
+        ],
+      ),
+      maxLines: maxLines,
+      overflow: TextOverflow.ellipsis,
+    );
+  }
+}
+
+class _QuickActionChip extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final Color? color;
+  final VoidCallback onTap;
+
+  const _QuickActionChip({
+    super.key,
+    required this.label,
+    required this.icon,
+    this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    final c = color ?? p.text;
+    return Hoverable(
+      onTap: onTap,
+      builder: (context, hover) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
+        decoration: BoxDecoration(
+          color: hover ? c.withValues(alpha: 0.12) : p.panel,
+          borderRadius: BorderRadius.circular(Radii.sm),
+          border: Border.all(
+            color: color?.withValues(alpha: 0.35) ?? p.lineStrong,
+            width: hairline,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 11, color: c),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w500,
+                color: c,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _EpisodeRow extends ConsumerWidget {
   final ReviewRow row;
   final int? tmdbId;
@@ -1170,6 +1598,7 @@ class _EpisodeRow extends ConsumerWidget {
     }
     final badge = target == null ? '—' : _pad(target.episode);
     final newName = r.newLabel;
+    final techBadges = fileTechBadges(r.file);
     // The planner flags real guesses on the op ("识别置信度较低"); only a file
     // it skipped falls back to the parser's own confidence.
     final missingEpisode =
@@ -1184,12 +1613,12 @@ class _EpisodeRow extends ConsumerWidget {
         r.file.parsed != null &&
         r.file.parsed!.confidence < 0.7;
 
-    final issue = r.conflict
-        ? p.danger
-        : (r.op?.warning != null || lowConfidence || missingEpisode
-              ? p.warning
-              : null);
+    final hasWarning = r.op?.warning != null || lowConfidence || missingEpisode;
+    final issue = r.conflict ? p.danger : (hasWarning ? p.warning : null);
     final conflictDetail = r.conflictReason ?? '目标路径冲突';
+    final epColor = target == null || r.ignored
+        ? null
+        : seasonColor(target.season, brightness);
     return Hoverable(
       onTap: onEdit,
       builder: (context, hover) => Container(
@@ -1216,13 +1645,13 @@ class _EpisodeRow extends ConsumerWidget {
             Padding(
               padding: const EdgeInsets.only(top: 1),
               child: tmdbId == null && target == null
-                  ? const IconTile(CupertinoIcons.film, size: 26)
-                  : _EpBadge(
-                      badge,
-                      color: target == null || r.ignored
-                          ? null
-                          : seasonColor(target.season, brightness),
-                    ),
+                  ? IconTile(
+                      r.file.isDiscDir
+                          ? Icons.album_outlined
+                          : CupertinoIcons.film,
+                      size: 26,
+                    )
+                  : _EpBadge(badge, color: epColor),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -1286,16 +1715,19 @@ class _EpisodeRow extends ConsumerWidget {
                         child: Icon(
                           CupertinoIcons.arrow_right,
                           size: 10,
-                          color: p.textFaint,
+                          color: r.conflict ? p.danger : p.textFaint,
                         ),
                       ),
                       const SizedBox(width: 4),
                       Flexible(
-                        child: Text(
-                          newName,
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
+                        child: _DiffFilename(
+                          oldName: r.file.name,
+                          newName: newName,
+                          ignored: r.ignored,
+                          conflict: r.conflict,
+                          hasWarning: hasWarning,
+                          episodeColor: epColor,
+                          baseStyle: TextStyle(
                             fontSize: tmdbId != null ? 12.5 : 13,
                             color: r.ignored
                                 ? p.textFaint
@@ -1309,6 +1741,10 @@ class _EpisodeRow extends ConsumerWidget {
                       ),
                     ],
                   ),
+                  if (techBadges.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    _TechBadgeRow(badges: techBadges),
+                  ],
                   if (r.conflict && r.conflictReason != null)
                     Padding(
                       padding: const EdgeInsets.only(top: 2),
@@ -1322,6 +1758,37 @@ class _EpisodeRow extends ConsumerWidget {
                         ),
                       ),
                     ),
+                  if (r.conflict) ...[
+                    const SizedBox(height: 5),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        if (r.file.size > 0)
+                          Text(
+                            fmtSize(r.file.size),
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              color: p.textMuted,
+                            ),
+                          ),
+                        _QuickActionChip(
+                          key: ValueKey('conflict-edit-${r.file.path}'),
+                          label: tmdbId != null ? '修改集号' : '修改对应关系',
+                          icon: CupertinoIcons.pencil,
+                          onTap: onEdit,
+                        ),
+                        _QuickActionChip(
+                          key: ValueKey('conflict-ignore-${r.file.path}'),
+                          label: '忽略此文件',
+                          icon: CupertinoIcons.eye_slash,
+                          color: p.danger,
+                          onTap: () => onCheck(false),
+                        ),
+                      ],
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -1367,6 +1834,7 @@ class _SidecarRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = Palette.of(context);
     final r = row;
+    final techBadges = fileTechBadges(r.file);
     final icon = switch (r.file.role) {
       FileRole.subtitle => CupertinoIcons.captions_bubble,
       FileRole.junk => CupertinoIcons.trash,
@@ -1378,9 +1846,14 @@ class _SidecarRow extends StatelessWidget {
     return Hoverable(
       onTap: onEdit,
       builder: (context, hover) => Container(
-        color: hover ? p.hover : Colors.transparent,
+        color: hover
+            ? p.hover
+            : (r.conflict
+                  ? p.danger.withValues(alpha: 0.05)
+                  : Colors.transparent),
         padding: const EdgeInsets.fromLTRB(6, 6, 12, 6),
         child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             SizedBox(
               width: 28,
@@ -1390,7 +1863,10 @@ class _SidecarRow extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 14),
-            Icon(icon, size: 14, color: p.textFaint),
+            Padding(
+              padding: const EdgeInsets.only(top: 3),
+              child: Icon(icon, size: 14, color: p.textFaint),
+            ),
             const SizedBox(width: 10),
             Expanded(
               child: Tooltip(
@@ -1412,11 +1888,15 @@ class _SidecarRow extends StatelessWidget {
                         color: p.textFaint,
                       ),
                     ),
-                    Text(
-                      '→ ${r.newLabel}',
+                    _DiffFilename(
+                      oldName: r.file.name,
+                      newName: r.newLabel,
+                      prefix: '→ ',
                       maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
+                      ignored: r.ignored,
+                      conflict: r.conflict,
+                      hasWarning: r.op?.warning != null,
+                      baseStyle: TextStyle(
                         fontSize: 12,
                         color: r.ignored ? p.textFaint : p.textMuted,
                         decoration: r.ignored
@@ -1424,6 +1904,32 @@ class _SidecarRow extends StatelessWidget {
                             : null,
                       ),
                     ),
+                    if (techBadges.isNotEmpty) ...[
+                      const SizedBox(height: 3),
+                      _TechBadgeRow(badges: techBadges),
+                    ],
+                    if (r.conflict) ...[
+                      const SizedBox(height: 4),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 4,
+                        children: [
+                          _QuickActionChip(
+                            key: ValueKey('conflict-edit-${r.file.path}'),
+                            label: '修改集号',
+                            icon: CupertinoIcons.pencil,
+                            onTap: onEdit,
+                          ),
+                          _QuickActionChip(
+                            key: ValueKey('conflict-ignore-${r.file.path}'),
+                            label: '忽略此文件',
+                            icon: CupertinoIcons.eye_slash,
+                            color: p.danger,
+                            onTap: () => onCheck(false),
+                          ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -1671,6 +2177,8 @@ class ActionPane extends ConsumerWidget {
   final GroupDecision decision;
   final ValueChanged<GroupDecision> onChange;
   final VoidCallback onCorrect;
+  final VoidCallback? onMergeGroup;
+  final VoidCallback? onSplitGroup;
 
   const ActionPane({
     super.key,
@@ -1678,6 +2186,8 @@ class ActionPane extends ConsumerWidget {
     required this.decision,
     required this.onChange,
     required this.onCorrect,
+    this.onMergeGroup,
+    this.onSplitGroup,
   });
 
   static String _offsetExample(int offset) {
@@ -1879,6 +2389,33 @@ class ActionPane extends ConsumerWidget {
             ),
           ),
         ],
+        if (onMergeGroup != null || onSplitGroup != null) ...[
+          const SectionLabel('分组'),
+          Panel(
+            padding: const EdgeInsets.all(10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (onMergeGroup != null)
+                  OutlinedButton.icon(
+                    key: const ValueKey('merge-group-btn'),
+                    onPressed: onMergeGroup,
+                    icon: const Icon(CupertinoIcons.arrow_merge, size: 13),
+                    label: const Text('合并到其他作品…'),
+                  ),
+                if (onMergeGroup != null && onSplitGroup != null)
+                  const SizedBox(height: 8),
+                if (onSplitGroup != null)
+                  OutlinedButton.icon(
+                    key: const ValueKey('split-group-btn'),
+                    onPressed: onSplitGroup,
+                    icon: const Icon(CupertinoIcons.scissors, size: 13),
+                    label: const Text('拆分分组…'),
+                  ),
+              ],
+            ),
+          ),
+        ],
       ],
     );
   }
@@ -1912,12 +2449,25 @@ Set<String> plannedUnassignedDeletes(List<ScanFile> files, RenamePlan? plan) {
 }
 
 /// Files no work claimed, by folder, showing whether any junk files are
-/// planned for deletion under current settings.
+/// planned for deletion under current settings and allowing delete toggles
+/// or assigning files to an existing work.
 class UnassignedPane extends StatelessWidget {
   final List<ScanFile> files;
   final RenamePlan? plan;
+  final List<MediaGroup> groups;
+  final Map<GroupId, GroupDecision> decisions;
+  final void Function(String filePath, bool delete)? onToggleDelete;
+  final void Function(String filePath, GroupId targetGroup)? onAssign;
 
-  const UnassignedPane({super.key, required this.files, this.plan});
+  const UnassignedPane({
+    super.key,
+    required this.files,
+    this.plan,
+    this.groups = const [],
+    this.decisions = const {},
+    this.onToggleDelete,
+    this.onAssign,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1977,24 +2527,156 @@ class UnassignedPane extends StatelessWidget {
                         child: Row(
                           children: [
                             Expanded(
-                              child: Text(
-                                f.name,
-                                style: const TextStyle(fontSize: 13),
-                                overflow: TextOverflow.ellipsis,
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    f.name,
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      decoration: willDelete
+                                          ? TextDecoration.lineThrough
+                                          : null,
+                                      color: willDelete ? p.textMuted : p.text,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    [
+                                      if (f.size > 0) fmtSize(f.size),
+                                      unassignedReason(f),
+                                    ].join(' · '),
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: p.textFaint,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ],
                               ),
                             ),
-                            const SizedBox(width: 12),
+                            const SizedBox(width: 10),
                             if (willDelete) ...[
                               Tag('将永久删除', color: p.danger),
                               const SizedBox(width: 8),
                             ],
-                            Text(
-                              '${fmtSize(f.size)} · ${unassignedReason(f)}',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: p.textFaint,
+                            if (onToggleDelete != null) ...[
+                              Hoverable(
+                                key: ValueKey('unassigned-delete-${f.path}'),
+                                onTap: () =>
+                                    onToggleDelete!(f.path, !willDelete),
+                                builder: (context, hover) => Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 4,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: willDelete
+                                        ? p.danger.withValues(alpha: 0.10)
+                                        : (hover ? p.hover : p.panel),
+                                    borderRadius: BorderRadius.circular(
+                                      Radii.sm,
+                                    ),
+                                    border: Border.all(
+                                      color: willDelete
+                                          ? p.danger.withValues(alpha: 0.4)
+                                          : p.lineStrong,
+                                      width: hairline,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        willDelete
+                                            ? CupertinoIcons
+                                                  .checkmark_square_fill
+                                            : CupertinoIcons.square,
+                                        size: 13,
+                                        color: willDelete
+                                            ? p.danger
+                                            : p.textMuted,
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        willDelete ? '删除' : '保留',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w500,
+                                          color: willDelete
+                                              ? p.danger
+                                              : p.textMuted,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
                               ),
-                            ),
+                            ],
+                            if (onAssign != null && groups.isNotEmpty) ...[
+                              const SizedBox(width: 6),
+                              PopupMenuButton<GroupId>(
+                                key: ValueKey('assign-unassigned-${f.path}'),
+                                tooltip: '归入已有作品',
+                                onSelected: (gid) => onAssign!(f.path, gid),
+                                itemBuilder: (_) => [
+                                  for (final g in groups)
+                                    PopupMenuItem<GroupId>(
+                                      key: ValueKey(
+                                        'assign-target-${g.id.value}',
+                                      ),
+                                      value: g.id,
+                                      height: 32,
+                                      child: Text(() {
+                                        final m = effectiveMatch(
+                                          g,
+                                          decisions[g.id],
+                                        );
+                                        final t = m?.title ?? g.anchorTitle;
+                                        return m?.year == null
+                                            ? t
+                                            : '$t (${m!.year})';
+                                      }(), overflow: TextOverflow.ellipsis),
+                                    ),
+                                ],
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 4,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: p.panel,
+                                    borderRadius: BorderRadius.circular(
+                                      Radii.sm,
+                                    ),
+                                    border: Border.all(
+                                      color: p.lineStrong,
+                                      width: hairline,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        CupertinoIcons.folder_badge_plus,
+                                        size: 12,
+                                        color: p.textMuted,
+                                      ),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        '归入作品…',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w500,
+                                          color: p.text,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
                           ],
                         ),
                       );

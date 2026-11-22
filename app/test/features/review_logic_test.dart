@@ -222,4 +222,237 @@ void main() {
     expect(builtRows.first.conflict, isTrue);
     expect(builtRows.first.conflictReason, '目标位置已存在同名文件或文件夹');
   });
+
+  test('fileTechBadges extracts probed tech, edition, partLabel, disc and sub flags', () {
+    const probedVideo = ScanFile(
+      path: '/m/Inception.mkv',
+      name: 'Inception.mkv',
+      size: 1000,
+      role: FileRole.video,
+      parsed: ParsedName(
+        kind: MediaKind.movie,
+        edition: "Director's Cut",
+        partLabel: 'cd1',
+        probe: MediaProbeInfo(
+          width: 3840,
+          height: 2160,
+          hdr: 'DV',
+          audioCodec: 'Atmos',
+        ),
+      ),
+    );
+    expect(fileTechBadges(probedVideo), [
+      '2160p · DV · Atmos',
+      "Director's Cut",
+      'cd1',
+    ]);
+
+    const disc = ScanFile(
+      path: '/m/Inception.BDMV',
+      name: 'Inception.BDMV',
+      size: 40000,
+      role: FileRole.video,
+      isDiscDir: true,
+      parsed: ParsedName(
+        kind: MediaKind.movie,
+        isDisc: true,
+        resolution: '2160p',
+      ),
+    );
+    expect(fileTechBadges(disc), ['原盘', '2160p']);
+
+    const sub = ScanFile(
+      path: '/m/Inception.zh.forced.ass',
+      name: 'Inception.zh.forced.ass',
+      size: 500,
+      role: FileRole.subtitle,
+      parsed: ParsedName(subFlags: ['forced', 'bilingual', 'sdh']),
+    );
+    expect(fileTechBadges(sub), ['forced', '双语', 'sdh']);
+  });
+
+  test(
+    'diffFilenameTokens reproduces newName verbatim and classifies tokens',
+    () {
+      const oldEp = '[Sub] Dorohedoro S01E01 [1080p].mkv';
+      const newEp = '异兽魔都.Dorohedoro.2020.S01E01.mkv';
+      final epTokens = diffFilenameTokens(oldEp, newEp);
+      expect(epTokens.map((t) => t.text).join(), newEp);
+      expect(
+        epTokens.any(
+          (t) => t.kind == DiffTokenKind.changed && t.text == '异兽魔都',
+        ),
+        isTrue,
+      );
+      expect(
+        epTokens.any(
+          (t) => t.kind == DiffTokenKind.episodeTag && t.text == 'S01E01',
+        ),
+        isTrue,
+      );
+      expect(epTokens.last.kind, DiffTokenKind.extension);
+      expect(epTokens.last.text, '.mkv');
+
+      const oldSub = 'ep1.chs.forced.ass';
+      const newSub = '异兽魔都.S01E01.zh.forced.ass';
+      final subTokens = diffFilenameTokens(oldSub, newSub);
+      expect(subTokens.map((t) => t.text).join(), newSub);
+      expect(
+        subTokens.any(
+          (t) => t.kind == DiffTokenKind.subFlag && t.text == '.zh.forced',
+        ),
+        isTrue,
+      );
+      expect(subTokens.last.kind, DiffTokenKind.extension);
+      expect(subTokens.last.text, '.ass');
+
+      expect(
+        diffFilenameTokens(oldEp, '已忽略').single.kind,
+        DiffTokenKind.unchanged,
+      );
+    },
+  );
+
+  test(
+    'matchesReviewFilter handles conflict, incomplete and lowConfidence',
+    () {
+      const lowGroup = MediaGroup(
+        id: GroupId('g-low'),
+        kind: MediaKind.movie,
+        anchorTitle: '盗梦空间',
+        rootDir: '/m',
+        match: Demo.inception,
+        matchScore: 0.4,
+        files: [
+          ScanFile(
+            path: '/m/a.mkv',
+            name: 'a.mkv',
+            size: 1,
+            role: FileRole.video,
+            parsed: ParsedName(kind: MediaKind.movie, confidence: 0.4),
+          ),
+        ],
+      );
+      const cleanGroup = MediaGroup(
+        id: GroupId('g-clean'),
+        kind: MediaKind.movie,
+        anchorTitle: '盗梦空间',
+        rootDir: '/m2',
+        match: Demo.inception,
+        matchScore: 0.95,
+        files: [
+          ScanFile(
+            path: '/m2/a.mkv',
+            name: 'a.mkv',
+            size: 1,
+            role: FileRole.video,
+            parsed: ParsedName(kind: MediaKind.movie, confidence: 0.95),
+          ),
+        ],
+      );
+      final review = TaskReview(
+        id: const TaskId('t'),
+        scan: ScanResult(
+          connection: const ConnectionId('c'),
+          roots: const ['/s'],
+          groups: [g, lowGroup, cleanGroup],
+        ),
+        decisions: const {},
+        preview: const RenamePlan(ops: []),
+      );
+      // g has 4 local eps vs 21 TMDB eps -> incomplete.
+      expect(
+        matchesReviewFilter(g, null, review, ReviewFilter.incomplete),
+        isTrue,
+      );
+      expect(
+        matchesReviewFilter(lowGroup, null, review, ReviewFilter.incomplete),
+        isFalse,
+      );
+      expect(
+        matchesReviewFilter(lowGroup, null, review, ReviewFilter.lowConfidence),
+        isTrue,
+      );
+      expect(
+        matchesReviewFilter(
+          cleanGroup,
+          null,
+          review,
+          ReviewFilter.lowConfidence,
+        ),
+        isFalse,
+      );
+    },
+  );
+
+  test('groupDuplicateConflicts and resolveKeepLargestOverrides ignore smaller files', () {
+    const small = ScanFile(
+      path: '/s/small.mkv',
+      name: 'small.mkv',
+      size: 500,
+      role: FileRole.video,
+      parsed: ParsedName(season: 1, episodes: [1], confidence: 0.9),
+    );
+    const large = ScanFile(
+      path: '/s/large.mkv',
+      name: 'large.mkv',
+      size: 2000,
+      role: FileRole.video,
+      parsed: ParsedName(season: 1, episodes: [1], confidence: 0.9),
+    );
+    const dupGroup = MediaGroup(
+      id: GroupId('g-dup'),
+      kind: MediaKind.episode,
+      anchorTitle: '异兽魔都',
+      rootDir: '/s',
+      match: Demo.dorohedoro,
+      matchScore: 0.9,
+      files: [small, large],
+    );
+    const dst = '/s/Season 01/异兽魔都.S01E01.mkv';
+    final review = TaskReview(
+      id: const TaskId('t'),
+      scan: const ScanResult(
+        connection: ConnectionId('c'),
+        roots: ['/s'],
+        groups: [dupGroup],
+      ),
+      decisions: const {},
+      preview: const RenamePlan(
+        ops: [
+          RenameOp(
+            id: OpId('o1'),
+            kind: OpKind.relocate,
+            phase: ExecPhase.files,
+            src: '/s/small.mkv',
+            dst: dst,
+            group: GroupId('g-dup'),
+          ),
+          RenameOp(
+            id: OpId('o2'),
+            kind: OpKind.relocate,
+            phase: ExecPhase.files,
+            src: '/s/large.mkv',
+            dst: dst,
+            group: GroupId('g-dup'),
+          ),
+        ],
+        conflicts: [
+          PlanConflict(
+            ops: [OpId('o1'), OpId('o2')],
+            path: dst,
+            reason: '有 2 个文件会被命名为同一个路径',
+          ),
+        ],
+      ),
+    );
+    final dups = groupDuplicateConflicts(dupGroup, null, review);
+    expect(dups, hasLength(1));
+    expect(dups.single.largest.file.path, '/s/large.mkv');
+    expect(dups.single.smaller.map((r) => r.file.path), ['/s/small.mkv']);
+
+    final overrides = resolveKeepLargestOverrides(const GroupDecision(), dups);
+    expect(overrides['/s/small.mkv']?.ignore, isTrue);
+    expect(overrides.containsKey('/s/large.mkv'), isFalse);
+  });
 }
