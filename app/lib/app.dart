@@ -1,18 +1,24 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'data/providers.dart';
 import 'data/settings.dart';
+import 'shell/command_palette.dart';
 import 'shell/sidebar.dart';
 import 'ui/theme.dart';
 import 'ui/tokens.dart';
 
+import 'features/health/health_page.dart';
 import 'features/naming/naming_page.dart';
 import 'features/review/review_page.dart';
 import 'features/settings/settings_page.dart';
 import 'features/sources/sources_page.dart';
 import 'features/tasks/task_detail_page.dart';
 import 'features/tasks/tasks_page.dart';
+import 'features/watch/watch_page.dart';
+import 'features/watch/watch_service.dart';
 
 final _router = GoRouter(
   initialLocation: '/sources',
@@ -36,6 +42,8 @@ final _router = GoRouter(
             ),
           ],
         ),
+        GoRoute(path: '/health', builder: (_, _) => const HealthPage()),
+        GoRoute(path: '/watch', builder: (_, _) => const WatchPage()),
         GoRoute(path: '/naming', builder: (_, _) => const NamingPage()),
         GoRoute(path: '/settings', builder: (_, _) => const SettingsPage()),
       ],
@@ -68,21 +76,41 @@ class TidyreelApp extends ConsumerWidget {
 }
 
 /// Sidebar + content. Destinations map 1:1 to top-level routes.
-class AppShell extends StatelessWidget {
+class AppShell extends ConsumerWidget {
   final Widget child;
 
   const AppShell({super.key, required this.child});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Keep the lightweight watch service alive and synced with persisted rules.
+    final watchService = ref.watch(watchServiceProvider);
+    ref.listen(watchRulesProvider, (_, next) {
+      if (next.asData case final data?) {
+        watchService.syncRules(data.value);
+      }
+    });
+    final initialRules = ref.read(watchRulesProvider).asData?.value;
+    if (initialRules != null) {
+      watchService.syncRules(initialRules);
+    }
+
     final p = Palette.of(context);
-    return Scaffold(
-      backgroundColor: p.canvas,
-      body: Row(
-        children: [
-          const Sidebar(),
-          Expanded(child: child),
-        ],
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.keyK, meta: true): () =>
+            showCommandPalette(context, ref),
+        const SingleActivator(LogicalKeyboardKey.keyK, control: true): () =>
+            showCommandPalette(context, ref),
+      },
+      child: Scaffold(
+        backgroundColor: p.canvas,
+        body: Row(
+          children: [
+            const Sidebar(),
+            Expanded(child: child),
+          ],
+        ),
       ),
     );
   }

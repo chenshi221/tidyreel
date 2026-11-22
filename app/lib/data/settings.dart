@@ -13,10 +13,10 @@ class AppSettings {
   final bool autoDeleteJunk;
   final ThemeMode themeMode;
 
-  /// Ops in flight while executing; applies from the next app start.
+  /// Ops in flight while executing; takes effect immediately for new runs.
   final int concurrency;
 
-  /// Storage request starts per second (Alist rate limit); next app start.
+  /// Storage request starts per second (Alist rate limit); takes effect immediately.
   final int requestsPerSecond;
 
   /// Quick scan + warnings before a task is submitted.
@@ -30,6 +30,20 @@ class AppSettings {
 
   /// What scans usually contain; 混合 decides per folder.
   final MediaHint mediaHint;
+
+  /// Probe MKV/MP4 container headers on demand when filenames miss quality/HDR.
+  final bool probeMedia;
+
+  /// Allow scraping to replace existing `.nfo` files instead of skipping them.
+  final bool overwriteNfo;
+
+  /// Use Bangumi (bgm.tv) alongside AniList for anime Chinese/Japanese aliases.
+  final bool enableBangumi;
+
+  /// Persisted pane widths on ReviewPage.
+  final double reviewLeftWidth;
+  final double reviewRightWidth;
+
   final AccentChoice accent;
   final bool sidebarCollapsed;
   final bool reduceMotion;
@@ -48,6 +62,11 @@ class AppSettings {
     this.tmdbLanguage = 'zh-CN',
     this.confidenceThreshold = 0.7,
     this.mediaHint = MediaHint.mixed,
+    this.probeMedia = true,
+    this.overwriteNfo = false,
+    this.enableBangumi = true,
+    this.reviewLeftWidth = 312.0,
+    this.reviewRightWidth = 276.0,
     this.accent = AccentChoice.rouge,
     this.sidebarCollapsed = false,
     this.reduceMotion = false,
@@ -67,6 +86,11 @@ class AppSettings {
     String? tmdbLanguage,
     double? confidenceThreshold,
     MediaHint? mediaHint,
+    bool? probeMedia,
+    bool? overwriteNfo,
+    bool? enableBangumi,
+    double? reviewLeftWidth,
+    double? reviewRightWidth,
     AccentChoice? accent,
     bool? sidebarCollapsed,
     bool? reduceMotion,
@@ -84,6 +108,11 @@ class AppSettings {
     tmdbLanguage: tmdbLanguage ?? this.tmdbLanguage,
     confidenceThreshold: confidenceThreshold ?? this.confidenceThreshold,
     mediaHint: mediaHint ?? this.mediaHint,
+    probeMedia: probeMedia ?? this.probeMedia,
+    overwriteNfo: overwriteNfo ?? this.overwriteNfo,
+    enableBangumi: enableBangumi ?? this.enableBangumi,
+    reviewLeftWidth: reviewLeftWidth ?? this.reviewLeftWidth,
+    reviewRightWidth: reviewRightWidth ?? this.reviewRightWidth,
     accent: accent ?? this.accent,
     sidebarCollapsed: sidebarCollapsed ?? this.sidebarCollapsed,
     reduceMotion: reduceMotion ?? this.reduceMotion,
@@ -145,6 +174,15 @@ class SettingsNotifier extends Notifier<AppSettings> {
           (j?['confidenceThreshold'] as num?)?.toDouble() ??
           d.confidenceThreshold,
       mediaHint: pick(MediaHint.values, 'mediaHint', d.mediaHint),
+      probeMedia: j?['probeMedia'] as bool? ?? d.probeMedia,
+      overwriteNfo: j?['overwriteNfo'] as bool? ?? d.overwriteNfo,
+      enableBangumi: j?['enableBangumi'] as bool? ?? d.enableBangumi,
+      reviewLeftWidth:
+          ((j?['reviewLeftWidth'] as num?)?.toDouble() ?? d.reviewLeftWidth)
+              .clamp(240.0, 460.0),
+      reviewRightWidth:
+          ((j?['reviewRightWidth'] as num?)?.toDouble() ?? d.reviewRightWidth)
+              .clamp(220.0, 420.0),
       accent: pick(AccentChoice.values, 'accent', d.accent),
       sidebarCollapsed: j?['sidebarCollapsed'] as bool? ?? d.sidebarCollapsed,
       reduceMotion: j?['reduceMotion'] as bool? ?? d.reduceMotion,
@@ -167,6 +205,11 @@ class SettingsNotifier extends Notifier<AppSettings> {
       'tmdbLanguage': state.tmdbLanguage,
       'confidenceThreshold': state.confidenceThreshold,
       'mediaHint': state.mediaHint.name,
+      'probeMedia': state.probeMedia,
+      'overwriteNfo': state.overwriteNfo,
+      'enableBangumi': state.enableBangumi,
+      'reviewLeftWidth': state.reviewLeftWidth,
+      'reviewRightWidth': state.reviewRightWidth,
       'accent': state.accent.name,
       'sidebarCollapsed': state.sidebarCollapsed,
       'reduceMotion': state.reduceMotion,

@@ -55,6 +55,7 @@ class Sidebar extends ConsumerWidget {
             false,
       ),
     );
+    final activeWatchCount = ref.watch(activeWatchCountProvider);
     final location = GoRouterState.of(context).uri.path;
     final favorites = [
       for (final c in ref.watch(connectionsEditorProvider))
@@ -201,6 +202,14 @@ class Sidebar extends ConsumerWidget {
                   '任务',
                   badge: pending,
                   running: hasRunning,
+                ),
+                item('/health', CupertinoIcons.checkmark_shield, '体检'),
+                item(
+                  '/watch',
+                  CupertinoIcons.dot_radiowaves_left_right,
+                  '追更',
+                  badge: activeWatchCount,
+                  running: activeWatchCount > 0,
                 ),
                 item('/naming', CupertinoIcons.textformat, '命名规则'),
                 if (collapsed)

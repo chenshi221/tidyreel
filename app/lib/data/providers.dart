@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tidyreel_core/testing.dart';
@@ -7,8 +8,10 @@ import 'package:tidyreel_core/tidyreel_core.dart';
 import 'bootstrap.dart';
 import 'drift_history_store.dart';
 import 'drift_task_store.dart';
+import 'folder_stats_store.dart';
 import 'settings.dart';
 import 'settings_codec.dart';
+import 'watch_rules_store.dart';
 
 // Every engine dependency the UI uses goes through these providers.
 // main() overrides [bootstrapProvider] with the real stores; without an override
@@ -80,6 +83,9 @@ class ConnectionsNotifier extends Notifier<List<ConnectionConfig>> {
     ref
         .read(connectionPasswordsProvider.notifier)
         .set({...ref.read(connectionPasswordsProvider)}..remove(id));
+    ref.read(connectionDirPasswordsProvider.notifier).setFor(id, const {});
+    unawaited(ref.read(folderStatsStoreProvider).clearFor(id));
+    unawaited(ref.read(watchRulesStoreProvider).deleteForConnection(id));
   }
 
   void toggleFavorite(ConnectionId id, String path) {
@@ -127,6 +133,57 @@ final connectionPasswordsProvider =
       PasswordsNotifier.new,
     );
 
+/// Per-directory access passwords (e.g. Alist/OpenList protected folders),
+/// stored in secrets.json under `conn_dirs:<id>` as JSON.
+class DirPasswordsNotifier
+    extends Notifier<Map<ConnectionId, Map<String, String>>> {
+  Bootstrap get _boot => ref.read(bootstrapProvider);
+
+  @override
+  Map<ConnectionId, Map<String, String>> build() {
+    final out = <ConnectionId, Map<String, String>>{};
+    for (final c in ref.read(connectionsProvider)) {
+      final raw = _boot.secrets.read('conn_dirs:${c.id.value}');
+      if (raw == null || raw.isEmpty) continue;
+      try {
+        final decoded = (jsonDecode(raw) as Map).cast<String, Object?>();
+        final map = <String, String>{
+          for (final e in decoded.entries)
+            if (e.value is String && (e.value as String).isNotEmpty)
+              normalizeDir(e.key): e.value as String,
+        };
+        if (map.isNotEmpty) out[c.id] = map;
+      } on Object {
+        // Ignore corrupt dir passwords JSON.
+      }
+    }
+    return out;
+  }
+
+  void setFor(ConnectionId id, Map<String, String> dirs) {
+    final clean = <String, String>{
+      for (final e in dirs.entries)
+        if (e.key.trim().isNotEmpty && e.value.isNotEmpty)
+          normalizeDir(e.key): e.value,
+    };
+    final next = {...state};
+    if (clean.isEmpty) {
+      next.remove(id);
+      _boot.secrets.write('conn_dirs:${id.value}', null);
+    } else {
+      next[id] = clean;
+      _boot.secrets.write('conn_dirs:${id.value}', jsonEncode(clean));
+    }
+    state = next;
+  }
+}
+
+final connectionDirPasswordsProvider =
+    NotifierProvider<
+      DirPasswordsNotifier,
+      Map<ConnectionId, Map<String, String>>
+    >(DirPasswordsNotifier.new);
+
 // ---- engine --------------------------------------------------------------
 
 /// Sample files every demo connection browses.
@@ -140,8 +197,16 @@ final demoBackendProvider = Provider<StorageBackend>(
   }),
 );
 
-String _backendKey(ConnectionConfig c, String? password) =>
-    [c.type.name, c.endpoint, c.username, password].join('\n');
+String _backendKey(
+  ConnectionConfig c,
+  String? password,
+  Map<String, String> dirPasswords,
+) {
+  final dirEntries = dirPasswords.entries.toList()
+    ..sort((a, b) => a.key.compareTo(b.key));
+  final dirs = [for (final e in dirEntries) '${e.key}=${e.value}'].join('&');
+  return [c.type.name, c.endpoint, c.username, password, dirs].join('\n');
+}
 
 class _BackendPool {
   final _entries = <String, CachedBackend>{};
@@ -150,15 +215,22 @@ class _BackendPool {
     String key,
     ConnectionConfig config,
     String? password,
-    Duration minInterval,
+    Map<String, String> dirPasswords,
+    Duration Function() minIntervalProvider,
   ) => _entries.putIfAbsent(
     key,
     () => CachedBackend(
       ThrottledBackend(
-        createBackend(config, Credentials(password: password)),
+        createBackend(
+          config,
+          Credentials(password: password, dirPasswords: dirPasswords),
+        ),
         minInterval: config.type == ConnectionType.local
             ? Duration.zero
-            : minInterval,
+            : minIntervalProvider(),
+        minIntervalProvider: config.type == ConnectionType.local
+            ? null
+            : minIntervalProvider,
       ),
     ),
   );
@@ -190,17 +262,22 @@ final _backendPoolProvider = Provider<_BackendPool>((ref) {
   void prune() {
     final conns = ref.read(connectionsProvider);
     final passwords = ref.read(connectionPasswordsProvider);
-    pool.prune({for (final c in conns) _backendKey(c, passwords[c.id])});
+    final dirPasswords = ref.read(connectionDirPasswordsProvider);
+    pool.prune({
+      for (final c in conns)
+        _backendKey(c, passwords[c.id], dirPasswords[c.id] ?? const {}),
+    });
   }
 
   ref.listen(connectionsProvider, (_, _) => prune());
   ref.listen(connectionPasswordsProvider, (_, _) => prune());
+  ref.listen(connectionDirPasswordsProvider, (_, _) => prune());
   ref.onDispose(pool.dispose);
   return pool;
 });
 
 /// Targeted backend for one connection. Watches ONLY the target connection's
-/// `(type, endpoint, username)` and password so toggling favorites or editing
+/// `(type, endpoint, username)` and credentials so toggling favorites or editing
 /// other connections never invalidates this backend, its status, or its
 /// [SizeScanner].
 final connectionBackendProvider = Provider.family<StorageBackend, ConnectionId>(
@@ -220,13 +297,23 @@ final connectionBackendProvider = Provider.family<StorageBackend, ConnectionId>(
     final password = ref.watch(
       connectionPasswordsProvider.select((m) => m[id]),
     );
+    final dirPasswords = ref.watch(
+      connectionDirPasswordsProvider.select((m) => m[id] ?? const {}),
+    );
     final pool = ref.watch(_backendPoolProvider);
     final c = ref.read(connectionsProvider).firstWhere((e) => e.id == id);
-    final rps = ref.read(settingsProvider).requestsPerSecond;
-    final minInterval = rps <= 0
-        ? Duration.zero
-        : Duration(milliseconds: 1000 ~/ rps);
-    return pool.getOrCreate(_backendKey(c, password), c, password, minInterval);
+    Duration minInterval() {
+      final rps = ref.read(settingsProvider).requestsPerSecond;
+      return rps <= 0 ? Duration.zero : Duration(milliseconds: 1000 ~/ rps);
+    }
+
+    return pool.getOrCreate(
+      _backendKey(c, password, dirPasswords),
+      c,
+      password,
+      dirPasswords,
+      minInterval,
+    );
   },
 );
 
@@ -268,46 +355,88 @@ final historyProvider = Provider<HistoryStore>(
   (ref) => DriftHistoryStore(ref.watch(bootstrapProvider).db),
 );
 
+final folderStatsStoreProvider = Provider<FolderStatsStore>(
+  (ref) => FolderStatsStore(ref.watch(bootstrapProvider).db),
+);
+
+final watchRulesStoreProvider = Provider<WatchRulesStore>((ref) {
+  final store = WatchRulesStore(ref.watch(bootstrapProvider).db);
+  ref.onDispose(store.dispose);
+  return store;
+});
+
+final watchRulesProvider = StreamProvider<List<WatchRule>>(
+  (ref) => ref.watch(watchRulesStoreProvider).watchAll(),
+);
+
+final activeWatchCountProvider = Provider<int>(
+  (ref) => ref.watch(
+    watchRulesProvider.select(
+      (a) => a.value?.where((r) => r.enabled).length ?? 0,
+    ),
+  ),
+);
+
 final taskManagerProvider = Provider<TaskManager>((ref) {
   // Long-lived: reads backends, metadata and options at call time, so settings
   // changes apply to the next step without rebuilding the manager.
   final metadata = _LiveMetadata(() => ref.read(metadataProvider));
   final history = ref.watch(historyProvider);
-  // Read once: changing these takes effect from the next app start.
-  final s = ref.read(settingsProvider);
+  final demo = ref.read(bootstrapProvider).demo;
+  final bangumi = demo ? null : BangumiTitles();
+  final anilist = demo ? null : AniListTitles();
+  final altTitles = demo
+      ? null
+      : _LiveAltTitleSource(
+          bangumi: bangumi!,
+          anilist: anilist!,
+          enableBangumi: () => ref.read(settingsProvider).enableBangumi,
+        );
   final tm = DefaultTaskManager(
     backendFor: (id) => ref.read(backendForProvider)(id),
     recognizer: AnchorRecognizer(
       const RuleBasedParser(),
       metadata,
-      altTitles: ref.read(bootstrapProvider).demo ? null : AniListTitles(),
+      altTitles: altTitles,
       hint: () => ref.read(settingsProvider).mediaHint,
       titleRules: () => ref.read(titleRulesProvider),
+      mediaProbe: const ContainerMediaProbe(),
+      probeMedia: () => ref.read(settingsProvider).probeMedia,
     ),
     planner: DefaultPlanner(metadata),
     executor: DefaultExecutor(
       history,
-      concurrency: s.concurrency,
+      concurrency: ref.read(settingsProvider).concurrency,
+      concurrencyProvider: () => ref.read(settingsProvider).concurrency,
       // Real backends are already rate-limited inside _backendPoolProvider's
       // ThrottledBackend so all operations share one pacing window.
       minInterval: Duration.zero,
     ),
     history: history,
     store: DriftTaskStore(ref.watch(bootstrapProvider).db),
-    options: (id, mode) => PlanOptions(
-      mode: mode,
-      libraryRoot: ref
-          .read(connectionsProvider)
-          .where((c) => c.id == id)
-          .firstOrNull
-          ?.libraryRoot,
-      naming: ref.read(namingProfileProvider),
-      deleteJunk: ref.read(settingsProvider).autoDeleteJunk,
-      confidenceThreshold: ref.read(settingsProvider).confidenceThreshold,
-    ),
+    options: (id, mode) {
+      final s = ref.read(settingsProvider);
+      return PlanOptions(
+        mode: mode,
+        libraryRoot: ref
+            .read(connectionsProvider)
+            .where((c) => c.id == id)
+            .firstOrNull
+            ?.libraryRoot,
+        naming: ref.read(namingProfileProvider),
+        deleteJunk: s.autoDeleteJunk,
+        confidenceThreshold: s.confidenceThreshold,
+        overwriteNfo: s.overwriteNfo,
+        probeMedia: s.probeMedia,
+      );
+    },
   );
   tm.resumeInterrupted();
-  ref.onDispose(tm.dispose);
+  ref.onDispose(() {
+    tm.dispose();
+    bangumi?.close();
+    anilist?.close();
+  });
   return tm;
 });
 
@@ -417,6 +546,26 @@ class _LiveMetadata implements MetadataProvider, ExternalIdLookup {
 
   @override
   Future<MovieDetail> movie(int tmdbId) => _current().movie(tmdbId);
+}
+
+class _LiveAltTitleSource implements AltTitleSource {
+  final BangumiTitles bangumi;
+  final AniListTitles anilist;
+  final bool Function() enableBangumi;
+
+  const _LiveAltTitleSource({
+    required this.bangumi,
+    required this.anilist,
+    required this.enableBangumi,
+  });
+
+  @override
+  Future<List<String>> altTitles(String query) {
+    final source = enableBangumi()
+        ? CompositeAltTitleSource([bangumi, anilist])
+        : anilist;
+    return source.altTitles(query);
+  }
 }
 
 class _MissingKeyMetadata implements MetadataProvider {

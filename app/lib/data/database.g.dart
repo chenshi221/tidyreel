@@ -1129,6 +1129,21 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, TaskRow> {
     ),
     defaultValue: const Constant(false),
   );
+  static const VerificationMeta _scrapeOnlyMeta = const VerificationMeta(
+    'scrapeOnly',
+  );
+  @override
+  late final GeneratedColumn<bool> scrapeOnly = GeneratedColumn<bool>(
+    'scrape_only',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("scrape_only" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
   static const VerificationMeta _stageMeta = const VerificationMeta('stage');
   @override
   late final GeneratedColumn<String> stage = GeneratedColumn<String>(
@@ -1255,6 +1270,7 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, TaskRow> {
     pathsJson,
     mode,
     scrape,
+    scrapeOnly,
     stage,
     message,
     importedCount,
@@ -1315,6 +1331,12 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, TaskRow> {
       context.handle(
         _scrapeMeta,
         scrape.isAcceptableOrUnknown(data['scrape']!, _scrapeMeta),
+      );
+    }
+    if (data.containsKey('scrape_only')) {
+      context.handle(
+        _scrapeOnlyMeta,
+        scrapeOnly.isAcceptableOrUnknown(data['scrape_only']!, _scrapeOnlyMeta),
       );
     }
     if (data.containsKey('stage')) {
@@ -1438,6 +1460,10 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, TaskRow> {
         DriftSqlType.bool,
         data['${effectivePrefix}scrape'],
       )!,
+      scrapeOnly: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}scrape_only'],
+      )!,
       stage: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}stage'],
@@ -1497,6 +1523,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
   final String pathsJson;
   final String mode;
   final bool scrape;
+  final bool scrapeOnly;
   final String stage;
   final String message;
   final int importedCount;
@@ -1516,6 +1543,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
     required this.pathsJson,
     required this.mode,
     required this.scrape,
+    required this.scrapeOnly,
     required this.stage,
     required this.message,
     required this.importedCount,
@@ -1536,6 +1564,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
     map['paths_json'] = Variable<String>(pathsJson);
     map['mode'] = Variable<String>(mode);
     map['scrape'] = Variable<bool>(scrape);
+    map['scrape_only'] = Variable<bool>(scrapeOnly);
     map['stage'] = Variable<String>(stage);
     map['message'] = Variable<String>(message);
     map['imported_count'] = Variable<int>(importedCount);
@@ -1565,6 +1594,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
       pathsJson: Value(pathsJson),
       mode: Value(mode),
       scrape: Value(scrape),
+      scrapeOnly: Value(scrapeOnly),
       stage: Value(stage),
       message: Value(message),
       importedCount: Value(importedCount),
@@ -1598,6 +1628,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
       pathsJson: serializer.fromJson<String>(json['pathsJson']),
       mode: serializer.fromJson<String>(json['mode']),
       scrape: serializer.fromJson<bool>(json['scrape']),
+      scrapeOnly: serializer.fromJson<bool>(json['scrapeOnly']),
       stage: serializer.fromJson<String>(json['stage']),
       message: serializer.fromJson<String>(json['message']),
       importedCount: serializer.fromJson<int>(json['importedCount']),
@@ -1620,6 +1651,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
       'pathsJson': serializer.toJson<String>(pathsJson),
       'mode': serializer.toJson<String>(mode),
       'scrape': serializer.toJson<bool>(scrape),
+      'scrapeOnly': serializer.toJson<bool>(scrapeOnly),
       'stage': serializer.toJson<String>(stage),
       'message': serializer.toJson<String>(message),
       'importedCount': serializer.toJson<int>(importedCount),
@@ -1640,6 +1672,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
     String? pathsJson,
     String? mode,
     bool? scrape,
+    bool? scrapeOnly,
     String? stage,
     String? message,
     int? importedCount,
@@ -1657,6 +1690,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
     pathsJson: pathsJson ?? this.pathsJson,
     mode: mode ?? this.mode,
     scrape: scrape ?? this.scrape,
+    scrapeOnly: scrapeOnly ?? this.scrapeOnly,
     stage: stage ?? this.stage,
     message: message ?? this.message,
     importedCount: importedCount ?? this.importedCount,
@@ -1680,6 +1714,9 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
       pathsJson: data.pathsJson.present ? data.pathsJson.value : this.pathsJson,
       mode: data.mode.present ? data.mode.value : this.mode,
       scrape: data.scrape.present ? data.scrape.value : this.scrape,
+      scrapeOnly: data.scrapeOnly.present
+          ? data.scrapeOnly.value
+          : this.scrapeOnly,
       stage: data.stage.present ? data.stage.value : this.stage,
       message: data.message.present ? data.message.value : this.message,
       importedCount: data.importedCount.present
@@ -1712,6 +1749,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
           ..write('pathsJson: $pathsJson, ')
           ..write('mode: $mode, ')
           ..write('scrape: $scrape, ')
+          ..write('scrapeOnly: $scrapeOnly, ')
           ..write('stage: $stage, ')
           ..write('message: $message, ')
           ..write('importedCount: $importedCount, ')
@@ -1734,6 +1772,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
     pathsJson,
     mode,
     scrape,
+    scrapeOnly,
     stage,
     message,
     importedCount,
@@ -1755,6 +1794,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
           other.pathsJson == this.pathsJson &&
           other.mode == this.mode &&
           other.scrape == this.scrape &&
+          other.scrapeOnly == this.scrapeOnly &&
           other.stage == this.stage &&
           other.message == this.message &&
           other.importedCount == this.importedCount &&
@@ -1774,6 +1814,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
   final Value<String> pathsJson;
   final Value<String> mode;
   final Value<bool> scrape;
+  final Value<bool> scrapeOnly;
   final Value<String> stage;
   final Value<String> message;
   final Value<int> importedCount;
@@ -1792,6 +1833,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
     this.pathsJson = const Value.absent(),
     this.mode = const Value.absent(),
     this.scrape = const Value.absent(),
+    this.scrapeOnly = const Value.absent(),
     this.stage = const Value.absent(),
     this.message = const Value.absent(),
     this.importedCount = const Value.absent(),
@@ -1811,6 +1853,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
     required String pathsJson,
     required String mode,
     this.scrape = const Value.absent(),
+    this.scrapeOnly = const Value.absent(),
     required String stage,
     required String message,
     required int importedCount,
@@ -1840,6 +1883,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
     Expression<String>? pathsJson,
     Expression<String>? mode,
     Expression<bool>? scrape,
+    Expression<bool>? scrapeOnly,
     Expression<String>? stage,
     Expression<String>? message,
     Expression<int>? importedCount,
@@ -1859,6 +1903,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
       if (pathsJson != null) 'paths_json': pathsJson,
       if (mode != null) 'mode': mode,
       if (scrape != null) 'scrape': scrape,
+      if (scrapeOnly != null) 'scrape_only': scrapeOnly,
       if (stage != null) 'stage': stage,
       if (message != null) 'message': message,
       if (importedCount != null) 'imported_count': importedCount,
@@ -1880,6 +1925,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
     Value<String>? pathsJson,
     Value<String>? mode,
     Value<bool>? scrape,
+    Value<bool>? scrapeOnly,
     Value<String>? stage,
     Value<String>? message,
     Value<int>? importedCount,
@@ -1899,6 +1945,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
       pathsJson: pathsJson ?? this.pathsJson,
       mode: mode ?? this.mode,
       scrape: scrape ?? this.scrape,
+      scrapeOnly: scrapeOnly ?? this.scrapeOnly,
       stage: stage ?? this.stage,
       message: message ?? this.message,
       importedCount: importedCount ?? this.importedCount,
@@ -1931,6 +1978,9 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
     }
     if (scrape.present) {
       map['scrape'] = Variable<bool>(scrape.value);
+    }
+    if (scrapeOnly.present) {
+      map['scrape_only'] = Variable<bool>(scrapeOnly.value);
     }
     if (stage.present) {
       map['stage'] = Variable<String>(stage.value);
@@ -1979,6 +2029,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
           ..write('pathsJson: $pathsJson, ')
           ..write('mode: $mode, ')
           ..write('scrape: $scrape, ')
+          ..write('scrapeOnly: $scrapeOnly, ')
           ..write('stage: $stage, ')
           ..write('message: $message, ')
           ..write('importedCount: $importedCount, ')
@@ -1996,15 +2047,1037 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
   }
 }
 
+class $FolderStatsCacheTable extends FolderStatsCache
+    with TableInfo<$FolderStatsCacheTable, FolderStatsCacheRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $FolderStatsCacheTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _connectionIdMeta = const VerificationMeta(
+    'connectionId',
+  );
+  @override
+  late final GeneratedColumn<String> connectionId = GeneratedColumn<String>(
+    'connection_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _dirPathMeta = const VerificationMeta(
+    'dirPath',
+  );
+  @override
+  late final GeneratedColumn<String> dirPath = GeneratedColumn<String>(
+    'dir_path',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _entriesJsonMeta = const VerificationMeta(
+    'entriesJson',
+  );
+  @override
+  late final GeneratedColumn<String> entriesJson = GeneratedColumn<String>(
+    'entries_json',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _completeMeta = const VerificationMeta(
+    'complete',
+  );
+  @override
+  late final GeneratedColumn<bool> complete = GeneratedColumn<bool>(
+    'complete',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("complete" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _scannedAtMeta = const VerificationMeta(
+    'scannedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> scannedAt = GeneratedColumn<DateTime>(
+    'scanned_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    connectionId,
+    dirPath,
+    entriesJson,
+    complete,
+    scannedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'folder_stats_cache';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<FolderStatsCacheRow> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('connection_id')) {
+      context.handle(
+        _connectionIdMeta,
+        connectionId.isAcceptableOrUnknown(
+          data['connection_id']!,
+          _connectionIdMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_connectionIdMeta);
+    }
+    if (data.containsKey('dir_path')) {
+      context.handle(
+        _dirPathMeta,
+        dirPath.isAcceptableOrUnknown(data['dir_path']!, _dirPathMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_dirPathMeta);
+    }
+    if (data.containsKey('entries_json')) {
+      context.handle(
+        _entriesJsonMeta,
+        entriesJson.isAcceptableOrUnknown(
+          data['entries_json']!,
+          _entriesJsonMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_entriesJsonMeta);
+    }
+    if (data.containsKey('complete')) {
+      context.handle(
+        _completeMeta,
+        complete.isAcceptableOrUnknown(data['complete']!, _completeMeta),
+      );
+    }
+    if (data.containsKey('scanned_at')) {
+      context.handle(
+        _scannedAtMeta,
+        scannedAt.isAcceptableOrUnknown(data['scanned_at']!, _scannedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_scannedAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {connectionId, dirPath};
+  @override
+  FolderStatsCacheRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return FolderStatsCacheRow(
+      connectionId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}connection_id'],
+      )!,
+      dirPath: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}dir_path'],
+      )!,
+      entriesJson: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}entries_json'],
+      )!,
+      complete: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}complete'],
+      )!,
+      scannedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}scanned_at'],
+      )!,
+    );
+  }
+
+  @override
+  $FolderStatsCacheTable createAlias(String alias) {
+    return $FolderStatsCacheTable(attachedDatabase, alias);
+  }
+}
+
+class FolderStatsCacheRow extends DataClass
+    implements Insertable<FolderStatsCacheRow> {
+  final String connectionId;
+  final String dirPath;
+
+  /// JSON array of serialized RemoteEntry objects: {p, n, d, s, m}.
+  final String entriesJson;
+  final bool complete;
+  final DateTime scannedAt;
+  const FolderStatsCacheRow({
+    required this.connectionId,
+    required this.dirPath,
+    required this.entriesJson,
+    required this.complete,
+    required this.scannedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['connection_id'] = Variable<String>(connectionId);
+    map['dir_path'] = Variable<String>(dirPath);
+    map['entries_json'] = Variable<String>(entriesJson);
+    map['complete'] = Variable<bool>(complete);
+    map['scanned_at'] = Variable<DateTime>(scannedAt);
+    return map;
+  }
+
+  FolderStatsCacheCompanion toCompanion(bool nullToAbsent) {
+    return FolderStatsCacheCompanion(
+      connectionId: Value(connectionId),
+      dirPath: Value(dirPath),
+      entriesJson: Value(entriesJson),
+      complete: Value(complete),
+      scannedAt: Value(scannedAt),
+    );
+  }
+
+  factory FolderStatsCacheRow.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return FolderStatsCacheRow(
+      connectionId: serializer.fromJson<String>(json['connectionId']),
+      dirPath: serializer.fromJson<String>(json['dirPath']),
+      entriesJson: serializer.fromJson<String>(json['entriesJson']),
+      complete: serializer.fromJson<bool>(json['complete']),
+      scannedAt: serializer.fromJson<DateTime>(json['scannedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'connectionId': serializer.toJson<String>(connectionId),
+      'dirPath': serializer.toJson<String>(dirPath),
+      'entriesJson': serializer.toJson<String>(entriesJson),
+      'complete': serializer.toJson<bool>(complete),
+      'scannedAt': serializer.toJson<DateTime>(scannedAt),
+    };
+  }
+
+  FolderStatsCacheRow copyWith({
+    String? connectionId,
+    String? dirPath,
+    String? entriesJson,
+    bool? complete,
+    DateTime? scannedAt,
+  }) => FolderStatsCacheRow(
+    connectionId: connectionId ?? this.connectionId,
+    dirPath: dirPath ?? this.dirPath,
+    entriesJson: entriesJson ?? this.entriesJson,
+    complete: complete ?? this.complete,
+    scannedAt: scannedAt ?? this.scannedAt,
+  );
+  FolderStatsCacheRow copyWithCompanion(FolderStatsCacheCompanion data) {
+    return FolderStatsCacheRow(
+      connectionId: data.connectionId.present
+          ? data.connectionId.value
+          : this.connectionId,
+      dirPath: data.dirPath.present ? data.dirPath.value : this.dirPath,
+      entriesJson: data.entriesJson.present
+          ? data.entriesJson.value
+          : this.entriesJson,
+      complete: data.complete.present ? data.complete.value : this.complete,
+      scannedAt: data.scannedAt.present ? data.scannedAt.value : this.scannedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('FolderStatsCacheRow(')
+          ..write('connectionId: $connectionId, ')
+          ..write('dirPath: $dirPath, ')
+          ..write('entriesJson: $entriesJson, ')
+          ..write('complete: $complete, ')
+          ..write('scannedAt: $scannedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(connectionId, dirPath, entriesJson, complete, scannedAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is FolderStatsCacheRow &&
+          other.connectionId == this.connectionId &&
+          other.dirPath == this.dirPath &&
+          other.entriesJson == this.entriesJson &&
+          other.complete == this.complete &&
+          other.scannedAt == this.scannedAt);
+}
+
+class FolderStatsCacheCompanion extends UpdateCompanion<FolderStatsCacheRow> {
+  final Value<String> connectionId;
+  final Value<String> dirPath;
+  final Value<String> entriesJson;
+  final Value<bool> complete;
+  final Value<DateTime> scannedAt;
+  final Value<int> rowid;
+  const FolderStatsCacheCompanion({
+    this.connectionId = const Value.absent(),
+    this.dirPath = const Value.absent(),
+    this.entriesJson = const Value.absent(),
+    this.complete = const Value.absent(),
+    this.scannedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  FolderStatsCacheCompanion.insert({
+    required String connectionId,
+    required String dirPath,
+    required String entriesJson,
+    this.complete = const Value.absent(),
+    required DateTime scannedAt,
+    this.rowid = const Value.absent(),
+  }) : connectionId = Value(connectionId),
+       dirPath = Value(dirPath),
+       entriesJson = Value(entriesJson),
+       scannedAt = Value(scannedAt);
+  static Insertable<FolderStatsCacheRow> custom({
+    Expression<String>? connectionId,
+    Expression<String>? dirPath,
+    Expression<String>? entriesJson,
+    Expression<bool>? complete,
+    Expression<DateTime>? scannedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (connectionId != null) 'connection_id': connectionId,
+      if (dirPath != null) 'dir_path': dirPath,
+      if (entriesJson != null) 'entries_json': entriesJson,
+      if (complete != null) 'complete': complete,
+      if (scannedAt != null) 'scanned_at': scannedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  FolderStatsCacheCompanion copyWith({
+    Value<String>? connectionId,
+    Value<String>? dirPath,
+    Value<String>? entriesJson,
+    Value<bool>? complete,
+    Value<DateTime>? scannedAt,
+    Value<int>? rowid,
+  }) {
+    return FolderStatsCacheCompanion(
+      connectionId: connectionId ?? this.connectionId,
+      dirPath: dirPath ?? this.dirPath,
+      entriesJson: entriesJson ?? this.entriesJson,
+      complete: complete ?? this.complete,
+      scannedAt: scannedAt ?? this.scannedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (connectionId.present) {
+      map['connection_id'] = Variable<String>(connectionId.value);
+    }
+    if (dirPath.present) {
+      map['dir_path'] = Variable<String>(dirPath.value);
+    }
+    if (entriesJson.present) {
+      map['entries_json'] = Variable<String>(entriesJson.value);
+    }
+    if (complete.present) {
+      map['complete'] = Variable<bool>(complete.value);
+    }
+    if (scannedAt.present) {
+      map['scanned_at'] = Variable<DateTime>(scannedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('FolderStatsCacheCompanion(')
+          ..write('connectionId: $connectionId, ')
+          ..write('dirPath: $dirPath, ')
+          ..write('entriesJson: $entriesJson, ')
+          ..write('complete: $complete, ')
+          ..write('scannedAt: $scannedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $WatchRulesTable extends WatchRules
+    with TableInfo<$WatchRulesTable, WatchRuleRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $WatchRulesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _connectionIdMeta = const VerificationMeta(
+    'connectionId',
+  );
+  @override
+  late final GeneratedColumn<String> connectionId = GeneratedColumn<String>(
+    'connection_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _pathMeta = const VerificationMeta('path');
+  @override
+  late final GeneratedColumn<String> path = GeneratedColumn<String>(
+    'path',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _enabledMeta = const VerificationMeta(
+    'enabled',
+  );
+  @override
+  late final GeneratedColumn<bool> enabled = GeneratedColumn<bool>(
+    'enabled',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("enabled" IN (0, 1))',
+    ),
+    defaultValue: const Constant(true),
+  );
+  static const VerificationMeta _intervalMinutesMeta = const VerificationMeta(
+    'intervalMinutes',
+  );
+  @override
+  late final GeneratedColumn<int> intervalMinutes = GeneratedColumn<int>(
+    'interval_minutes',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(10),
+  );
+  static const VerificationMeta _modeMeta = const VerificationMeta('mode');
+  @override
+  late final GeneratedColumn<String> mode = GeneratedColumn<String>(
+    'mode',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('inPlace'),
+  );
+  static const VerificationMeta _scrapeMeta = const VerificationMeta('scrape');
+  @override
+  late final GeneratedColumn<bool> scrape = GeneratedColumn<bool>(
+    'scrape',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("scrape" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _autoRunHighConfidenceMeta =
+      const VerificationMeta('autoRunHighConfidence');
+  @override
+  late final GeneratedColumn<bool> autoRunHighConfidence =
+      GeneratedColumn<bool>(
+        'auto_run_high_confidence',
+        aliasedName,
+        false,
+        type: DriftSqlType.bool,
+        requiredDuringInsert: false,
+        defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'CHECK ("auto_run_high_confidence" IN (0, 1))',
+        ),
+        defaultValue: const Constant(false),
+      );
+  static const VerificationMeta _lastScanAtMeta = const VerificationMeta(
+    'lastScanAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> lastScanAt = GeneratedColumn<DateTime>(
+    'last_scan_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _lastStatusMeta = const VerificationMeta(
+    'lastStatus',
+  );
+  @override
+  late final GeneratedColumn<String> lastStatus = GeneratedColumn<String>(
+    'last_status',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(''),
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    connectionId,
+    path,
+    enabled,
+    intervalMinutes,
+    mode,
+    scrape,
+    autoRunHighConfidence,
+    lastScanAt,
+    lastStatus,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'watch_rules';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<WatchRuleRow> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('connection_id')) {
+      context.handle(
+        _connectionIdMeta,
+        connectionId.isAcceptableOrUnknown(
+          data['connection_id']!,
+          _connectionIdMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_connectionIdMeta);
+    }
+    if (data.containsKey('path')) {
+      context.handle(
+        _pathMeta,
+        path.isAcceptableOrUnknown(data['path']!, _pathMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_pathMeta);
+    }
+    if (data.containsKey('enabled')) {
+      context.handle(
+        _enabledMeta,
+        enabled.isAcceptableOrUnknown(data['enabled']!, _enabledMeta),
+      );
+    }
+    if (data.containsKey('interval_minutes')) {
+      context.handle(
+        _intervalMinutesMeta,
+        intervalMinutes.isAcceptableOrUnknown(
+          data['interval_minutes']!,
+          _intervalMinutesMeta,
+        ),
+      );
+    }
+    if (data.containsKey('mode')) {
+      context.handle(
+        _modeMeta,
+        mode.isAcceptableOrUnknown(data['mode']!, _modeMeta),
+      );
+    }
+    if (data.containsKey('scrape')) {
+      context.handle(
+        _scrapeMeta,
+        scrape.isAcceptableOrUnknown(data['scrape']!, _scrapeMeta),
+      );
+    }
+    if (data.containsKey('auto_run_high_confidence')) {
+      context.handle(
+        _autoRunHighConfidenceMeta,
+        autoRunHighConfidence.isAcceptableOrUnknown(
+          data['auto_run_high_confidence']!,
+          _autoRunHighConfidenceMeta,
+        ),
+      );
+    }
+    if (data.containsKey('last_scan_at')) {
+      context.handle(
+        _lastScanAtMeta,
+        lastScanAt.isAcceptableOrUnknown(
+          data['last_scan_at']!,
+          _lastScanAtMeta,
+        ),
+      );
+    }
+    if (data.containsKey('last_status')) {
+      context.handle(
+        _lastStatusMeta,
+        lastStatus.isAcceptableOrUnknown(data['last_status']!, _lastStatusMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  WatchRuleRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return WatchRuleRow(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      connectionId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}connection_id'],
+      )!,
+      path: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}path'],
+      )!,
+      enabled: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}enabled'],
+      )!,
+      intervalMinutes: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}interval_minutes'],
+      )!,
+      mode: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}mode'],
+      )!,
+      scrape: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}scrape'],
+      )!,
+      autoRunHighConfidence: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}auto_run_high_confidence'],
+      )!,
+      lastScanAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}last_scan_at'],
+      ),
+      lastStatus: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}last_status'],
+      )!,
+    );
+  }
+
+  @override
+  $WatchRulesTable createAlias(String alias) {
+    return $WatchRulesTable(attachedDatabase, alias);
+  }
+}
+
+class WatchRuleRow extends DataClass implements Insertable<WatchRuleRow> {
+  final String id;
+  final String connectionId;
+  final String path;
+  final bool enabled;
+  final int intervalMinutes;
+  final String mode;
+  final bool scrape;
+  final bool autoRunHighConfidence;
+  final DateTime? lastScanAt;
+  final String lastStatus;
+  const WatchRuleRow({
+    required this.id,
+    required this.connectionId,
+    required this.path,
+    required this.enabled,
+    required this.intervalMinutes,
+    required this.mode,
+    required this.scrape,
+    required this.autoRunHighConfidence,
+    this.lastScanAt,
+    required this.lastStatus,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['connection_id'] = Variable<String>(connectionId);
+    map['path'] = Variable<String>(path);
+    map['enabled'] = Variable<bool>(enabled);
+    map['interval_minutes'] = Variable<int>(intervalMinutes);
+    map['mode'] = Variable<String>(mode);
+    map['scrape'] = Variable<bool>(scrape);
+    map['auto_run_high_confidence'] = Variable<bool>(autoRunHighConfidence);
+    if (!nullToAbsent || lastScanAt != null) {
+      map['last_scan_at'] = Variable<DateTime>(lastScanAt);
+    }
+    map['last_status'] = Variable<String>(lastStatus);
+    return map;
+  }
+
+  WatchRulesCompanion toCompanion(bool nullToAbsent) {
+    return WatchRulesCompanion(
+      id: Value(id),
+      connectionId: Value(connectionId),
+      path: Value(path),
+      enabled: Value(enabled),
+      intervalMinutes: Value(intervalMinutes),
+      mode: Value(mode),
+      scrape: Value(scrape),
+      autoRunHighConfidence: Value(autoRunHighConfidence),
+      lastScanAt: lastScanAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lastScanAt),
+      lastStatus: Value(lastStatus),
+    );
+  }
+
+  factory WatchRuleRow.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return WatchRuleRow(
+      id: serializer.fromJson<String>(json['id']),
+      connectionId: serializer.fromJson<String>(json['connectionId']),
+      path: serializer.fromJson<String>(json['path']),
+      enabled: serializer.fromJson<bool>(json['enabled']),
+      intervalMinutes: serializer.fromJson<int>(json['intervalMinutes']),
+      mode: serializer.fromJson<String>(json['mode']),
+      scrape: serializer.fromJson<bool>(json['scrape']),
+      autoRunHighConfidence: serializer.fromJson<bool>(
+        json['autoRunHighConfidence'],
+      ),
+      lastScanAt: serializer.fromJson<DateTime?>(json['lastScanAt']),
+      lastStatus: serializer.fromJson<String>(json['lastStatus']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'connectionId': serializer.toJson<String>(connectionId),
+      'path': serializer.toJson<String>(path),
+      'enabled': serializer.toJson<bool>(enabled),
+      'intervalMinutes': serializer.toJson<int>(intervalMinutes),
+      'mode': serializer.toJson<String>(mode),
+      'scrape': serializer.toJson<bool>(scrape),
+      'autoRunHighConfidence': serializer.toJson<bool>(autoRunHighConfidence),
+      'lastScanAt': serializer.toJson<DateTime?>(lastScanAt),
+      'lastStatus': serializer.toJson<String>(lastStatus),
+    };
+  }
+
+  WatchRuleRow copyWith({
+    String? id,
+    String? connectionId,
+    String? path,
+    bool? enabled,
+    int? intervalMinutes,
+    String? mode,
+    bool? scrape,
+    bool? autoRunHighConfidence,
+    Value<DateTime?> lastScanAt = const Value.absent(),
+    String? lastStatus,
+  }) => WatchRuleRow(
+    id: id ?? this.id,
+    connectionId: connectionId ?? this.connectionId,
+    path: path ?? this.path,
+    enabled: enabled ?? this.enabled,
+    intervalMinutes: intervalMinutes ?? this.intervalMinutes,
+    mode: mode ?? this.mode,
+    scrape: scrape ?? this.scrape,
+    autoRunHighConfidence: autoRunHighConfidence ?? this.autoRunHighConfidence,
+    lastScanAt: lastScanAt.present ? lastScanAt.value : this.lastScanAt,
+    lastStatus: lastStatus ?? this.lastStatus,
+  );
+  WatchRuleRow copyWithCompanion(WatchRulesCompanion data) {
+    return WatchRuleRow(
+      id: data.id.present ? data.id.value : this.id,
+      connectionId: data.connectionId.present
+          ? data.connectionId.value
+          : this.connectionId,
+      path: data.path.present ? data.path.value : this.path,
+      enabled: data.enabled.present ? data.enabled.value : this.enabled,
+      intervalMinutes: data.intervalMinutes.present
+          ? data.intervalMinutes.value
+          : this.intervalMinutes,
+      mode: data.mode.present ? data.mode.value : this.mode,
+      scrape: data.scrape.present ? data.scrape.value : this.scrape,
+      autoRunHighConfidence: data.autoRunHighConfidence.present
+          ? data.autoRunHighConfidence.value
+          : this.autoRunHighConfidence,
+      lastScanAt: data.lastScanAt.present
+          ? data.lastScanAt.value
+          : this.lastScanAt,
+      lastStatus: data.lastStatus.present
+          ? data.lastStatus.value
+          : this.lastStatus,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('WatchRuleRow(')
+          ..write('id: $id, ')
+          ..write('connectionId: $connectionId, ')
+          ..write('path: $path, ')
+          ..write('enabled: $enabled, ')
+          ..write('intervalMinutes: $intervalMinutes, ')
+          ..write('mode: $mode, ')
+          ..write('scrape: $scrape, ')
+          ..write('autoRunHighConfidence: $autoRunHighConfidence, ')
+          ..write('lastScanAt: $lastScanAt, ')
+          ..write('lastStatus: $lastStatus')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    connectionId,
+    path,
+    enabled,
+    intervalMinutes,
+    mode,
+    scrape,
+    autoRunHighConfidence,
+    lastScanAt,
+    lastStatus,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is WatchRuleRow &&
+          other.id == this.id &&
+          other.connectionId == this.connectionId &&
+          other.path == this.path &&
+          other.enabled == this.enabled &&
+          other.intervalMinutes == this.intervalMinutes &&
+          other.mode == this.mode &&
+          other.scrape == this.scrape &&
+          other.autoRunHighConfidence == this.autoRunHighConfidence &&
+          other.lastScanAt == this.lastScanAt &&
+          other.lastStatus == this.lastStatus);
+}
+
+class WatchRulesCompanion extends UpdateCompanion<WatchRuleRow> {
+  final Value<String> id;
+  final Value<String> connectionId;
+  final Value<String> path;
+  final Value<bool> enabled;
+  final Value<int> intervalMinutes;
+  final Value<String> mode;
+  final Value<bool> scrape;
+  final Value<bool> autoRunHighConfidence;
+  final Value<DateTime?> lastScanAt;
+  final Value<String> lastStatus;
+  final Value<int> rowid;
+  const WatchRulesCompanion({
+    this.id = const Value.absent(),
+    this.connectionId = const Value.absent(),
+    this.path = const Value.absent(),
+    this.enabled = const Value.absent(),
+    this.intervalMinutes = const Value.absent(),
+    this.mode = const Value.absent(),
+    this.scrape = const Value.absent(),
+    this.autoRunHighConfidence = const Value.absent(),
+    this.lastScanAt = const Value.absent(),
+    this.lastStatus = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  WatchRulesCompanion.insert({
+    required String id,
+    required String connectionId,
+    required String path,
+    this.enabled = const Value.absent(),
+    this.intervalMinutes = const Value.absent(),
+    this.mode = const Value.absent(),
+    this.scrape = const Value.absent(),
+    this.autoRunHighConfidence = const Value.absent(),
+    this.lastScanAt = const Value.absent(),
+    this.lastStatus = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       connectionId = Value(connectionId),
+       path = Value(path);
+  static Insertable<WatchRuleRow> custom({
+    Expression<String>? id,
+    Expression<String>? connectionId,
+    Expression<String>? path,
+    Expression<bool>? enabled,
+    Expression<int>? intervalMinutes,
+    Expression<String>? mode,
+    Expression<bool>? scrape,
+    Expression<bool>? autoRunHighConfidence,
+    Expression<DateTime>? lastScanAt,
+    Expression<String>? lastStatus,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (connectionId != null) 'connection_id': connectionId,
+      if (path != null) 'path': path,
+      if (enabled != null) 'enabled': enabled,
+      if (intervalMinutes != null) 'interval_minutes': intervalMinutes,
+      if (mode != null) 'mode': mode,
+      if (scrape != null) 'scrape': scrape,
+      if (autoRunHighConfidence != null)
+        'auto_run_high_confidence': autoRunHighConfidence,
+      if (lastScanAt != null) 'last_scan_at': lastScanAt,
+      if (lastStatus != null) 'last_status': lastStatus,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  WatchRulesCompanion copyWith({
+    Value<String>? id,
+    Value<String>? connectionId,
+    Value<String>? path,
+    Value<bool>? enabled,
+    Value<int>? intervalMinutes,
+    Value<String>? mode,
+    Value<bool>? scrape,
+    Value<bool>? autoRunHighConfidence,
+    Value<DateTime?>? lastScanAt,
+    Value<String>? lastStatus,
+    Value<int>? rowid,
+  }) {
+    return WatchRulesCompanion(
+      id: id ?? this.id,
+      connectionId: connectionId ?? this.connectionId,
+      path: path ?? this.path,
+      enabled: enabled ?? this.enabled,
+      intervalMinutes: intervalMinutes ?? this.intervalMinutes,
+      mode: mode ?? this.mode,
+      scrape: scrape ?? this.scrape,
+      autoRunHighConfidence:
+          autoRunHighConfidence ?? this.autoRunHighConfidence,
+      lastScanAt: lastScanAt ?? this.lastScanAt,
+      lastStatus: lastStatus ?? this.lastStatus,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (connectionId.present) {
+      map['connection_id'] = Variable<String>(connectionId.value);
+    }
+    if (path.present) {
+      map['path'] = Variable<String>(path.value);
+    }
+    if (enabled.present) {
+      map['enabled'] = Variable<bool>(enabled.value);
+    }
+    if (intervalMinutes.present) {
+      map['interval_minutes'] = Variable<int>(intervalMinutes.value);
+    }
+    if (mode.present) {
+      map['mode'] = Variable<String>(mode.value);
+    }
+    if (scrape.present) {
+      map['scrape'] = Variable<bool>(scrape.value);
+    }
+    if (autoRunHighConfidence.present) {
+      map['auto_run_high_confidence'] = Variable<bool>(
+        autoRunHighConfidence.value,
+      );
+    }
+    if (lastScanAt.present) {
+      map['last_scan_at'] = Variable<DateTime>(lastScanAt.value);
+    }
+    if (lastStatus.present) {
+      map['last_status'] = Variable<String>(lastStatus.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('WatchRulesCompanion(')
+          ..write('id: $id, ')
+          ..write('connectionId: $connectionId, ')
+          ..write('path: $path, ')
+          ..write('enabled: $enabled, ')
+          ..write('intervalMinutes: $intervalMinutes, ')
+          ..write('mode: $mode, ')
+          ..write('scrape: $scrape, ')
+          ..write('autoRunHighConfidence: $autoRunHighConfidence, ')
+          ..write('lastScanAt: $lastScanAt, ')
+          ..write('lastStatus: $lastStatus, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
   late final $BatchesTable batches = $BatchesTable(this);
   late final $HistoryRecordsTable historyRecords = $HistoryRecordsTable(this);
   late final $TasksTable tasks = $TasksTable(this);
+  late final $FolderStatsCacheTable folderStatsCache = $FolderStatsCacheTable(
+    this,
+  );
+  late final $WatchRulesTable watchRules = $WatchRulesTable(this);
   late final Index historyRecordsDstStatus = Index(
     'history_records_dst_status',
     'CREATE INDEX history_records_dst_status ON history_records (dst, status)',
+  );
+  late final Index folderStatsCacheConn = Index(
+    'folder_stats_cache_conn',
+    'CREATE INDEX folder_stats_cache_conn ON folder_stats_cache (connection_id)',
+  );
+  late final Index watchRulesConn = Index(
+    'watch_rules_conn',
+    'CREATE INDEX watch_rules_conn ON watch_rules (connection_id)',
   );
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
@@ -2014,7 +3087,11 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     batches,
     historyRecords,
     tasks,
+    folderStatsCache,
+    watchRules,
     historyRecordsDstStatus,
+    folderStatsCacheConn,
+    watchRulesConn,
   ];
 }
 
@@ -2781,6 +3858,7 @@ typedef $$TasksTableCreateCompanionBuilder = TasksCompanion Function({
   required String pathsJson,
   required String mode,
   Value<bool> scrape,
+  Value<bool> scrapeOnly,
   required String stage,
   required String message,
   required int importedCount,
@@ -2800,6 +3878,7 @@ typedef $$TasksTableUpdateCompanionBuilder = TasksCompanion Function({
   Value<String> pathsJson,
   Value<String> mode,
   Value<bool> scrape,
+  Value<bool> scrapeOnly,
   Value<String> stage,
   Value<String> message,
   Value<int> importedCount,
@@ -2844,6 +3923,11 @@ class $$TasksTableFilterComposer extends Composer<_$AppDatabase, $TasksTable> {
 
   ColumnFilters<bool> get scrape => $composableBuilder(
     column: $table.scrape,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get scrapeOnly => $composableBuilder(
+    column: $table.scrapeOnly,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -2937,6 +4021,11 @@ class $$TasksTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<bool> get scrapeOnly => $composableBuilder(
+    column: $table.scrapeOnly,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get stage => $composableBuilder(
     column: $table.stage,
     builder: (column) => ColumnOrderings(column),
@@ -3019,6 +4108,11 @@ class $$TasksTableAnnotationComposer
   GeneratedColumn<bool> get scrape =>
       $composableBuilder(column: $table.scrape, builder: (column) => column);
 
+  GeneratedColumn<bool> get scrapeOnly => $composableBuilder(
+    column: $table.scrapeOnly,
+    builder: (column) => column,
+  );
+
   GeneratedColumn<String> get stage =>
       $composableBuilder(column: $table.stage, builder: (column) => column);
 
@@ -3096,6 +4190,7 @@ class $$TasksTableTableManager
                 Value<String> pathsJson = const Value.absent(),
                 Value<String> mode = const Value.absent(),
                 Value<bool> scrape = const Value.absent(),
+                Value<bool> scrapeOnly = const Value.absent(),
                 Value<String> stage = const Value.absent(),
                 Value<String> message = const Value.absent(),
                 Value<int> importedCount = const Value.absent(),
@@ -3114,6 +4209,7 @@ class $$TasksTableTableManager
                 pathsJson: pathsJson,
                 mode: mode,
                 scrape: scrape,
+                scrapeOnly: scrapeOnly,
                 stage: stage,
                 message: message,
                 importedCount: importedCount,
@@ -3134,6 +4230,7 @@ class $$TasksTableTableManager
                 required String pathsJson,
                 required String mode,
                 Value<bool> scrape = const Value.absent(),
+                Value<bool> scrapeOnly = const Value.absent(),
                 required String stage,
                 required String message,
                 required int importedCount,
@@ -3152,6 +4249,7 @@ class $$TasksTableTableManager
                 pathsJson: pathsJson,
                 mode: mode,
                 scrape: scrape,
+                scrapeOnly: scrapeOnly,
                 stage: stage,
                 message: message,
                 importedCount: importedCount,
@@ -3196,6 +4294,543 @@ typedef $$TasksTableProcessedTableManager =
       TaskRow,
       PrefetchHooks Function()
     >;
+typedef $$FolderStatsCacheTableCreateCompanionBuilder =
+    FolderStatsCacheCompanion Function({
+      required String connectionId,
+      required String dirPath,
+      required String entriesJson,
+      Value<bool> complete,
+      required DateTime scannedAt,
+      Value<int> rowid,
+    });
+typedef $$FolderStatsCacheTableUpdateCompanionBuilder =
+    FolderStatsCacheCompanion Function({
+      Value<String> connectionId,
+      Value<String> dirPath,
+      Value<String> entriesJson,
+      Value<bool> complete,
+      Value<DateTime> scannedAt,
+      Value<int> rowid,
+    });
+
+class $$FolderStatsCacheTableFilterComposer
+    extends Composer<_$AppDatabase, $FolderStatsCacheTable> {
+  $$FolderStatsCacheTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get connectionId => $composableBuilder(
+    column: $table.connectionId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get dirPath => $composableBuilder(
+    column: $table.dirPath,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get entriesJson => $composableBuilder(
+    column: $table.entriesJson,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get complete => $composableBuilder(
+    column: $table.complete,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get scannedAt => $composableBuilder(
+    column: $table.scannedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$FolderStatsCacheTableOrderingComposer
+    extends Composer<_$AppDatabase, $FolderStatsCacheTable> {
+  $$FolderStatsCacheTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get connectionId => $composableBuilder(
+    column: $table.connectionId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get dirPath => $composableBuilder(
+    column: $table.dirPath,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get entriesJson => $composableBuilder(
+    column: $table.entriesJson,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get complete => $composableBuilder(
+    column: $table.complete,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get scannedAt => $composableBuilder(
+    column: $table.scannedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$FolderStatsCacheTableAnnotationComposer
+    extends Composer<_$AppDatabase, $FolderStatsCacheTable> {
+  $$FolderStatsCacheTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get connectionId => $composableBuilder(
+    column: $table.connectionId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get dirPath =>
+      $composableBuilder(column: $table.dirPath, builder: (column) => column);
+
+  GeneratedColumn<String> get entriesJson => $composableBuilder(
+    column: $table.entriesJson,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<bool> get complete =>
+      $composableBuilder(column: $table.complete, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get scannedAt =>
+      $composableBuilder(column: $table.scannedAt, builder: (column) => column);
+}
+
+class $$FolderStatsCacheTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $FolderStatsCacheTable,
+          FolderStatsCacheRow,
+          $$FolderStatsCacheTableFilterComposer,
+          $$FolderStatsCacheTableOrderingComposer,
+          $$FolderStatsCacheTableAnnotationComposer,
+          $$FolderStatsCacheTableCreateCompanionBuilder,
+          $$FolderStatsCacheTableUpdateCompanionBuilder,
+          (
+            FolderStatsCacheRow,
+            BaseReferences<
+              _$AppDatabase,
+              $FolderStatsCacheTable,
+              FolderStatsCacheRow
+            >,
+          ),
+          FolderStatsCacheRow,
+          PrefetchHooks Function()
+        > {
+  $$FolderStatsCacheTableTableManager(
+    _$AppDatabase db,
+    $FolderStatsCacheTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$FolderStatsCacheTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$FolderStatsCacheTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$FolderStatsCacheTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> connectionId = const Value.absent(),
+                Value<String> dirPath = const Value.absent(),
+                Value<String> entriesJson = const Value.absent(),
+                Value<bool> complete = const Value.absent(),
+                Value<DateTime> scannedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => FolderStatsCacheCompanion(
+                connectionId: connectionId,
+                dirPath: dirPath,
+                entriesJson: entriesJson,
+                complete: complete,
+                scannedAt: scannedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String connectionId,
+                required String dirPath,
+                required String entriesJson,
+                Value<bool> complete = const Value.absent(),
+                required DateTime scannedAt,
+                Value<int> rowid = const Value.absent(),
+              }) => FolderStatsCacheCompanion.insert(
+                connectionId: connectionId,
+                dirPath: dirPath,
+                entriesJson: entriesJson,
+                complete: complete,
+                scannedAt: scannedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable<$FolderStatsCacheTable, FolderStatsCacheRow>(
+                    table,
+                  ),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $FolderStatsCacheTable,
+                    FolderStatsCacheRow
+                  >(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$FolderStatsCacheTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $FolderStatsCacheTable,
+      FolderStatsCacheRow,
+      $$FolderStatsCacheTableFilterComposer,
+      $$FolderStatsCacheTableOrderingComposer,
+      $$FolderStatsCacheTableAnnotationComposer,
+      $$FolderStatsCacheTableCreateCompanionBuilder,
+      $$FolderStatsCacheTableUpdateCompanionBuilder,
+      (
+        FolderStatsCacheRow,
+        BaseReferences<
+          _$AppDatabase,
+          $FolderStatsCacheTable,
+          FolderStatsCacheRow
+        >,
+      ),
+      FolderStatsCacheRow,
+      PrefetchHooks Function()
+    >;
+typedef $$WatchRulesTableCreateCompanionBuilder = WatchRulesCompanion Function({
+  required String id,
+  required String connectionId,
+  required String path,
+  Value<bool> enabled,
+  Value<int> intervalMinutes,
+  Value<String> mode,
+  Value<bool> scrape,
+  Value<bool> autoRunHighConfidence,
+  Value<DateTime?> lastScanAt,
+  Value<String> lastStatus,
+  Value<int> rowid,
+});
+typedef $$WatchRulesTableUpdateCompanionBuilder = WatchRulesCompanion Function({
+  Value<String> id,
+  Value<String> connectionId,
+  Value<String> path,
+  Value<bool> enabled,
+  Value<int> intervalMinutes,
+  Value<String> mode,
+  Value<bool> scrape,
+  Value<bool> autoRunHighConfidence,
+  Value<DateTime?> lastScanAt,
+  Value<String> lastStatus,
+  Value<int> rowid,
+});
+
+class $$WatchRulesTableFilterComposer
+    extends Composer<_$AppDatabase, $WatchRulesTable> {
+  $$WatchRulesTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get connectionId => $composableBuilder(
+    column: $table.connectionId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get path => $composableBuilder(
+    column: $table.path,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get enabled => $composableBuilder(
+    column: $table.enabled,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get intervalMinutes => $composableBuilder(
+    column: $table.intervalMinutes,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get mode => $composableBuilder(
+    column: $table.mode,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get scrape => $composableBuilder(
+    column: $table.scrape,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get autoRunHighConfidence => $composableBuilder(
+    column: $table.autoRunHighConfidence,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get lastScanAt => $composableBuilder(
+    column: $table.lastScanAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get lastStatus => $composableBuilder(
+    column: $table.lastStatus,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$WatchRulesTableOrderingComposer
+    extends Composer<_$AppDatabase, $WatchRulesTable> {
+  $$WatchRulesTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get connectionId => $composableBuilder(
+    column: $table.connectionId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get path => $composableBuilder(
+    column: $table.path,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get enabled => $composableBuilder(
+    column: $table.enabled,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get intervalMinutes => $composableBuilder(
+    column: $table.intervalMinutes,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get mode => $composableBuilder(
+    column: $table.mode,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get scrape => $composableBuilder(
+    column: $table.scrape,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get autoRunHighConfidence => $composableBuilder(
+    column: $table.autoRunHighConfidence,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get lastScanAt => $composableBuilder(
+    column: $table.lastScanAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get lastStatus => $composableBuilder(
+    column: $table.lastStatus,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$WatchRulesTableAnnotationComposer
+    extends Composer<_$AppDatabase, $WatchRulesTable> {
+  $$WatchRulesTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get connectionId => $composableBuilder(
+    column: $table.connectionId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get path =>
+      $composableBuilder(column: $table.path, builder: (column) => column);
+
+  GeneratedColumn<bool> get enabled =>
+      $composableBuilder(column: $table.enabled, builder: (column) => column);
+
+  GeneratedColumn<int> get intervalMinutes => $composableBuilder(
+    column: $table.intervalMinutes,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get mode =>
+      $composableBuilder(column: $table.mode, builder: (column) => column);
+
+  GeneratedColumn<bool> get scrape =>
+      $composableBuilder(column: $table.scrape, builder: (column) => column);
+
+  GeneratedColumn<bool> get autoRunHighConfidence => $composableBuilder(
+    column: $table.autoRunHighConfidence,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get lastScanAt => $composableBuilder(
+    column: $table.lastScanAt,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get lastStatus => $composableBuilder(
+    column: $table.lastStatus,
+    builder: (column) => column,
+  );
+}
+
+class $$WatchRulesTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $WatchRulesTable,
+          WatchRuleRow,
+          $$WatchRulesTableFilterComposer,
+          $$WatchRulesTableOrderingComposer,
+          $$WatchRulesTableAnnotationComposer,
+          $$WatchRulesTableCreateCompanionBuilder,
+          $$WatchRulesTableUpdateCompanionBuilder,
+          (
+            WatchRuleRow,
+            BaseReferences<_$AppDatabase, $WatchRulesTable, WatchRuleRow>,
+          ),
+          WatchRuleRow,
+          PrefetchHooks Function()
+        > {
+  $$WatchRulesTableTableManager(_$AppDatabase db, $WatchRulesTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$WatchRulesTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$WatchRulesTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$WatchRulesTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<String> connectionId = const Value.absent(),
+                Value<String> path = const Value.absent(),
+                Value<bool> enabled = const Value.absent(),
+                Value<int> intervalMinutes = const Value.absent(),
+                Value<String> mode = const Value.absent(),
+                Value<bool> scrape = const Value.absent(),
+                Value<bool> autoRunHighConfidence = const Value.absent(),
+                Value<DateTime?> lastScanAt = const Value.absent(),
+                Value<String> lastStatus = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => WatchRulesCompanion(
+                id: id,
+                connectionId: connectionId,
+                path: path,
+                enabled: enabled,
+                intervalMinutes: intervalMinutes,
+                mode: mode,
+                scrape: scrape,
+                autoRunHighConfidence: autoRunHighConfidence,
+                lastScanAt: lastScanAt,
+                lastStatus: lastStatus,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required String connectionId,
+                required String path,
+                Value<bool> enabled = const Value.absent(),
+                Value<int> intervalMinutes = const Value.absent(),
+                Value<String> mode = const Value.absent(),
+                Value<bool> scrape = const Value.absent(),
+                Value<bool> autoRunHighConfidence = const Value.absent(),
+                Value<DateTime?> lastScanAt = const Value.absent(),
+                Value<String> lastStatus = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => WatchRulesCompanion.insert(
+                id: id,
+                connectionId: connectionId,
+                path: path,
+                enabled: enabled,
+                intervalMinutes: intervalMinutes,
+                mode: mode,
+                scrape: scrape,
+                autoRunHighConfidence: autoRunHighConfidence,
+                lastScanAt: lastScanAt,
+                lastStatus: lastStatus,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable<$WatchRulesTable, WatchRuleRow>(table),
+                  BaseReferences<_$AppDatabase, $WatchRulesTable, WatchRuleRow>(
+                    db,
+                    table,
+                    e,
+                  ),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$WatchRulesTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $WatchRulesTable,
+      WatchRuleRow,
+      $$WatchRulesTableFilterComposer,
+      $$WatchRulesTableOrderingComposer,
+      $$WatchRulesTableAnnotationComposer,
+      $$WatchRulesTableCreateCompanionBuilder,
+      $$WatchRulesTableUpdateCompanionBuilder,
+      (
+        WatchRuleRow,
+        BaseReferences<_$AppDatabase, $WatchRulesTable, WatchRuleRow>,
+      ),
+      WatchRuleRow,
+      PrefetchHooks Function()
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -3206,4 +4841,8 @@ class $AppDatabaseManager {
       $$HistoryRecordsTableTableManager(_db, _db.historyRecords);
   $$TasksTableTableManager get tasks =>
       $$TasksTableTableManager(_db, _db.tasks);
+  $$FolderStatsCacheTableTableManager get folderStatsCache =>
+      $$FolderStatsCacheTableTableManager(_db, _db.folderStatsCache);
+  $$WatchRulesTableTableManager get watchRules =>
+      $$WatchRulesTableTableManager(_db, _db.watchRules);
 }
