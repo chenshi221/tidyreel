@@ -2,6 +2,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
+import '../../l10n/l10n.dart';
 import '../../ui/tokens.dart';
 import '../../ui/widgets.dart';
 import '../../widgets/common.dart';
@@ -23,6 +24,7 @@ Future<GroupId?> showMergeGroupPicker(
     builder: (ctx) => StatefulBuilder(
       builder: (ctx, setState) {
         final p = Palette.of(ctx);
+        final l10n = ctx.l10n;
         final theme = Theme.of(ctx);
         return MacSheet(
           child: SizedBox(
@@ -33,10 +35,16 @@ Future<GroupId?> showMergeGroupPicker(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text('合并到其他作品', style: theme.textTheme.titleMedium),
+                  Text(
+                    l10n.tr('合并到其他作品', 'Merge into Another Title'),
+                    style: theme.textTheme.titleMedium,
+                  ),
                   const SizedBox(height: 4),
                   Text(
-                    '将「$sourceTitle」中的 ${source.files.length} 个文件合并到选中的作品，原分组将被移除。',
+                    l10n.tr(
+                      '将「$sourceTitle」中的 ${source.files.length} 个文件合并到选中的作品，原分组将被移除。',
+                      'Move ${l10n.plural(source.files.length, 'file')} from "$sourceTitle" into the selected title. The original group will be removed.',
+                    ),
                     style: theme.textTheme.bodySmall,
                   ),
                   const SizedBox(height: 12),
@@ -109,7 +117,7 @@ Future<GroupId?> showMergeGroupPicker(
                                                 overflow: TextOverflow.ellipsis,
                                               ),
                                               Text(
-                                                '${g.files.length} 个文件 · ${g.rootDir}',
+                                                '${l10n.tr('${g.files.length} 个文件', l10n.plural(g.files.length, 'file'))} · ${g.rootDir}',
                                                 style: TextStyle(
                                                   fontSize: TypeScale.small,
                                                   color: p.textMuted,
@@ -136,7 +144,7 @@ Future<GroupId?> showMergeGroupPicker(
                     children: [
                       OutlinedButton(
                         onPressed: () => Navigator.pop(ctx),
-                        child: const Text('取消'),
+                        child: Text(l10n.cancel),
                       ),
                       const SizedBox(width: 8),
                       FilledButton(
@@ -144,7 +152,7 @@ Future<GroupId?> showMergeGroupPicker(
                         onPressed: picked == null
                             ? null
                             : () => Navigator.pop(ctx, picked),
-                        child: const Text('确认合并'),
+                        child: Text(l10n.tr('确认合并', 'Merge')),
                       ),
                     ],
                   ),
@@ -171,6 +179,7 @@ Future<Set<String>?> showSplitGroupDialog(
     builder: (ctx) => StatefulBuilder(
       builder: (ctx, setState) {
         final p = Palette.of(ctx);
+        final l10n = ctx.l10n;
         final theme = Theme.of(ctx);
         final canConfirm = picked.isNotEmpty && picked.length < files.length;
         return MacSheet(
@@ -182,10 +191,16 @@ Future<Set<String>?> showSplitGroupDialog(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text('拆分分组', style: theme.textTheme.titleMedium),
+                  Text(
+                    l10n.tr('拆分分组', 'Split Group'),
+                    style: theme.textTheme.titleMedium,
+                  ),
                   const SizedBox(height: 4),
                   Text(
-                    '勾选要拆分到新作品的文件（需至少选择 1 个文件，且原分组至少保留 1 个文件）。',
+                    l10n.tr(
+                      '勾选要拆分到新作品的文件（需至少选择 1 个文件，且原分组至少保留 1 个文件）。',
+                      'Select files to move into a new title (pick at least 1 file and leave at least 1 file in the original group).',
+                    ),
                     style: theme.textTheme.bodySmall,
                   ),
                   const SizedBox(height: 12),
@@ -202,10 +217,10 @@ Future<Set<String>?> showSplitGroupDialog(
                                 final checked = picked.contains(f.path);
                                 final roleLabel = switch (f.role) {
                                   FileRole.video => null,
-                                  FileRole.subtitle => '字幕',
-                                  FileRole.sidecar => '附属',
-                                  FileRole.junk => '垃圾',
-                                  FileRole.other => '其他',
+                                  FileRole.subtitle => l10n.tr('字幕', 'Sub'),
+                                  FileRole.sidecar => l10n.tr('附属', 'Sidecar'),
+                                  FileRole.junk => l10n.tr('垃圾', 'Junk'),
+                                  FileRole.other => l10n.tr('其他', 'Other'),
                                 };
                                 void toggle() => setState(() {
                                   if (checked) {
@@ -273,7 +288,10 @@ Future<Set<String>?> showSplitGroupDialog(
                   Row(
                     children: [
                       Text(
-                        '已选 ${picked.length} / ${files.length} 个文件',
+                        l10n.tr(
+                          '已选 ${picked.length} / ${files.length} 个文件',
+                          'Selected ${picked.length} / ${files.length} files',
+                        ),
                         style: TextStyle(
                           fontSize: TypeScale.small,
                           color: p.textMuted,
@@ -282,7 +300,7 @@ Future<Set<String>?> showSplitGroupDialog(
                       const Spacer(),
                       OutlinedButton(
                         onPressed: () => Navigator.pop(ctx),
-                        child: const Text('取消'),
+                        child: Text(l10n.cancel),
                       ),
                       const SizedBox(width: 8),
                       FilledButton(
@@ -290,7 +308,12 @@ Future<Set<String>?> showSplitGroupDialog(
                         onPressed: canConfirm
                             ? () => Navigator.pop(ctx, Set<String>.of(picked))
                             : null,
-                        child: Text('拆分为新作品 (${picked.length})'),
+                        child: Text(
+                          l10n.tr(
+                            '拆分为新作品 (${picked.length})',
+                            'Split into New Title (${picked.length})',
+                          ),
+                        ),
                       ),
                     ],
                   ),

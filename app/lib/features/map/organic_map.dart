@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
+import '../../l10n/l10n.dart';
 import '../../ui/tokens.dart';
 import '../../ui/widgets.dart';
 import 'organic_layout.dart';
@@ -108,15 +109,18 @@ class OrganicMap extends StatefulWidget {
 enum MapZoomStyle {
   /// Geometric zoom; pebbles past the edge are clipped by the frame and
   /// re-rounded, so every one on screen looks whole.
-  frame('缩放'),
+  frame('缩放', 'Zoom'),
 
   /// Zooming re-lays out the pebbles in view to fill the frame, morphing
   /// from the old picture to the new.
-  semantic('展开');
+  semantic('展开', 'Expand');
 
   final String label;
+  final String englishLabel;
 
-  const MapZoomStyle(this.label);
+  const MapZoomStyle(this.label, this.englishLabel);
+
+  String localizedLabel(AppL10n l10n) => l10n.isEn ? englishLabel : label;
 }
 
 /// Shared by every map so it survives folder changes.
@@ -914,11 +918,15 @@ class _OrganicMapState extends State<OrganicMap> with TickerProviderStateMixin {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Tooltip(
-                    message: '缩放：几何放大并裁剪边缘  ·  展开：重排视野内的区块填满画面',
+                    message: context.tr(
+                      '缩放：几何放大并裁剪边缘  ·  展开：重排视野内的区块填满画面',
+                      'Zoom: geometric zoom with rounded frame edges · Expand: reflow visible blocks to fill the view',
+                    ),
                     child: Segmented<MapZoomStyle>(
                       key: const ValueKey('map-style'),
                       options: {
-                        for (final s in MapZoomStyle.values) s: s.label,
+                        for (final s in MapZoomStyle.values)
+                          s: s.localizedLabel(context.l10n),
                       },
                       value: style,
                       onChanged: (s) => mapZoomStyle.value = s,
@@ -933,19 +941,22 @@ class _OrganicMapState extends State<OrganicMap> with TickerProviderStateMixin {
                         _ZoomButton(
                           key: const ValueKey('map-zoom-out'),
                           icon: CupertinoIcons.minus,
-                          tooltip: '缩小',
+                          tooltip: context.tr('缩小', 'Zoom out'),
                           onTap: () => _zoomButton(1 / 1.5),
                         ),
                         _ZoomButton(
                           key: const ValueKey('map-zoom-in'),
                           icon: CupertinoIcons.plus,
-                          tooltip: '放大，显示更多名字',
+                          tooltip: context.tr(
+                            '放大，显示更多名字',
+                            'Zoom in to see more labels',
+                          ),
                           onTap: () => _zoomButton(1.5),
                         ),
                         _ZoomButton(
                           key: const ValueKey('map-fit'),
                           icon: CupertinoIcons.fullscreen_exit,
-                          tooltip: '显示全部',
+                          tooltip: context.tr('显示全部', 'Fit all'),
                           onTap: _fitAll,
                         ),
                       ],

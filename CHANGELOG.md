@@ -2,10 +2,11 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。由 `tool/release.sh` 根据提交说明生成，发布前可以手动润色。
 
-## [1.0.0] - 2026-11-23
+## [1.0.0] - 2026-11-24
 
 ### 新功能
 
+- **英文界面与自动语言检测**：完整支持英文（English）与简体中文界面；首次安装启动时自动检测操作系统语言（中文系统使用简体中文与中文 TMDB/命名默认值，非中文系统自动使用英文界面、`en-US` TMDB 元数据与英文命名默认值），也可在「设置 → 外观 → 语言」随时手动切换
 - **纯 Dart 媒体头探测**：零外部二进制依赖、完全适配 macOS 沙盒，通过分段读取解析 MKV/WebM（EBML）与 MP4/MOV/M4V（ISO BMFF，含首尾 `moov`）容器头，跨本地、Alist、WebDAV、SMB（`smb2_pread`）提取分辨率、编码、杜比视界/HDR、Atmos/TrueHD/DTS-HD/DTS-X 音轨与时长，自动补全缺失画质信息并辅助识别短片/正片
 - **轻量媒体库体检（`/health`）**：零 TMDB 请求的快速只读扫描，聚焦同片重复与 `MediaProbe` 画质对比（推荐保留并二次确认删除冗余副本）、缺 NFO/海报审计（支持「一键仅刮削补全」），以及垃圾文件与空目录清理
 - **蓝光/DVD 原盘保护与刮削增强**：整目录原子保护 `BDMV` 与 `VIDEO_TS` 原盘；来源页新增「仅刮削（不改文件名）」模式；支持安全覆盖已有 NFO、刮削 `clearlogo.png` 与 `landscape.jpg`、输出完整演职员/分级/系列/出品方/外部 ID（IMDb/TVDB）NFO；接入 Bangumi 动漫译名源与 Alist 目录密码管理

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
 import '../../data/settings_codec.dart';
+import '../../l10n/l10n.dart';
 
 /// Sample inputs for the live preview (PLAN §3.2).
 class NamingSample {
@@ -150,29 +151,36 @@ class NamingSample {
 class NamingScenario {
   final String id;
   final String label;
+  final String englishLabel;
   final NamingSample Function(NamingOptions options) buildSample;
 
   const NamingScenario({
     required this.id,
     required this.label,
+    required this.englishLabel,
     required this.buildSample,
   });
+
+  String localizedLabel(AppL10n l10n) => l10n.isEn ? englishLabel : label;
 }
 
 final List<NamingScenario> movieNamingScenarios = [
   NamingScenario(
     id: 'standard',
     label: '常规电影',
+    englishLabel: 'Standard Movie',
     buildSample: (_) => NamingSample.movie,
   ),
   NamingScenario(
     id: 'uhd-dv',
     label: '4K 杜比视界',
+    englishLabel: '4K Dolby Vision',
     buildSample: (_) => NamingSample.movieUhdDv,
   ),
   NamingScenario(
     id: 'edition-part',
     label: '导演剪辑版 / 分盘',
+    englishLabel: "Director's Cut / Multi-disc",
     buildSample: (_) => NamingSample.movieEditionPart,
   ),
 ];
@@ -181,16 +189,19 @@ final List<NamingScenario> tvNamingScenarios = [
   NamingScenario(
     id: 'standard',
     label: '常规剧集',
+    englishLabel: 'Standard TV',
     buildSample: NamingSample.tvFor,
   ),
   NamingScenario(
     id: 'anime',
     label: '日漫长篇',
+    englishLabel: 'Anime',
     buildSample: NamingSample.tvAnimeFor,
   ),
   NamingScenario(
     id: 'donghua-variety',
     label: '国漫 / 综艺',
+    englishLabel: 'Donghua / Variety',
     buildSample: NamingSample.tvDonghuaVarietyFor,
   ),
 ];
@@ -205,6 +216,9 @@ class PreviewResult {
 
   /// What to show in the example card.
   String get display => text ?? '模板有误：$error';
+
+  String localizedDisplay(AppL10n l10n) =>
+      text ?? l10n.tr('模板有误：$error', 'Invalid template: $error');
 }
 
 /// compileTemplate + renderTemplate.
@@ -426,55 +440,106 @@ String encodeNamingBundle(NamingProfile profile, TitleRules rules) =>
     });
 
 /// Parses and validates a JSON naming/title-rules bundle.
-({NamingBundle? bundle, String? error}) decodeNamingBundle(String raw) {
+({NamingBundle? bundle, String? error}) decodeNamingBundle(
+  String raw, {
+  AppL10n l10n = AppL10n.zh,
+}) {
   final text = raw.trim();
   if (text.isEmpty) {
-    return (bundle: null, error: '请先粘贴或选择 JSON 配置');
+    return (
+      bundle: null,
+      error: l10n.tr(
+        '请先粘贴或选择 JSON 配置',
+        'Paste or load a JSON configuration first',
+      ),
+    );
   }
   final Object? decoded;
   try {
     decoded = jsonDecode(text);
   } on FormatException catch (e) {
-    return (bundle: null, error: 'JSON 语法有误：${e.message}');
+    return (
+      bundle: null,
+      error: l10n.tr(
+        'JSON 语法有误：${e.message}',
+        'Invalid JSON syntax: ${e.message}',
+      ),
+    );
   }
   if (decoded is! Map) {
-    return (bundle: null, error: 'JSON 顶层必须是对象（{ ... }）');
+    return (
+      bundle: null,
+      error: l10n.tr(
+        'JSON 顶层必须是对象（{ ... }）',
+        'Top-level JSON value must be an object ({ ... })',
+      ),
+    );
   }
   final map = decoded.cast<String, Object?>();
   if (map.containsKey('version')) {
     final v = map['version'];
     if (v is! int || v != 1) {
-      return (bundle: null, error: '不支持的配置版本：$v（仅支持 version: 1）');
+      return (
+        bundle: null,
+        error: l10n.tr(
+          '不支持的配置版本：$v（仅支持 version: 1）',
+          'Unsupported config version: $v (only version: 1 is supported)',
+        ),
+      );
     }
   }
   final hasNaming = map.containsKey('naming') && map['naming'] != null;
   final hasTitleRules =
       map.containsKey('titleRules') && map['titleRules'] != null;
   if (!hasNaming && !hasTitleRules) {
-    return (bundle: null, error: '缺少 "naming" 或 "titleRules" 配置字段');
+    return (
+      bundle: null,
+      error: l10n.tr(
+        '缺少 "naming" 或 "titleRules" 配置字段',
+        'Missing "naming" or "titleRules" field',
+      ),
+    );
   }
   NamingProfile? naming;
   if (hasNaming) {
     final rawNaming = map['naming'];
     if (rawNaming is! Map) {
-      return (bundle: null, error: '字段 "naming" 格式无效，应为对象');
+      return (
+        bundle: null,
+        error: l10n.tr(
+          '字段 "naming" 格式无效，应为对象',
+          'Field "naming" must be a JSON object',
+        ),
+      );
     }
     try {
       naming = namingProfileFromJson(rawNaming.cast<String, Object?>());
     } on Object catch (e) {
-      return (bundle: null, error: '命名规则字段解析失败：$e');
+      return (
+        bundle: null,
+        error: l10n.tr('命名规则字段解析失败：$e', 'Failed to parse naming rules: $e'),
+      );
     }
   }
   TitleRules? titleRules;
   if (hasTitleRules) {
     final rawRules = map['titleRules'];
     if (rawRules is! Map) {
-      return (bundle: null, error: '字段 "titleRules" 格式无效，应为对象');
+      return (
+        bundle: null,
+        error: l10n.tr(
+          '字段 "titleRules" 格式无效，应为对象',
+          'Field "titleRules" must be a JSON object',
+        ),
+      );
     }
     try {
       titleRules = titleRulesFromJson(rawRules.cast<String, Object?>());
     } on Object catch (e) {
-      return (bundle: null, error: '片名规则字段解析失败：$e');
+      return (
+        bundle: null,
+        error: l10n.tr('片名规则字段解析失败：$e', 'Failed to parse title rules: $e'),
+      );
     }
   }
   return (

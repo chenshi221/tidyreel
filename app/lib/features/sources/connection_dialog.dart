@@ -3,9 +3,10 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
+import '../../data/smb_backend.dart' show SmbTarget, parseSmbEndpoint;
+import '../../l10n/l10n.dart';
 import '../../ui/tokens.dart';
 import '../../ui/widgets.dart';
-import '../../data/smb_backend.dart' show SmbTarget, parseSmbEndpoint;
 import 'folder_picker.dart';
 import 'sources_providers.dart'
     show
@@ -15,12 +16,8 @@ import 'sources_providers.dart'
         FolderLister,
         FolderSessionOpener;
 
-String connectionTypeLabel(ConnectionType t) => switch (t) {
-  ConnectionType.alist => 'Alist',
-  ConnectionType.webdav => 'WebDAV',
-  ConnectionType.smb => 'SMB',
-  ConnectionType.local => '本地',
-};
+String connectionTypeLabel(ConnectionType t, [AppL10n l10n = AppL10n.zh]) =>
+    l10n.connectionTypeLabel(t);
 
 IconData connectionTypeIcon(ConnectionType t) => switch (t) {
   ConnectionType.alist => CupertinoIcons.cloud,
@@ -34,17 +31,38 @@ enum _Kind { dav, smb, local }
 
 /// 模板 under WebDAV / Alist: fills type, port and path for common servers.
 enum DavTemplate {
-  alistApi('Alist / OpenList（API，推荐）', ConnectionType.alist, '5244', ''),
-  alistDav('Alist / OpenList（WebDAV）', ConnectionType.webdav, '5244', '/dav'),
-  synology('群晖 WebDAV', ConnectionType.webdav, '5005', ''),
-  generic('通用 WebDAV', ConnectionType.webdav, '', '');
+  alistApi(
+    'Alist / OpenList（API，推荐）',
+    'Alist / OpenList (API, Recommended)',
+    ConnectionType.alist,
+    '5244',
+    '',
+  ),
+  alistDav(
+    'Alist / OpenList（WebDAV）',
+    'Alist / OpenList (WebDAV)',
+    ConnectionType.webdav,
+    '5244',
+    '/dav',
+  ),
+  synology('群晖 WebDAV', 'Synology WebDAV', ConnectionType.webdav, '5005', ''),
+  generic('通用 WebDAV', 'Generic WebDAV', ConnectionType.webdav, '', '');
 
   final String label;
+  final String englishLabel;
   final ConnectionType type;
   final String port;
   final String path;
 
-  const DavTemplate(this.label, this.type, this.port, this.path);
+  const DavTemplate(
+    this.label,
+    this.englishLabel,
+    this.type,
+    this.port,
+    this.path,
+  );
+
+  String localizedLabel(AppL10n l10n) => l10n.isEn ? englishLabel : label;
 }
 
 class ConnectionDraft {
@@ -370,17 +388,19 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
     _browseHint = null;
   });
 
-  String? _portError() {
+  String? _portError(AppL10n l10n) {
     final s = _port.text.trim();
     if (s.isEmpty) return null;
     final n = int.tryParse(s);
-    return n == null || n < 1 || n > 65535 ? '端口应为 1–65535' : null;
+    return n == null || n < 1 || n > 65535
+        ? l10n.tr('端口应为 1–65535', 'Port must be 1–65535')
+        : null;
   }
 
   bool _valid() => _local
       ? _folder.text.trim().isNotEmpty
       : _host.text.trim().isNotEmpty &&
-            _portError() == null &&
+            _portError(AppL10n.zh) == null &&
             (!_isSmb || _share.text.trim().isNotEmpty);
 
   /// Alist's API paths never start with the WebDAV mount: "/dav/外接硬盘"
@@ -491,10 +511,16 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
 
   /// 浏览…: pick [c]'s folder on the server with the unsaved settings.
   Future<void> _browse(TextEditingController c, String title) async {
+    final l10n = context.l10n;
     if (!_valid()) {
       setState(() {
         _showErrors = true;
-        _browseHint = _local ? '请先选择本地文件夹' : '请先填写服务器信息，再浏览远程文件夹';
+        _browseHint = _local
+            ? l10n.tr('请先选择本地文件夹', 'Please choose a local folder first')
+            : l10n.tr(
+                '请先填写服务器信息，再浏览远程文件夹',
+                'Enter server details before browsing remote folders',
+              );
       });
       return;
     }
@@ -536,7 +562,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
     if (dir != null) _folder.text = dir;
   }
 
-  Widget _withBrowse(Widget field, VoidCallback onBrowse) =>
+  Widget _withBrowse(Widget field, VoidCallback onBrowse, AppL10n l10n) =>
       widget.openLister == null && widget.lister == null
       ? field
       : Row(
@@ -544,16 +570,20 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
           children: [
             Expanded(child: field),
             const SizedBox(width: 6),
-            OutlinedButton(onPressed: onBrowse, child: const Text('浏览…')),
+            OutlinedButton(
+              onPressed: onBrowse,
+              child: Text(l10n.tr('浏览…', 'Browse…')),
+            ),
           ],
         );
 
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
+    final l10n = context.l10n;
     final theme = Theme.of(context);
     String? required(TextEditingController c) =>
-        _showErrors && c.text.trim().isEmpty ? '必填' : null;
+        _showErrors && c.text.trim().isEmpty ? l10n.tr('必填', 'Required') : null;
 
     TextField field(
       String key,
@@ -583,19 +613,27 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
     final server = <Widget>[
       if (_kind == _Kind.dav)
         FormRow(
-          label: '模板',
+          label: l10n.tr('模板', 'Preset'),
           child: Align(
             alignment: Alignment.centerLeft,
             child: _TemplateMenu(value: _template, onChanged: _setTemplate),
           ),
         ),
       FormRow(
-        label: '服务器',
+        label: l10n.tr('服务器', 'Server'),
         help: switch (_template) {
-          _ when _isSmb => 'SMB 默认端口 445，可以留空',
-          DavTemplate.alistApi ||
-          DavTemplate.alistDav => 'Alist / OpenList 默认端口 5244',
-          DavTemplate.synology => '群晖 WebDAV 默认 http 5005、https 5006',
+          _ when _isSmb => l10n.tr(
+            'SMB 默认端口 445，可以留空',
+            'Default SMB port is 445 (optional)',
+          ),
+          DavTemplate.alistApi || DavTemplate.alistDav => l10n.tr(
+            'Alist / OpenList 默认端口 5244',
+            'Default Alist / OpenList port is 5244',
+          ),
+          DavTemplate.synology => l10n.tr(
+            '群晖 WebDAV 默认 http 5005、https 5006',
+            'Default Synology WebDAV ports: HTTP 5005, HTTPS 5006',
+          ),
           DavTemplate.generic => null,
         },
         child: Row(
@@ -615,7 +653,10 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
               child: field(
                 '主机',
                 _host,
-                hint: '主机名或 IP，如 192.168.1.10',
+                hint: l10n.tr(
+                  '主机名或 IP，如 192.168.1.10',
+                  'Host or IP, e.g. 192.168.1.10',
+                ),
                 error: required(_host),
                 onChanged: _onHostChanged,
               ),
@@ -633,7 +674,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                 _port,
                 hint: _isSmb ? _smbPort : _defaultPort,
                 keyboard: TextInputType.number,
-                error: _showErrors ? _portError() : null,
+                error: _showErrors ? _portError(l10n) : null,
               ),
             ),
           ],
@@ -641,14 +682,25 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
       ),
       if (_isSmb)
         FormRow(
-          label: '共享名',
-          help: '比如 影视、video；也可以写到子文件夹，如 影视/下载',
-          child: field('共享名', _share, hint: '影视', error: required(_share)),
+          label: l10n.tr('共享名', 'Share'),
+          help: l10n.tr(
+            '比如 影视、video；也可以写到子文件夹，如 影视/下载',
+            'e.g. media or video; subfolders like media/downloads also work',
+          ),
+          child: field(
+            '共享名',
+            _share,
+            hint: l10n.tr('影视', 'media'),
+            error: required(_share),
+          ),
         ),
       if (_type == ConnectionType.webdav)
         FormRow(
-          label: '路径',
-          help: 'Alist / OpenList 填 /dav；其他 WebDAV 服务按实际路径填写，可以留空',
+          label: l10n.tr('路径', 'Path'),
+          help: l10n.tr(
+            'Alist / OpenList 填 /dav；其他 WebDAV 服务按实际路径填写，可以留空',
+            'Use /dav for Alist / OpenList, or your server WebDAV mount path (optional)',
+          ),
           child: field('路径', _path, hint: _davPath),
         ),
       FormRow(
@@ -665,7 +717,12 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
               const SizedBox(width: 6),
               Expanded(
                 child: SelectableText(
-                  _host.text.trim().isEmpty ? '填写主机后显示完整地址' : _endpoint,
+                  _host.text.trim().isEmpty
+                      ? l10n.tr(
+                          '填写主机后显示完整地址',
+                          'Full address appears once host is entered',
+                        )
+                      : _endpoint,
                   key: const ValueKey('endpoint-preview'),
                   style: TextStyle(
                     fontFamily: monoFamily,
@@ -681,19 +738,21 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
       ),
       const SizedBox(height: 6),
       FormRow(
-        label: '用户名',
-        help: '区分大小写',
+        label: l10n.tr('用户名', 'Username'),
+        help: l10n.tr('区分大小写', 'Case-sensitive'),
         child: field('用户名', _user, hint: 'admin'),
       ),
       FormRow(
-        label: '密码',
-        help: '只保存在这台电脑上',
+        label: l10n.tr('密码', 'Password'),
+        help: l10n.tr('只保存在这台电脑上', 'Stored locally on this computer only'),
         child: field(
           '密码',
           _password,
           obscure: !_showPassword,
           suffix: IconButton(
-            tooltip: _showPassword ? '隐藏密码' : '显示密码',
+            tooltip: _showPassword
+                ? l10n.tr('隐藏密码', 'Hide password')
+                : l10n.tr('显示密码', 'Show password'),
             iconSize: 15,
             icon: Icon(
               _showPassword ? CupertinoIcons.eye_slash : CupertinoIcons.eye,
@@ -704,8 +763,11 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
       ),
       if (_type == ConnectionType.alist)
         FormRow(
-          label: '目录密码',
-          help: '仅 Alist / OpenList 加密目录需要，填写目录路径（如 /私密）与访问密码',
+          label: l10n.tr('目录密码', 'Folder Passwords'),
+          help: l10n.tr(
+            '仅 Alist / OpenList 加密目录需要，填写目录路径（如 /私密）与访问密码',
+            'Only needed for password-protected Alist / OpenList folders (e.g. /private)',
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -738,8 +800,14 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                           const SizedBox(width: 4),
                           Text(
                             _dirPasswords.isEmpty
-                                ? '目录密码（可选）'
-                                : '目录密码（已设 ${_dirPasswords.length} 条）',
+                                ? l10n.tr(
+                                    '目录密码（可选）',
+                                    'Folder passwords (optional)',
+                                  )
+                                : l10n.tr(
+                                    '目录密码（已设 ${_dirPasswords.length} 条）',
+                                    'Folder passwords (${_dirPasswords.length})',
+                                  ),
                             style: TextStyle(
                               fontSize: TypeScale.small,
                               color: p.textMuted,
@@ -754,7 +822,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                     key: const ValueKey('add-dir-password'),
                     onPressed: _addDirPassword,
                     icon: const Icon(CupertinoIcons.plus, size: 12),
-                    label: const Text('添加目录密码'),
+                    label: Text(l10n.tr('添加目录密码', 'Add Password')),
                   ),
                 ],
               ),
@@ -774,7 +842,9 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                             autocorrect: false,
                             enableSuggestions: false,
                             style: theme.textTheme.bodyMedium,
-                            decoration: const InputDecoration(hintText: '/私密'),
+                            decoration: InputDecoration(
+                              hintText: l10n.tr('/私密', '/private'),
+                            ),
                           ),
                         ),
                         const SizedBox(width: 6),
@@ -788,11 +858,11 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                             enableSuggestions: false,
                             style: theme.textTheme.bodyMedium,
                             decoration: InputDecoration(
-                              hintText: '密码',
+                              hintText: l10n.tr('密码', 'Password'),
                               suffixIcon: IconButton(
                                 tooltip: _dirPasswords[i].obscure
-                                    ? '显示目录密码'
-                                    : '隐藏目录密码',
+                                    ? l10n.tr('显示目录密码', 'Show folder password')
+                                    : l10n.tr('隐藏目录密码', 'Hide folder password'),
                                 iconSize: 14,
                                 icon: Icon(
                                   _dirPasswords[i].obscure
@@ -809,7 +879,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                         ),
                         IconButton(
                           key: ValueKey('remove-dir-password-$i'),
-                          tooltip: '删除目录密码',
+                          tooltip: l10n.tr('删除目录密码', 'Remove folder password'),
                           iconSize: 14,
                           icon: const Icon(CupertinoIcons.xmark),
                           onPressed: () => _removeDirPassword(i),
@@ -825,7 +895,7 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
 
     final local = <Widget>[
       FormRow(
-        label: '文件夹',
+        label: l10n.tr('文件夹', 'Folder'),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -838,7 +908,10 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
               ),
             ),
             const SizedBox(width: 6),
-            OutlinedButton(onPressed: _pickFolder, child: const Text('选择…')),
+            OutlinedButton(
+              onPressed: _pickFolder,
+              child: Text(l10n.tr('选择…', 'Choose…')),
+            ),
           ],
         ),
       ),
@@ -864,17 +937,19 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    widget.existing == null || widget.copy ? '添加连接' : '编辑连接',
+                    widget.existing == null || widget.copy
+                        ? l10n.tr('添加连接', 'Add Connection')
+                        : l10n.tr('编辑连接', 'Edit Connection'),
                     style: theme.textTheme.titleMedium,
                   ),
                   const SizedBox(height: 14),
                   Center(
                     child: Segmented<_Kind>(
                       key: const ValueKey('conn-kind'),
-                      options: const {
+                      options: {
                         _Kind.dav: 'WebDAV / Alist',
                         _Kind.smb: 'SMB',
-                        _Kind.local: '本地',
+                        _Kind.local: l10n.tr('本地', 'Local'),
                       },
                       value: _kind,
                       onChanged: _setKind,
@@ -883,12 +958,22 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                   const SizedBox(height: 8),
                   Center(
                     child: Text(switch (_type) {
-                      ConnectionType.alist =>
+                      ConnectionType.alist => l10n.tr(
                         '通过 Alist / OpenList 的 API 连接，批量改名更快',
-                      ConnectionType.webdav =>
+                        'Connect via the Alist / OpenList API for faster batch renames',
+                      ),
+                      ConnectionType.webdav => l10n.tr(
                         '通用 WebDAV：Alist、OpenList、群晖、Nextcloud 等',
-                      ConnectionType.smb => '局域网共享文件夹：NAS、路由器、Windows 共享',
-                      ConnectionType.local => '直接整理这台电脑上的文件夹',
+                        'Standard WebDAV: Alist, OpenList, Synology, Nextcloud, etc.',
+                      ),
+                      ConnectionType.smb => l10n.tr(
+                        '局域网共享文件夹：NAS、路由器、Windows 共享',
+                        'Network share: NAS, router, or Windows SMB folder',
+                      ),
+                      ConnectionType.local => l10n.tr(
+                        '直接整理这台电脑上的文件夹',
+                        'Organize folders directly on this computer',
+                      ),
                     }, style: theme.textTheme.bodySmall),
                   ),
                 ],
@@ -902,8 +987,15 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     FormRow(
-                      label: '名称',
-                      child: field('名称', _name, hint: '留空时自动用文件夹名'),
+                      label: l10n.tr('名称', 'Name'),
+                      child: field(
+                        '名称',
+                        _name,
+                        hint: l10n.tr(
+                          '留空时自动用文件夹名',
+                          'Auto-filled from folder or host if blank',
+                        ),
+                      ),
                     ),
                     ...(_local ? local : server),
                     const Padding(
@@ -912,21 +1004,38 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                     ),
                     if (!_local)
                       FormRow(
-                        label: '连接路径',
-                        help: '只能访问这个路径及以下，比如 /PC；留空可访问全部',
+                        label: l10n.tr('连接路径', 'Start Path'),
+                        help: l10n.tr(
+                          '只能访问这个路径及以下，比如 /PC；留空可访问全部',
+                          'Restrict browsing to this folder and below (e.g. /PC); leave blank for root',
+                        ),
                         child: _withBrowse(
                           field('连接路径', _start, hint: '/'),
-                          () => _browse(_start, '选择连接路径'),
+                          () => _browse(
+                            _start,
+                            l10n.tr('选择连接路径', 'Choose Start Path'),
+                          ),
+                          l10n,
                         ),
                       ),
                     FormRow(
-                      label: '媒体库',
+                      label: l10n.tr('媒体库', 'Media Library'),
                       help: _local
-                          ? '「移动到媒体库」模式下，整理好的文件放到这里（相对于上方本地文件夹，可选）'
-                          : '「移动到媒体库」模式下，整理好的文件放到这里（可选）',
+                          ? l10n.tr(
+                              '「移动到媒体库」模式下，整理好的文件放到这里（相对于上方本地文件夹，可选）',
+                              'Destination for "Move to library" mode (relative to local folder above, optional)',
+                            )
+                          : l10n.tr(
+                              '「移动到媒体库」模式下，整理好的文件放到这里（可选）',
+                              'Destination for "Move to library" mode (optional)',
+                            ),
                       child: _withBrowse(
-                        field('媒体库', _root, hint: '/影视库'),
-                        () => _browse(_root, '选择媒体库文件夹'),
+                        field('媒体库', _root, hint: l10n.tr('/影视库', '/Media')),
+                        () => _browse(
+                          _root,
+                          l10n.tr('选择媒体库文件夹', 'Choose Media Library Folder'),
+                        ),
+                        l10n,
                       ),
                     ),
                     if (_browseHint != null) ...[
@@ -970,8 +1079,13 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                             Expanded(
                               child: SelectableText(
                                 result.status == ConnStatus.connected
-                                    ? '连接成功'
-                                    : (result.detail ?? '连接失败'),
+                                    ? l10n.tr('连接成功', 'Connected successfully')
+                                    : (result.detail != null
+                                          ? l10n.coreMessage(result.detail!)
+                                          : l10n.tr(
+                                              '连接失败',
+                                              'Connection failed',
+                                            )),
                                 style: TextStyle(
                                   fontSize: TypeScale.small,
                                   color: p.text,
@@ -999,15 +1113,15 @@ class _ConnectionDialogState extends State<_ConnectionDialog> {
                               CupertinoIcons.bolt_horizontal,
                               size: 15,
                             ),
-                      label: const Text('测试连接'),
+                      label: Text(l10n.tr('测试连接', 'Test Connection')),
                     ),
                   const Spacer(),
                   OutlinedButton(
                     onPressed: () => Navigator.pop(context),
-                    child: const Text('取消'),
+                    child: Text(l10n.cancel),
                   ),
                   const SizedBox(width: 8),
-                  FilledButton(onPressed: _save, child: const Text('保存')),
+                  FilledButton(onPressed: _save, child: Text(l10n.save)),
                 ],
               ),
             ),
@@ -1064,23 +1178,29 @@ class _TemplateMenu extends StatelessWidget {
   const _TemplateMenu({required this.value, required this.onChanged});
 
   @override
-  Widget build(BuildContext context) => PopupMenuButton<DavTemplate>(
-    key: const ValueKey('dav-template'),
-    tooltip: '选择服务器类型，自动填好端口和路径',
-    initialValue: value,
-    onSelected: onChanged,
-    position: PopupMenuPosition.under,
-    itemBuilder: (_) => [
-      for (final t in DavTemplate.values)
-        PopupMenuItem(
-          key: ValueKey('template-${t.name}'),
-          value: t,
-          height: 32,
-          child: Text(t.label),
-        ),
-    ],
-    child: _MenuTrigger(value.label),
-  );
+  Widget build(BuildContext context) {
+    final l10n = context.l10n;
+    return PopupMenuButton<DavTemplate>(
+      key: const ValueKey('dav-template'),
+      tooltip: l10n.tr(
+        '选择服务器类型，自动填好端口和路径',
+        'Choose a server preset to auto-fill port and path',
+      ),
+      initialValue: value,
+      onSelected: onChanged,
+      position: PopupMenuPosition.under,
+      itemBuilder: (_) => [
+        for (final t in DavTemplate.values)
+          PopupMenuItem(
+            key: ValueKey('template-${t.name}'),
+            value: t,
+            height: 32,
+            child: Text(t.localizedLabel(l10n)),
+          ),
+      ],
+      child: _MenuTrigger(value.localizedLabel(l10n)),
+    );
+  }
 }
 
 /// http / https popup button.
@@ -1093,7 +1213,7 @@ class _SchemeMenu extends StatelessWidget {
   @override
   Widget build(BuildContext context) => PopupMenuButton<String>(
     key: const ValueKey('scheme'),
-    tooltip: '协议',
+    tooltip: context.tr('协议', 'Protocol'),
     initialValue: value,
     onSelected: onChanged,
     position: PopupMenuPosition.under,

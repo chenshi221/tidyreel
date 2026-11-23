@@ -2,6 +2,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
+import '../../l10n/l10n.dart';
 import '../../ui/tokens.dart';
 import '../../ui/widgets.dart';
 
@@ -10,10 +11,14 @@ Future<String?> showRemoteFolderPicker(
   BuildContext context, {
   required Future<List<RemoteEntry>> Function(String dir) list,
   String initial = '/',
-  String title = '选择文件夹',
+  String? title,
 }) => showDialog<String>(
   context: context,
-  builder: (_) => _FolderPicker(list: list, initial: initial, title: title),
+  builder: (_) => _FolderPicker(
+    list: list,
+    initial: initial,
+    title: title ?? context.tr('选择文件夹', 'Choose Folder'),
+  ),
 );
 
 class _FolderPicker extends StatefulWidget {
@@ -47,6 +52,7 @@ class _FolderPickerState extends State<_FolderPicker> {
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
+    final l10n = context.l10n;
     final theme = Theme.of(context);
     final segs = _dir.split('/').where((s) => s.isNotEmpty).toList();
     return MacSheet(
@@ -75,7 +81,7 @@ class _FolderPickerState extends State<_FolderPicker> {
                       onPressed: i == segs.length
                           ? null
                           : () => _go('/${segs.take(i).join('/')}'),
-                      child: Text(i == 0 ? '根目录' : segs[i - 1]),
+                      child: Text(i == 0 ? l10n.rootDir : segs[i - 1]),
                     ),
                   ],
                 ],
@@ -89,8 +95,8 @@ class _FolderPickerState extends State<_FolderPicker> {
                       if (snap.hasError) {
                         return EmptyState(
                           icon: CupertinoIcons.exclamationmark_triangle,
-                          title: '无法读取文件夹',
-                          message: '${snap.error}',
+                          title: l10n.tr('无法读取文件夹', 'Unable to Read Folder'),
+                          message: l10n.coreMessage('${snap.error}'),
                         );
                       }
                       final dirs = snap.data;
@@ -98,10 +104,13 @@ class _FolderPickerState extends State<_FolderPicker> {
                         return const Center(child: Spinner(size: 20));
                       }
                       if (dirs.isEmpty) {
-                        return const EmptyState(
+                        return EmptyState(
                           icon: CupertinoIcons.folder,
-                          title: '没有子文件夹',
-                          message: '可以直接选择当前文件夹',
+                          title: l10n.tr('没有子文件夹', 'No Subfolders'),
+                          message: l10n.tr(
+                            '可以直接选择当前文件夹',
+                            'You can select the current folder directly',
+                          ),
                         );
                       }
                       return ListView(
@@ -164,13 +173,13 @@ class _FolderPickerState extends State<_FolderPicker> {
                   ),
                   OutlinedButton(
                     onPressed: () => Navigator.pop(context),
-                    child: const Text('取消'),
+                    child: Text(l10n.cancel),
                   ),
                   const SizedBox(width: 8),
                   FilledButton(
                     key: const ValueKey('pick-this'),
                     onPressed: () => Navigator.pop(context, _dir),
-                    child: const Text('选择这个文件夹'),
+                    child: Text(l10n.tr('选择这个文件夹', 'Select Folder')),
                   ),
                 ],
               ),

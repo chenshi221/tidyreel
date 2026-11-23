@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
 import '../../data/providers.dart';
+import '../../l10n/l10n.dart';
 import '../../ui/tokens.dart';
 import '../../ui/widgets.dart';
 import '../../widgets/common.dart';
@@ -28,27 +29,34 @@ const _episodeStyleExamples = {
   EpisodeStyle.lowerDotted: 's01.e02',
 };
 
-const _fieldNames = {
-  NameField.title: '标题',
-  NameField.year: '年份',
-  NameField.episode: '季集',
-  NameField.episodeTitle: '分集标题',
-  NameField.extraInfo: '附加信息',
+String _fieldLabel(NameField field, AppL10n l10n) => switch (field) {
+  NameField.title => l10n.tr('标题', 'Title'),
+  NameField.year => l10n.tr('年份', 'Year'),
+  NameField.episode => l10n.tr('季集', 'Season & Ep'),
+  NameField.episodeTitle => l10n.tr('分集标题', 'Episode Title'),
+  NameField.extraInfo => l10n.tr('附加信息', 'Extra Info'),
 };
 
-const _varTooltips = {
-  '{title}': '中文或首选标题',
-  '{en_title}': '英文标题',
-  '{original_title}': '原语言标题',
-  '{year}': '发行或首播年份',
-  '{season}': '季号（不补零，如 1）',
-  '{season:02}': '两位季号（如 01）',
-  '{episode:02}': '两位集号（如 02）',
-  '{episode_title}': '分集标题（来自 TMDB）',
-  '{extra_info}': '附加信息（分辨率、HDR 等）',
-  '{group}': '发布组名称',
-  '{tmdbid}': 'TMDB 数字 ID',
-  '{tmdb_tag}': 'TMDB ID 标签（如 {tmdb-1668}）',
+String _varTooltip(String variable, AppL10n l10n) => switch (variable) {
+  '{title}' => l10n.tr('中文或首选标题', 'Localized or preferred title'),
+  '{en_title}' => l10n.tr('英文标题', 'English title'),
+  '{original_title}' => l10n.tr('原语言标题', 'Original-language title'),
+  '{year}' => l10n.tr('发行或首播年份', 'Release or first-air year'),
+  '{season}' => l10n.tr('季号（不补零，如 1）', 'Season number (unpadded, e.g. 1)'),
+  '{season:02}' => l10n.tr('两位季号（如 01）', 'Two-digit season number (e.g. 01)'),
+  '{episode:02}' => l10n.tr('两位集号（如 02）', 'Two-digit episode number (e.g. 02)'),
+  '{episode_title}' => l10n.tr('分集标题（来自 TMDB）', 'Episode title (from TMDB)'),
+  '{extra_info}' => l10n.tr(
+    '附加信息（分辨率、HDR 等）',
+    'Extra tags (resolution, HDR, etc.)',
+  ),
+  '{group}' => l10n.tr('发布组名称', 'Release group name'),
+  '{tmdbid}' => l10n.tr('TMDB 数字 ID', 'Numeric TMDB ID'),
+  '{tmdb_tag}' => l10n.tr(
+    'TMDB ID 标签（如 {tmdb-1668}）',
+    'TMDB ID tag (e.g. {tmdb-1668})',
+  ),
+  _ => variable,
 };
 
 const _folderVars = [
@@ -106,22 +114,36 @@ class _NamingPageState extends ConsumerState<NamingPage> {
   var _tv = false;
 
   Future<void> _selectPlayer(TargetPlayer next) async {
+    final l10n = context.l10n;
     final current = ref.read(namingProfileProvider);
-    final customized = current != NamingProfile.forPlayer(current.player);
+    final preset = localizedPlayerPreset(current.player, isEn: l10n.isEn);
+    final customized =
+        current != preset && current != NamingProfile.forPlayer(current.player);
     if (next == current.player && !customized) return;
     if (customized) {
       final ok = await confirmDialog(
         context,
-        title: '切换到 ${_playerNames[next]!} 预设？',
-        content: const Text('切换播放器预设会重置电影和剧集的命名选项、自定义模板以及替换规则。'),
-        confirmLabel: '切换并重置',
+        title: l10n.tr(
+          '切换到 ${_playerNames[next]!} 预设？',
+          'Switch to ${_playerNames[next]!} preset?',
+        ),
+        content: Text(
+          l10n.tr(
+            '切换播放器预设会重置电影和剧集的命名选项、自定义模板以及替换规则。',
+            'Switching player presets resets movie and TV naming options, custom templates, and rewrite rules.',
+          ),
+        ),
+        confirmLabel: l10n.tr('切换并重置', 'Switch & Reset'),
       );
       if (!ok || !mounted) return;
     }
-    ref.read(namingProfileProvider.notifier).set(NamingProfile.forPlayer(next));
+    ref
+        .read(namingProfileProvider.notifier)
+        .set(localizedPlayerPreset(next, isEn: l10n.isEn));
   }
 
   Future<void> _handleExportImport(_ExportImportAction action) async {
+    final l10n = context.l10n;
     final profile = ref.read(namingProfileProvider);
     final rules = ref.read(titleRulesProvider);
     switch (action) {
@@ -131,7 +153,16 @@ class _NamingPageState extends ConsumerState<NamingPage> {
         if (!mounted) return;
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
-          ..showSnackBar(const SnackBar(content: Text('已复制命名与片名规则 JSON 到剪贴板')));
+          ..showSnackBar(
+            SnackBar(
+              content: Text(
+                l10n.tr(
+                  '已复制命名与片名规则 JSON 到剪贴板',
+                  'Copied naming & title rules JSON to clipboard',
+                ),
+              ),
+            ),
+          );
       case _ExportImportAction.saveFile:
         final jsonStr = encodeNamingBundle(profile, rules);
         try {
@@ -146,12 +177,23 @@ class _NamingPageState extends ConsumerState<NamingPage> {
           if (!mounted) return;
           ScaffoldMessenger.of(context)
             ..hideCurrentSnackBar()
-            ..showSnackBar(SnackBar(content: Text('已导出到 ${location.path}')));
+            ..showSnackBar(
+              SnackBar(
+                content: Text(
+                  l10n.tr(
+                    '已导出到 ${location.path}',
+                    'Exported to ${location.path}',
+                  ),
+                ),
+              ),
+            );
         } catch (e) {
           if (!mounted) return;
           ScaffoldMessenger.of(context)
             ..hideCurrentSnackBar()
-            ..showSnackBar(SnackBar(content: Text('导出失败：$e')));
+            ..showSnackBar(
+              SnackBar(content: Text(l10n.tr('导出失败：$e', 'Export failed: $e'))),
+            );
         }
       case _ExportImportAction.importJson:
         final bundle = await showDialog<NamingBundle>(
@@ -167,18 +209,25 @@ class _NamingPageState extends ConsumerState<NamingPage> {
         }
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
-          ..showSnackBar(const SnackBar(content: Text('已导入命名与片名规则')));
+          ..showSnackBar(
+            SnackBar(
+              content: Text(
+                l10n.tr('已导入命名与片名规则', 'Imported naming & title rules'),
+              ),
+            ),
+          );
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final l10n = context.l10n;
     final profile = ref.watch(namingProfileProvider);
     return PageScaffold(
-      title: '命名规则',
+      title: l10n.tr('命名规则', 'Naming Rules'),
       actions: [
         Segmented<bool>(
-          options: const {false: '电影', true: '剧集'},
+          options: {false: l10n.movie, true: l10n.tvShow},
           value: _tv,
           onChanged: (v) => setState(() => _tv = v),
         ),
@@ -219,10 +268,11 @@ class _PlayerMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = context.l10n;
     final p = Palette.of(context);
     return PopupMenuButton<TargetPlayer>(
       key: const ValueKey('player'),
-      tooltip: '目标播放器',
+      tooltip: l10n.tr('目标播放器', 'Target player'),
       initialValue: value,
       position: PopupMenuPosition.under,
       onSelected: onChanged,
@@ -269,47 +319,48 @@ class _ExportImportMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = context.l10n;
     final p = Palette.of(context);
     return PopupMenuButton<_ExportImportAction>(
       key: const ValueKey('naming-export-import'),
-      tooltip: '导出或导入命名与片名规则',
+      tooltip: l10n.tr('导出或导入命名与片名规则', 'Export or import naming & title rules'),
       position: PopupMenuPosition.under,
       onSelected: onSelected,
-      itemBuilder: (_) => const [
+      itemBuilder: (_) => [
         PopupMenuItem(
-          key: ValueKey('naming-export-clipboard'),
+          key: const ValueKey('naming-export-clipboard'),
           value: _ExportImportAction.copyJson,
           height: 30,
           child: Row(
             children: [
-              Icon(CupertinoIcons.doc_on_clipboard, size: 14),
-              SizedBox(width: 8),
-              Text('导出到剪贴板'),
+              const Icon(CupertinoIcons.doc_on_clipboard, size: 14),
+              const SizedBox(width: 8),
+              Text(l10n.tr('导出到剪贴板', 'Copy JSON to Clipboard')),
             ],
           ),
         ),
         PopupMenuItem(
-          key: ValueKey('naming-export-file'),
+          key: const ValueKey('naming-export-file'),
           value: _ExportImportAction.saveFile,
           height: 30,
           child: Row(
             children: [
-              Icon(CupertinoIcons.square_arrow_up, size: 14),
-              SizedBox(width: 8),
-              Text('导出为 JSON 文件'),
+              const Icon(CupertinoIcons.square_arrow_up, size: 14),
+              const SizedBox(width: 8),
+              Text(l10n.tr('导出为 JSON 文件', 'Export to JSON File')),
             ],
           ),
         ),
-        PopupMenuDivider(height: 9),
+        const PopupMenuDivider(height: 9),
         PopupMenuItem(
-          key: ValueKey('naming-import-json'),
+          key: const ValueKey('naming-import-json'),
           value: _ExportImportAction.importJson,
           height: 30,
           child: Row(
             children: [
-              Icon(CupertinoIcons.square_arrow_down, size: 14),
-              SizedBox(width: 8),
-              Text('导入 JSON…'),
+              const Icon(CupertinoIcons.square_arrow_down, size: 14),
+              const SizedBox(width: 8),
+              Text(l10n.tr('导入 JSON…', 'Import JSON…')),
             ],
           ),
         ),
@@ -331,9 +382,9 @@ class _ExportImportMenu extends StatelessWidget {
               color: p.textMuted,
             ),
             const SizedBox(width: 6),
-            const Text(
-              '导出 / 导入',
-              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+            Text(
+              l10n.tr('导出 / 导入', 'Export / Import'),
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
             ),
           ],
         ),
@@ -351,7 +402,7 @@ class _ImportNamingDialog extends StatefulWidget {
 
 class _ImportNamingDialogState extends State<_ImportNamingDialog> {
   final _controller = TextEditingController();
-  String? _fileError;
+  Object? _fileError;
 
   @override
   void dispose() {
@@ -375,18 +426,23 @@ class _ImportNamingDialogState extends State<_ImportNamingDialog> {
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() => _fileError = '读取文件失败：$e');
+      setState(() => _fileError = e);
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final l10n = context.l10n;
     final p = Palette.of(context);
     final theme = Theme.of(context);
     final raw = _controller.text;
-    final parsed = raw.trim().isEmpty ? null : decodeNamingBundle(raw);
+    final parsed = raw.trim().isEmpty
+        ? null
+        : decodeNamingBundle(raw, l10n: l10n);
     final bundle = parsed?.bundle;
-    final error = _fileError ?? parsed?.error;
+    final error = _fileError != null
+        ? l10n.tr('读取文件失败：$_fileError', 'Failed to read file: $_fileError')
+        : parsed?.error;
 
     return MacSheet(
       key: const ValueKey('naming-import-dialog'),
@@ -402,7 +458,7 @@ class _ImportNamingDialogState extends State<_ImportNamingDialog> {
                 children: [
                   Expanded(
                     child: Text(
-                      '导入命名与片名规则',
+                      l10n.tr('导入命名与片名规则', 'Import Naming & Title Rules'),
                       style: theme.textTheme.titleMedium,
                     ),
                   ),
@@ -410,13 +466,16 @@ class _ImportNamingDialogState extends State<_ImportNamingDialog> {
                     key: const ValueKey('naming-import-pick-file'),
                     onPressed: _pickFile,
                     icon: const Icon(CupertinoIcons.folder, size: 13),
-                    label: const Text('从文件选择…'),
+                    label: Text(l10n.tr('从文件选择…', 'Choose File…')),
                   ),
                 ],
               ),
               const SizedBox(height: 6),
               Text(
-                '粘贴导出的 JSON 内容，或点击右上角从本地文件读取。确认后会覆盖当前命名规则与片名规则。',
+                l10n.tr(
+                  '粘贴导出的 JSON 内容，或点击右上角从本地文件读取。确认后会覆盖当前命名规则与片名规则。',
+                  'Paste exported JSON below or load from a local file. Importing will overwrite your current naming and title rules.',
+                ),
                 style: theme.textTheme.bodySmall,
               ),
               const SizedBox(height: 12),
@@ -496,7 +555,10 @@ class _ImportNamingDialogState extends State<_ImportNamingDialog> {
                           ),
                           const SizedBox(width: 6),
                           Text(
-                            '校验通过，将应用以下配置',
+                            l10n.tr(
+                              '校验通过，将应用以下配置',
+                              'Valid configuration ready to apply',
+                            ),
                             style: TextStyle(
                               fontSize: TypeScale.small,
                               fontWeight: FontWeight.w600,
@@ -507,23 +569,33 @@ class _ImportNamingDialogState extends State<_ImportNamingDialog> {
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        '播放器预设：${bundle.naming != null ? _playerNames[bundle.naming!.player]! : '保持现有'}',
+                        l10n.tr(
+                          '播放器预设：${bundle.naming != null ? _playerNames[bundle.naming!.player]! : '保持现有'}',
+                          'Player preset: ${bundle.naming != null ? _playerNames[bundle.naming!.player]! : 'Keep current'}',
+                        ),
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: p.text,
                         ),
                       ),
                       if (bundle.naming != null)
                         Text(
-                          '替换规则：共 ${bundle.naming!.movie.rewrites.length + bundle.naming!.tv.rewrites.length} 条'
-                          '（电影 ${bundle.naming!.movie.rewrites.length} 条 · 剧集 ${bundle.naming!.tv.rewrites.length} 条）',
+                          l10n.tr(
+                            '替换规则：共 ${bundle.naming!.movie.rewrites.length + bundle.naming!.tv.rewrites.length} 条'
+                                '（电影 ${bundle.naming!.movie.rewrites.length} 条 · 剧集 ${bundle.naming!.tv.rewrites.length} 条）',
+                            'Rewrite rules: ${bundle.naming!.movie.rewrites.length + bundle.naming!.tv.rewrites.length} total '
+                                '(Movies ${bundle.naming!.movie.rewrites.length} · TV ${bundle.naming!.tv.rewrites.length})',
+                          ),
                           style: theme.textTheme.bodySmall?.copyWith(
                             color: p.text,
                           ),
                         ),
                       Text(
                         bundle.titleRules != null
-                            ? '片名规则：清洗 ${bundle.titleRules!.cleanups.length} 条 · 指定匹配 ${bundle.titleRules!.pins.length} 条'
-                            : '片名规则：保持现有',
+                            ? l10n.tr(
+                                '片名规则：清洗 ${bundle.titleRules!.cleanups.length} 条 · 指定匹配 ${bundle.titleRules!.pins.length} 条',
+                                'Title rules: ${bundle.titleRules!.cleanups.length} cleanups · ${bundle.titleRules!.pins.length} pinned matches',
+                              )
+                            : l10n.tr('片名规则：保持现有', 'Title rules: Keep current'),
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: p.text,
                         ),
@@ -538,7 +610,7 @@ class _ImportNamingDialogState extends State<_ImportNamingDialog> {
                 children: [
                   TextButton(
                     onPressed: () => Navigator.pop(context),
-                    child: const Text('取消'),
+                    child: Text(l10n.cancel),
                   ),
                   const SizedBox(width: 8),
                   FilledButton(
@@ -546,7 +618,7 @@ class _ImportNamingDialogState extends State<_ImportNamingDialog> {
                     onPressed: bundle == null
                         ? null
                         : () => Navigator.pop(context, bundle),
-                    child: const Text('导入并应用'),
+                    child: Text(l10n.tr('导入并应用', 'Import & Apply')),
                   ),
                 ],
               ),
@@ -582,15 +654,15 @@ class _PreviewState extends ConsumerState<_Preview> {
     super.dispose();
   }
 
-  String _kindLabel(MediaKind k) => switch (k) {
-    MediaKind.movie => '电影',
-    MediaKind.episode => '剧集',
-    MediaKind.special => '特别篇',
-    MediaKind.extra => '花絮',
-    MediaKind.unknown => '未知',
+  String _kindLabel(MediaKind k, AppL10n l10n) => switch (k) {
+    MediaKind.movie => l10n.movie,
+    MediaKind.episode => l10n.tvShow,
+    MediaKind.special => l10n.specials,
+    MediaKind.extra => l10n.tr('花絮', 'Extras'),
+    MediaKind.unknown => l10n.tr('未知', 'Unknown'),
   };
 
-  String _episodeSummary(ParsedName p) {
+  String _episodeSummary(ParsedName p, AppL10n l10n) {
     if (p.episodes.isNotEmpty) {
       final s = p.season != null
           ? 'S${p.season!.toString().padLeft(2, '0')}'
@@ -602,10 +674,10 @@ class _PreviewState extends ConsumerState<_Preview> {
       return '$s$eStart$eEnd';
     }
     if (p.absolute != null) {
-      return '第 ${p.absolute} 集（绝对集）';
+      return l10n.tr('第 ${p.absolute} 集（绝对集）', 'Ep ${p.absolute} (absolute)');
     }
     if (p.airDate != null) {
-      return '日期 ${fmtDate(p.airDate)}';
+      return l10n.tr('日期 ${fmtDate(p.airDate)}', 'Date ${fmtDate(p.airDate)}');
     }
     if (p.season != null) {
       return 'S${p.season!.toString().padLeft(2, '0')}';
@@ -621,19 +693,21 @@ class _PreviewState extends ConsumerState<_Preview> {
     return parts.isEmpty ? '—' : parts.join(' · ');
   }
 
-  String _extraSummary(ParsedName p) {
+  String _extraSummary(ParsedName p, AppL10n l10n) {
     final parts = <String>[
       if (p.extraInfo != null && p.extraInfo!.isNotEmpty)
         p.extraInfo!
       else if (p.resolution != null && p.resolution!.isNotEmpty)
         p.resolution!,
-      if (p.group != null && p.group!.isNotEmpty) '发布组 ${p.group}',
+      if (p.group != null && p.group!.isNotEmpty)
+        l10n.tr('发布组 ${p.group}', 'Group ${p.group}'),
     ];
     return parts.isEmpty ? '—' : parts.join(' · ');
   }
 
   @override
   Widget build(BuildContext context) {
+    final l10n = context.l10n;
     final isTv = widget.isTv;
     final p = Palette.of(context);
     final theme = Theme.of(context);
@@ -654,8 +728,9 @@ class _PreviewState extends ConsumerState<_Preview> {
         : null;
     final tree = <(String text, bool isError)>[
       (isTv ? profile.tvDir : profile.movieDir, false),
-      (folder.text ?? folder.display, folder.text == null),
-      if (season != null) (season.text ?? season.display, season.text == null),
+      (folder.text ?? folder.localizedDisplay(l10n), folder.text == null),
+      if (season != null)
+        (season.text ?? season.localizedDisplay(l10n), season.text == null),
     ];
     final mono = TextStyle(
       fontFamily: monoFamily,
@@ -726,7 +801,10 @@ class _PreviewState extends ConsumerState<_Preview> {
           children: [
             Row(
               children: [
-                Text('实时示例', style: theme.textTheme.titleSmall),
+                Text(
+                  l10n.tr('实时示例', 'Live Preview'),
+                  style: theme.textTheme.titleSmall,
+                ),
                 const Spacer(),
                 Tag(_playerNames[profile.player]!),
               ],
@@ -739,7 +817,7 @@ class _PreviewState extends ConsumerState<_Preview> {
                 for (final s in scenarios)
                   _StyleChip(
                     key: ValueKey('sample-${s.id}'),
-                    label: s.label,
+                    label: s.localizedLabel(l10n),
                     selected: scenario.id == s.id,
                     onTap: () => setState(() {
                       if (isTv) {
@@ -752,7 +830,10 @@ class _PreviewState extends ConsumerState<_Preview> {
               ],
             ),
             const SizedBox(height: 14),
-            Text('原文件名', style: theme.textTheme.labelSmall),
+            Text(
+              l10n.tr('原文件名', 'Original filename'),
+              style: theme.textTheme.labelSmall,
+            ),
             const SizedBox(height: 4),
             fileLine(CupertinoIcons.doc, sample.original, p.textFaint),
             Padding(
@@ -763,7 +844,7 @@ class _PreviewState extends ConsumerState<_Preview> {
                 color: p.textMuted,
               ),
             ),
-            Text('整理后', style: theme.textTheme.labelSmall),
+            Text(l10n.tr('整理后', 'Renamed'), style: theme.textTheme.labelSmall),
             const SizedBox(height: 4),
             Container(
               padding: const EdgeInsets.all(10),
@@ -781,13 +862,16 @@ class _PreviewState extends ConsumerState<_Preview> {
               ),
               child: fileLine(
                 CupertinoIcons.film,
-                name.display,
+                name.localizedDisplay(l10n),
                 name.text == null ? p.danger : p.text,
                 key: const ValueKey('example-name'),
               ),
             ),
             const SizedBox(height: 18),
-            Text('移动到媒体库时', style: theme.textTheme.labelSmall),
+            Text(
+              l10n.tr('移动到媒体库时', 'Library path'),
+              style: theme.textTheme.labelSmall,
+            ),
             const SizedBox(height: 6),
             for (var i = 0; i < tree.length; i++)
               Padding(
@@ -809,8 +893,14 @@ class _PreviewState extends ConsumerState<_Preview> {
               const SizedBox(height: 10),
               Text(
                 o.singleSeasonFolder
-                    ? '单季剧也会建季文件夹（${season?.text ?? o.seasonFolderTemplate}）'
-                    : '单季剧省略季文件夹：${profile.tvDir}/${folder.text ?? '…'}/${name.text ?? '…'}',
+                    ? l10n.tr(
+                        '单季剧也会建季文件夹（${season?.text ?? o.seasonFolderTemplate}）',
+                        'Single-season shows also use a season folder (${season?.text ?? o.seasonFolderTemplate})',
+                      )
+                    : l10n.tr(
+                        '单季剧省略季文件夹：${profile.tvDir}/${folder.text ?? '…'}/${name.text ?? '…'}',
+                        'Single-season shows skip season folder: ${profile.tvDir}/${folder.text ?? '…'}/${name.text ?? '…'}',
+                      ),
                 key: const ValueKey('single-season-preview'),
                 style: theme.textTheme.bodySmall?.copyWith(color: p.textFaint),
               ),
@@ -819,10 +909,16 @@ class _PreviewState extends ConsumerState<_Preview> {
               padding: EdgeInsets.symmetric(vertical: 14),
               child: Divider(),
             ),
-            Text('自定义测试', style: theme.textTheme.titleSmall),
+            Text(
+              l10n.tr('自定义测试', 'Custom Filename Tester'),
+              style: theme.textTheme.titleSmall,
+            ),
             const SizedBox(height: 4),
             Text(
-              '粘贴任意真实文件名（或带目录路径），实时查看解析字段与目标文件名',
+              l10n.tr(
+                '粘贴任意真实文件名（或带目录路径），实时查看解析字段与目标文件名',
+                'Paste any filename (or path) to inspect parsed fields and the rendered target name',
+              ),
               style: theme.textTheme.bodySmall,
             ),
             const SizedBox(height: 8),
@@ -831,12 +927,15 @@ class _PreviewState extends ConsumerState<_Preview> {
               controller: _customInput,
               style: mono,
               decoration: InputDecoration(
-                hintText: '如 [VCB-Studio] Frieren [01][Ma10p_1080p].mkv',
+                hintText: l10n.tr(
+                  '如 [VCB-Studio] Frieren [01][Ma10p_1080p].mkv',
+                  'e.g. [VCB-Studio] Frieren [01][Ma10p_1080p].mkv',
+                ),
                 prefixIcon: const Icon(CupertinoIcons.lab_flask, size: 14),
                 suffixIcon: customText.isEmpty
                     ? null
                     : IconButton(
-                        tooltip: '清空',
+                        tooltip: l10n.clear,
                         iconSize: 13,
                         icon: const Icon(CupertinoIcons.xmark_circle_fill),
                         onPressed: () => setState(() => _customInput.clear()),
@@ -851,18 +950,36 @@ class _PreviewState extends ConsumerState<_Preview> {
                 spacing: 6,
                 runSpacing: 6,
                 children: [
-                  fieldChip('类型', _kindLabel(customPreview.parsed.kind)),
-                  fieldChip('标题', customPreview.parsed.title ?? '—'),
-                  fieldChip('年份', customPreview.parsed.year?.toString() ?? '—'),
-                  fieldChip('季集', _episodeSummary(customPreview.parsed)),
-                  fieldChip('版本', _versionSummary(customPreview.parsed)),
-                  fieldChip('附加信息', _extraSummary(customPreview.parsed)),
                   fieldChip(
-                    '外部ID',
+                    l10n.tr('类型', 'Kind'),
+                    _kindLabel(customPreview.parsed.kind, l10n),
+                  ),
+                  fieldChip(
+                    l10n.tr('标题', 'Title'),
+                    customPreview.parsed.title ?? '—',
+                  ),
+                  fieldChip(
+                    l10n.tr('年份', 'Year'),
+                    customPreview.parsed.year?.toString() ?? '—',
+                  ),
+                  fieldChip(
+                    l10n.tr('季集', 'Episode'),
+                    _episodeSummary(customPreview.parsed, l10n),
+                  ),
+                  fieldChip(
+                    l10n.tr('版本', 'Edition'),
+                    _versionSummary(customPreview.parsed),
+                  ),
+                  fieldChip(
+                    l10n.tr('附加信息', 'Extra'),
+                    _extraSummary(customPreview.parsed, l10n),
+                  ),
+                  fieldChip(
+                    l10n.tr('外部ID', 'External ID'),
                     customPreview.parsed.externalId?.toString() ?? '—',
                   ),
                   fieldChip(
-                    '置信度',
+                    l10n.tr('置信度', 'Confidence'),
                     '${(customPreview.parsed.confidence * 100).round()}%',
                     valueColor: customPreview.parsed.confidence >= 0.8
                         ? p.success
@@ -874,7 +991,10 @@ class _PreviewState extends ConsumerState<_Preview> {
               ),
               const SizedBox(height: 10),
               Text(
-                '当前规则目标文件名（按${customPreview.isTv ? '剧集' : '电影'}规则）',
+                l10n.tr(
+                  '当前规则目标文件名（按${customPreview.isTv ? '剧集' : '电影'}规则）',
+                  'Target filename (${customPreview.isTv ? 'TV' : 'Movie'} rules)',
+                ),
                 style: theme.textTheme.labelSmall,
               ),
               const SizedBox(height: 4),
@@ -894,7 +1014,7 @@ class _PreviewState extends ConsumerState<_Preview> {
                 ),
                 child: fileLine(
                   CupertinoIcons.film,
-                  customPreview.renderedName.display,
+                  customPreview.renderedName.localizedDisplay(l10n),
                   customPreview.renderedName.text == null ? p.danger : p.text,
                   key: const ValueKey('custom-rendered-name'),
                 ),
@@ -921,6 +1041,7 @@ class _OptionsPanel extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final l10n = context.l10n;
     final p = Palette.of(context);
     final o = _optionsOf(ref.watch(namingProfileProvider), isTv);
     final kind = isTv ? MediaKind.episode : MediaKind.movie;
@@ -935,16 +1056,19 @@ class _OptionsPanel extends ConsumerWidget {
         MacSwitch(key: ValueKey('$key-$suffix'), value: v, onChanged: f);
 
     final fileNameOptions = <Widget>[
-      const SectionLabel('标题'),
+      SectionLabel(l10n.tr('标题', 'Title')),
       Panel(
         child: Rows(
           children: [
             SettingRow(
-              title: '标题语言',
+              title: l10n.tr('标题语言', 'Title language'),
+              caption: l10n.isEn
+                  ? 'Falls back to original title when no English title exists'
+                  : null,
               control: Segmented<TitleLanguage>(
-                options: const {
-                  TitleLanguage.chineseFirst: '中文优先',
-                  TitleLanguage.englishFirst: '英文（原名）优先',
+                options: {
+                  TitleLanguage.chineseFirst: l10n.tr('中文优先', 'Chinese'),
+                  TitleLanguage.englishFirst: l10n.tr('英文（原名）优先', 'English'),
                 },
                 value: o.titleLanguage,
                 onChanged: (v) =>
@@ -952,8 +1076,8 @@ class _OptionsPanel extends ConsumerWidget {
               ),
             ),
             SettingRow(
-              title: '同时用两种语言',
-              caption: '如：老友记.Friends',
+              title: l10n.tr('同时用两种语言', 'Bilingual titles'),
+              caption: l10n.tr('如：老友记.Friends', 'e.g. Friends.老友记'),
               control: sw(
                 'bilingual',
                 o.bilingual,
@@ -961,7 +1085,7 @@ class _OptionsPanel extends ConsumerWidget {
               ),
             ),
             SettingRow(
-              title: '年份',
+              title: l10n.tr('年份', 'Year'),
               control: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -984,11 +1108,11 @@ class _OptionsPanel extends ConsumerWidget {
             ),
             if (isTv)
               SettingRow(
-                title: '剧集年份取哪个',
+                title: l10n.tr('剧集年份取哪个', 'Series year'),
                 control: Segmented<ShowYearSource>(
-                  options: const {
-                    ShowYearSource.firstSeason: '首季年份',
-                    ShowYearSource.seasonAir: '当季首播年份',
+                  options: {
+                    ShowYearSource.firstSeason: l10n.tr('首季年份', 'First season'),
+                    ShowYearSource.seasonAir: l10n.tr('当季首播年份', 'This season'),
                   },
                   value: o.showYear,
                   onChanged: (v) => _edit(ref, (o) => o.copyWith(showYear: v)),
@@ -998,7 +1122,7 @@ class _OptionsPanel extends ConsumerWidget {
         ),
       ),
       if (isTv) ...[
-        const SectionLabel('季集'),
+        SectionLabel(l10n.tr('季集', 'Episodes')),
         Panel(
           child: Rows(
             children: [
@@ -1006,7 +1130,7 @@ class _OptionsPanel extends ConsumerWidget {
                 padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
                 child: Row(
                   children: [
-                    const Expanded(child: Text('季集格式')),
+                    Expanded(child: Text(l10n.tr('季集格式', 'Episode format'))),
                     Wrap(
                       spacing: 4,
                       children: [
@@ -1024,8 +1148,11 @@ class _OptionsPanel extends ConsumerWidget {
                 ),
               ),
               SettingRow(
-                title: '分集标题',
-                caption: '从 TMDB 取每集的名字加在文件名里',
+                title: l10n.tr('分集标题', 'Episode title'),
+                caption: l10n.tr(
+                  '从 TMDB 取每集的名字加在文件名里',
+                  'Include each episode title from TMDB in the filename',
+                ),
                 control: sw(
                   'episode-title',
                   o.episodeTitle,
@@ -1036,13 +1163,16 @@ class _OptionsPanel extends ConsumerWidget {
           ),
         ),
       ],
-      const SectionLabel('附加内容'),
+      SectionLabel(l10n.tr('附加内容', 'Additional Tags')),
       Panel(
         child: Rows(
           children: [
             SettingRow(
-              title: '附加信息',
-              caption: '保留分辨率、HDR、音轨，如 2160p.DV',
+              title: l10n.tr('附加信息', 'Extra info'),
+              caption: l10n.tr(
+                '保留分辨率、HDR、音轨，如 2160p.DV',
+                'Keep resolution, HDR, and audio tags, e.g. 2160p.DV',
+              ),
               control: sw(
                 'extra',
                 o.extraInfo,
@@ -1050,8 +1180,8 @@ class _OptionsPanel extends ConsumerWidget {
               ),
             ),
             SettingRow(
-              title: '发布组',
-              caption: '在末尾加 -GRP',
+              title: l10n.tr('发布组', 'Release group'),
+              caption: l10n.tr('在末尾加 -GRP', 'Append -GRP at the end'),
               control: sw(
                 'group',
                 o.releaseGroup,
@@ -1059,7 +1189,7 @@ class _OptionsPanel extends ConsumerWidget {
               ),
             ),
             SettingRow(
-              title: 'TMDB ID 标签',
+              title: l10n.tr('TMDB ID 标签', 'TMDB ID tag'),
               caption: '{tmdb-12345}',
               control: sw(
                 'tmdbid',
@@ -1068,9 +1198,14 @@ class _OptionsPanel extends ConsumerWidget {
               ),
             ),
             SettingRow(
-              title: '分隔符',
+              title: l10n.tr('分隔符', 'Separator'),
               control: Segmented<String>(
-                options: const {'.': ' . ', '_': ' _ ', ' ': '空格', '-': ' - '},
+                options: {
+                  '.': ' . ',
+                  '_': ' _ ',
+                  ' ': l10n.tr('空格', 'Space'),
+                  '-': ' - ',
+                },
                 value: o.separator,
                 onChanged: (v) => _edit(ref, (o) => o.copyWith(separator: v)),
               ),
@@ -1078,7 +1213,7 @@ class _OptionsPanel extends ConsumerWidget {
           ],
         ),
       ),
-      const SectionLabel('字段顺序'),
+      SectionLabel(l10n.tr('字段顺序', 'Field Order')),
       Panel(
         child: ReorderableListView(
           key: ValueKey('order-$suffix'),
@@ -1120,7 +1255,7 @@ class _OptionsPanel extends ConsumerWidget {
                       style: TextStyle(fontSize: 12, color: p.textFaint),
                     ),
                     const SizedBox(width: 12),
-                    Expanded(child: Text(_fieldNames[order[i]]!)),
+                    Expanded(child: Text(_fieldLabel(order[i], l10n))),
                     ReorderableDragStartListener(
                       index: i,
                       child: MouseRegion(
@@ -1160,13 +1295,13 @@ class _OptionsPanel extends ConsumerWidget {
             ),
           ),
         ),
-        const SectionLabel('文件夹'),
+        SectionLabel(l10n.tr('文件夹', 'Folders')),
         Panel(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
           child: Column(
             children: [
               FormRow(
-                label: '作品文件夹',
+                label: l10n.tr('作品文件夹', 'Title folder'),
                 child: _TextOption(
                   key: ValueKey('folder-$suffix'),
                   value: o.folderTemplate,
@@ -1177,7 +1312,7 @@ class _OptionsPanel extends ConsumerWidget {
               ),
               if (isTv)
                 FormRow(
-                  label: '季文件夹',
+                  label: l10n.tr('季文件夹', 'Season folder'),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
@@ -1213,8 +1348,11 @@ class _OptionsPanel extends ConsumerWidget {
                 ),
               if (isTv)
                 FormRow(
-                  label: '单季剧',
-                  help: '打开：只有一季的剧也放进季文件夹。多季剧总是分季文件夹',
+                  label: l10n.tr('单季剧', 'Single season'),
+                  help: l10n.tr(
+                    '打开：只有一季的剧也放进季文件夹。多季剧总是分季文件夹',
+                    'When on, single-season shows also get a season folder. Multi-season shows always use season folders.',
+                  ),
                   child: Align(
                     alignment: Alignment.centerLeft,
                     child: sw(
@@ -1228,14 +1366,17 @@ class _OptionsPanel extends ConsumerWidget {
             ],
           ),
         ),
-        const SectionLabel('高级'),
+        SectionLabel(l10n.tr('高级', 'Advanced')),
         Panel(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               SettingRow(
-                title: '直接编辑模板',
-                caption: '开启后上面的文件名选项变为只读，文件夹设置仍可修改',
+                title: l10n.tr('直接编辑模板', 'Custom filename template'),
+                caption: l10n.tr(
+                  '开启后上面的文件名选项变为只读，文件夹设置仍可修改',
+                  'Locks the filename options above; folder settings remain editable',
+                ),
                 control: sw(
                   'advanced',
                   advanced,
@@ -1264,11 +1405,15 @@ class _OptionsPanel extends ConsumerWidget {
           ),
         ),
         SectionLabel(
-          '替换规则',
+          l10n.tr('替换规则', 'Rewrite Rules'),
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Tag(isTv ? '仅剧集' : '仅电影'),
+              Tag(
+                isTv
+                    ? l10n.tr('仅剧集', 'TV only')
+                    : l10n.tr('仅电影', 'Movies only'),
+              ),
               const SizedBox(width: 6),
               TextButton.icon(
                 key: const ValueKey('add-rewrite'),
@@ -1279,7 +1424,7 @@ class _OptionsPanel extends ConsumerWidget {
                   ),
                 ),
                 icon: const Icon(CupertinoIcons.plus, size: 12),
-                label: const Text('添加'),
+                label: Text(l10n.tr('添加', 'Add')),
               ),
             ],
           ),
@@ -1288,8 +1433,12 @@ class _OptionsPanel extends ConsumerWidget {
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           child: o.rewrites.isEmpty
               ? Text(
-                  '生成名称后再按正则查找替换，文件和文件夹都生效。'
-                  r'比如把 Season (\d+) 换成 S$1',
+                  l10n.tr(
+                    '生成名称后再按正则查找替换，文件和文件夹都生效。'
+                        r'比如把 Season (\d+) 换成 S$1',
+                    'Apply regex find-and-replace to generated file and folder names. '
+                        r'For example, replace Season (\d+) with S$1',
+                  ),
                   style: Theme.of(context).textTheme.bodySmall,
                 )
               : Column(
@@ -1340,6 +1489,7 @@ class _TitleRulesSectionState extends ConsumerState<_TitleRulesSection> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = context.l10n;
     final p = Palette.of(context);
     final rules = ref.watch(titleRulesProvider);
     final small = Theme.of(context).textTheme.bodySmall;
@@ -1367,7 +1517,7 @@ class _TitleRulesSectionState extends ConsumerState<_TitleRulesSection> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         SectionLabel(
-          '片名规则（电影与剧集共用）',
+          l10n.tr('片名规则（电影与剧集共用）', 'Title Rules (Shared by Movies & TV)'),
           trailing: TextButton.icon(
             key: const ValueKey('add-title-cleanup'),
             onPressed: () => _set(
@@ -1377,7 +1527,7 @@ class _TitleRulesSectionState extends ConsumerState<_TitleRulesSection> {
               ),
             ),
             icon: const Icon(CupertinoIcons.plus, size: 12),
-            label: const Text('添加'),
+            label: Text(l10n.tr('添加', 'Add')),
           ),
         ),
         Panel(
@@ -1387,9 +1537,13 @@ class _TitleRulesSectionState extends ConsumerState<_TitleRulesSection> {
             children: [
               if (rules.cleanups.isEmpty)
                 Text(
-                  '识别前先按正则清洗文件夹名，再去 TMDB 搜索。'
-                  '比如把 ^【.*?】 换成空，去掉「【日剧】」这类前缀。'
-                  '内置规则已经会去掉排序字母、分隔点和括号，搜不到时再只用中文名或英文名搜。',
+                  l10n.tr(
+                    '识别前先按正则清洗文件夹名，再去 TMDB 搜索。'
+                        '比如把 ^【.*?】 换成空，去掉「【日剧】」这类前缀。'
+                        '内置规则已经会去掉排序字母、分隔点和括号，搜不到时再只用中文名或英文名搜。',
+                    'Clean folder names with regex before searching TMDB (e.g. replace ^\\[.*?\\] with empty to strip release prefixes). '
+                        'Built-in rules already strip sort letters, dots, and brackets, and fall back to Chinese or English titles when needed.',
+                  ),
                   style: small,
                 )
               else
@@ -1414,9 +1568,9 @@ class _TitleRulesSectionState extends ConsumerState<_TitleRulesSection> {
               TextField(
                 key: const ValueKey('title-sample'),
                 controller: _sample,
-                decoration: const InputDecoration(
-                  hintText: '输入一个文件夹名试试',
-                  prefixIcon: Icon(CupertinoIcons.search, size: 14),
+                decoration: InputDecoration(
+                  hintText: l10n.tr('输入一个文件夹名试试', 'Type a folder name to test'),
+                  prefixIcon: const Icon(CupertinoIcons.search, size: 14),
                 ),
                 onChanged: (_) => setState(() {}),
               ),
@@ -1424,22 +1578,31 @@ class _TitleRulesSectionState extends ConsumerState<_TitleRulesSection> {
               Text(
                 key: const ValueKey('title-searches'),
                 pinned != null
-                    ? '指定匹配 →《${pinned.match.title}》，不搜索'
+                    ? l10n.tr(
+                        '指定匹配 →《${pinned.match.title}》，不搜索',
+                        'Pinned match → "${pinned.match.title}" (skips search)',
+                      )
                     : searches.isEmpty
-                    ? '没有可搜索的片名'
-                    : '依次搜索：${searches.join('  →  ')}',
+                    ? l10n.tr('没有可搜索的片名', 'No searchable title')
+                    : l10n.tr(
+                        '依次搜索：${searches.join('  →  ')}',
+                        'Search order: ${searches.join('  →  ')}',
+                      ),
                 style: small?.copyWith(color: p.textMuted),
               ),
             ],
           ),
         ),
-        const SectionLabel('指定匹配'),
+        SectionLabel(l10n.tr('指定匹配', 'Pinned Matches')),
         Panel(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           child: rules.pins.isEmpty
               ? Text(
-                  '总是搜不准的片名，在识别结果里点「重新搜索 TMDB」并勾选'
-                  '「以后文件夹名包含 … 时都匹配到选中的作品」，就会记在这里：文件夹名包含关键词时直接用这部作品。',
+                  l10n.tr(
+                    '总是搜不准的片名，在识别结果里点「重新搜索 TMDB」并勾选'
+                        '「以后文件夹名包含 … 时都匹配到选中的作品」，就会记在这里：文件夹名包含关键词时直接用这部作品。',
+                    'For titles that often mismatch, click "Search TMDB" in Review and check "Always match folders containing …" to pin them here.',
+                  ),
                   style: small,
                 )
               : Column(
@@ -1458,14 +1621,18 @@ class _TitleRulesSectionState extends ConsumerState<_TitleRulesSection> {
                             const SizedBox(width: 10),
                             Expanded(
                               child: Text(
-                                '包含「${pin.keyword}」→《${pin.match.title}》'
-                                '${pin.match.year == null ? '' : ' ${pin.match.year}'}',
+                                l10n.tr(
+                                  '包含「${pin.keyword}」→《${pin.match.title}》'
+                                      '${pin.match.year == null ? '' : ' ${pin.match.year}'}',
+                                  'Contains "${pin.keyword}" → ${pin.match.title}'
+                                      '${pin.match.year == null ? '' : ' (${pin.match.year})'}',
+                                ),
                                 style: const TextStyle(fontSize: 13),
                               ),
                             ),
                             IconButton(
                               key: ValueKey('remove-pin-${pin.keyword}'),
-                              tooltip: '删除',
+                              tooltip: l10n.delete,
                               iconSize: 14,
                               icon: const Icon(CupertinoIcons.xmark),
                               onPressed: () => _set(
@@ -1540,9 +1707,10 @@ class _VarChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = context.l10n;
     final p = Palette.of(context);
     return Tooltip(
-      message: _varTooltips[variable] ?? variable,
+      message: _varTooltip(variable, l10n),
       waitDuration: const Duration(milliseconds: 400),
       child: Hoverable(
         onTap: onTap,
@@ -1707,7 +1875,7 @@ class _RewriteRowState extends State<_RewriteRow> {
     try {
       RegExp(_find.text);
     } on FormatException catch (e) {
-      setState(() => _error = '正则有误：${e.message}');
+      setState(() => _error = e.message);
       return;
     }
     setState(() => _error = null);
@@ -1716,6 +1884,7 @@ class _RewriteRowState extends State<_RewriteRow> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = context.l10n;
     final p = Palette.of(context);
     const mono = TextStyle(
       fontFamily: monoFamily,
@@ -1733,7 +1902,9 @@ class _RewriteRowState extends State<_RewriteRow> {
                 child: TextField(
                   controller: _find,
                   style: mono,
-                  decoration: const InputDecoration(hintText: '查找（正则）'),
+                  decoration: InputDecoration(
+                    hintText: l10n.tr('查找（正则）', 'Find (regex)'),
+                  ),
                   onChanged: (_) => _changed(),
                 ),
               ),
@@ -1749,12 +1920,17 @@ class _RewriteRowState extends State<_RewriteRow> {
                 child: TextField(
                   controller: _to,
                   style: mono,
-                  decoration: const InputDecoration(hintText: r'替换为，$1 是分组'),
+                  decoration: InputDecoration(
+                    hintText: l10n.tr(
+                      r'替换为，$1 是分组',
+                      r'Replace with ($1 for group)',
+                    ),
+                  ),
                   onChanged: (_) => _changed(),
                 ),
               ),
               IconButton(
-                tooltip: '删除规则',
+                tooltip: l10n.tr('删除规则', 'Remove rule'),
                 iconSize: 14,
                 icon: const Icon(CupertinoIcons.xmark),
                 onPressed: widget.onRemove,
@@ -1765,7 +1941,7 @@ class _RewriteRowState extends State<_RewriteRow> {
             Padding(
               padding: const EdgeInsets.only(top: 4),
               child: Text(
-                _error!,
+                l10n.tr('正则有误：$_error', 'Invalid regex: $_error'),
                 style: TextStyle(fontSize: 12, color: p.danger),
               ),
             ),

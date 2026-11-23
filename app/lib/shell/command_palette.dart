@@ -9,11 +9,10 @@ import 'package:tidyreel_core/tidyreel_core.dart';
 
 import '../data/providers.dart';
 import '../data/settings.dart';
-import '../features/sources/connection_dialog.dart'
-    show connectionTypeIcon, connectionTypeLabel;
+import '../features/sources/connection_dialog.dart' show connectionTypeIcon;
 import '../features/sources/sources_page.dart' show editConnection, openBrowser;
 import '../features/sources/sources_providers.dart' show openConnectionProvider;
-import '../features/tasks/tasks_page.dart' show stageLabel;
+import '../l10n/l10n.dart';
 import '../ui/tokens.dart';
 import '../ui/widgets.dart';
 import '../widgets/common.dart';
@@ -149,6 +148,7 @@ class _CommandPaletteDialogState extends ConsumerState<_CommandPaletteDialog> {
   }
 
   List<_PaletteItem> _buildItems() {
+    final l10n = context.l10n;
     final hostContext = widget.hostContext;
     final hostRef = widget.hostRef;
     final conns = ref.watch(connectionsProvider);
@@ -167,61 +167,70 @@ class _CommandPaletteDialogState extends ConsumerState<_CommandPaletteDialog> {
       if (hostContext.mounted) hostContext.go(route);
     }
 
+    final navGroup = l10n.tr('页面导航', 'Navigation');
+    final actionsGroup = l10n.tr('快捷操作', 'Quick Actions');
+    final connGroup = l10n.tr('连接', 'Connections');
+    final favGroup = l10n.tr('收藏目录', 'Favorites');
+    final taskGroup = l10n.tr('最近任务', 'Recent Tasks');
+
     final items = <_PaletteItem>[
-      // 1. 页面导航
+      // 1. Navigation
       _PaletteItem(
         id: 'nav-sources',
-        group: '页面导航',
+        group: navGroup,
         icon: CupertinoIcons.folder,
-        title: '来源',
+        title: l10n.tr('来源', 'Sources'),
         subtitle: '/sources',
-        searchText: '来源 sources 连接 浏览 文件',
+        searchText: '来源 sources 连接 浏览 文件 connections browse files',
         onActivate: () => goRoute('/sources', resetBrowser: true),
       ),
       _PaletteItem(
         id: 'nav-tasks',
-        group: '页面导航',
+        group: navGroup,
         icon: CupertinoIcons.square_list,
-        title: '任务',
+        title: l10n.tr('任务', 'Tasks'),
         subtitle: '/tasks',
-        searchText: '任务 tasks 进度 历史 撤销',
+        searchText: '任务 tasks 进度 历史 撤销 progress history undo',
         onActivate: () => goRoute('/tasks'),
       ),
       _PaletteItem(
         id: 'nav-health',
-        group: '页面导航',
+        group: navGroup,
         icon: CupertinoIcons.checkmark_shield,
-        title: '体检',
+        title: l10n.tr('体检', 'Health'),
         subtitle: '/health',
-        searchText: '体检 health 媒体库 重复 清理 元数据',
+        searchText: '体检 health 媒体库 重复 清理 元数据 audit duplicates cleanup',
         onActivate: () => goRoute('/health'),
       ),
       _PaletteItem(
         id: 'nav-naming',
-        group: '页面导航',
+        group: navGroup,
         icon: CupertinoIcons.textformat,
-        title: '命名规则',
+        title: l10n.tr('命名规则', 'Naming Rules'),
         subtitle: '/naming',
-        searchText: '命名规则 naming 模板 播放器 片名',
+        searchText: '命名规则 naming 模板 播放器 片名 template player rules',
         onActivate: () => goRoute('/naming'),
       ),
       _PaletteItem(
         id: 'nav-settings',
-        group: '页面导航',
+        group: navGroup,
         icon: CupertinoIcons.gear,
-        title: '设置',
+        title: l10n.tr('设置', 'Settings'),
         subtitle: '/settings',
-        searchText: '设置 settings tmdb 外观 并发 限流',
+        searchText: '设置 settings tmdb 外观 并发 限流 语言 language appearance',
         onActivate: () => goRoute('/settings'),
       ),
 
-      // 2. 快捷操作
+      // 2. Quick Actions
       _PaletteItem(
         id: 'action-add-connection',
-        group: '快捷操作',
+        group: actionsGroup,
         icon: CupertinoIcons.plus_circle,
-        title: '添加连接',
-        subtitle: '新建 Alist、WebDAV、SMB 或本地目录',
+        title: l10n.tr('添加连接', 'Add Connection'),
+        subtitle: l10n.tr(
+          '新建 Alist、WebDAV、SMB 或本地目录',
+          'Create an Alist, WebDAV, SMB, or local folder source',
+        ),
         searchText: '添加连接 新建 连接 alist webdav smb local add connection',
         onActivate: () {
           _close();
@@ -232,10 +241,14 @@ class _CommandPaletteDialogState extends ConsumerState<_CommandPaletteDialog> {
       ),
       _PaletteItem(
         id: 'action-toggle-theme',
-        group: '快捷操作',
+        group: actionsGroup,
         icon: isDark ? CupertinoIcons.sun_max : CupertinoIcons.moon,
-        title: isDark ? '切换到浅色主题' : '切换到深色主题',
-        subtitle: '当前：${isDark ? '深色' : '浅色'}外观',
+        title: isDark
+            ? l10n.tr('切换到浅色主题', 'Switch to Light Theme')
+            : l10n.tr('切换到深色主题', 'Switch to Dark Theme'),
+        subtitle: isDark
+            ? l10n.tr('当前：深色外观', 'Current: Dark appearance')
+            : l10n.tr('当前：浅色外观', 'Current: Light appearance'),
         searchText: '切换浅色深色主题 主题 外观 浅色 深色 暗黑 theme dark light',
         onActivate: () {
           ref
@@ -249,16 +262,16 @@ class _CommandPaletteDialogState extends ConsumerState<_CommandPaletteDialog> {
         },
       ),
 
-      // 3. 所有已保存连接
+      // 3. Saved connections
       for (final c in conns)
         _PaletteItem(
           id: 'conn-${c.id.value}',
-          group: '连接',
+          group: connGroup,
           icon: connectionTypeIcon(c.type),
           title: c.name,
-          subtitle: '${connectionTypeLabel(c.type)} · ${c.endpoint}',
+          subtitle: '${l10n.connectionTypeLabel(c.type)} · ${c.endpoint}',
           searchText:
-              '连接 ${c.name} ${connectionTypeLabel(c.type)} ${c.endpoint} ${c.startDir}',
+              '连接 connection ${c.name} ${l10n.connectionTypeLabel(c.type)} ${c.endpoint} ${c.startDir}',
           onActivate: () {
             openBrowser(ref, c);
             _close();
@@ -266,16 +279,17 @@ class _CommandPaletteDialogState extends ConsumerState<_CommandPaletteDialog> {
           },
         ),
 
-      // 4. 所有收藏目录
+      // 4. Favorites
       for (final c in conns)
         for (final fav in c.favorites)
           _PaletteItem(
             id: 'fav-${c.id.value}-$fav',
-            group: '收藏目录',
+            group: favGroup,
             icon: CupertinoIcons.star,
-            title: pathBasename(fav),
+            title: pathBasename(fav, empty: l10n.rootDir),
             subtitle: '${c.name} · $fav',
-            searchText: '收藏 ${c.name} $fav ${pathBasename(fav)}',
+            searchText:
+                '收藏 favorite ${c.name} $fav ${pathBasename(fav, empty: l10n.rootDir)}',
             onActivate: () {
               openBrowser(ref, c, fav);
               _close();
@@ -283,24 +297,31 @@ class _CommandPaletteDialogState extends ConsumerState<_CommandPaletteDialog> {
             },
           ),
 
-      // 5. 最近任务
+      // 5. Recent tasks
       for (final t in tasks.take(10))
         _PaletteItem(
           id: 'task-${t.id.value}',
-          group: '最近任务',
+          group: taskGroup,
           icon: t.stage == TaskStage.awaitingReview
               ? CupertinoIcons.checkmark_circle
               : CupertinoIcons.clock,
           title: () {
             final first = t.paths.isEmpty
                 ? t.id.value
-                : pathBasename(t.paths.first);
-            return t.paths.length > 1 ? '$first 等 ${t.paths.length} 项' : first;
+                : pathBasename(t.paths.first, empty: l10n.rootDir);
+            return t.paths.length > 1
+                ? l10n.tr(
+                    '$first 等 ${t.paths.length} 项',
+                    '$first + ${t.paths.length - 1} more',
+                  )
+                : first;
           }(),
           subtitle:
-              '${stageLabel(t.stage)} · ${t.videoCount} 个视频 · ${t.id.value}',
+              '${l10n.stageLabel(t.stage)} · '
+              '${l10n.tr('${t.videoCount} 个视频', l10n.plural(t.videoCount, 'video'))}'
+              ' · ${t.id.value}',
           searchText:
-              '任务 ${t.id.value} ${t.paths.join(' ')} ${stageLabel(t.stage)}',
+              '任务 task ${t.id.value} ${t.paths.join(' ')} ${l10n.stageLabel(t.stage)}',
           onActivate: () {
             final route = t.stage == TaskStage.awaitingReview
                 ? '/tasks/${t.id.value}/review'
@@ -324,6 +345,7 @@ class _CommandPaletteDialogState extends ConsumerState<_CommandPaletteDialog> {
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
+    final l10n = context.l10n;
     final theme = Theme.of(context);
     final items = _buildItems();
     _visible = items;
@@ -391,7 +413,10 @@ class _CommandPaletteDialogState extends ConsumerState<_CommandPaletteDialog> {
                           color: p.text,
                         ),
                         decoration: InputDecoration(
-                          hintText: '搜索页面、连接、收藏目录或任务…',
+                          hintText: l10n.tr(
+                            '搜索页面、连接、收藏目录或任务…',
+                            'Search pages, connections, favorites, or tasks…',
+                          ),
                           hintStyle: TextStyle(
                             fontSize: TypeScale.headline,
                             color: p.textFaint,
@@ -411,7 +436,7 @@ class _CommandPaletteDialogState extends ConsumerState<_CommandPaletteDialog> {
                     ),
                     if (_query.text.isNotEmpty)
                       IconButton(
-                        tooltip: '清空',
+                        tooltip: l10n.clear,
                         iconSize: 14,
                         icon: Icon(
                           CupertinoIcons.xmark_circle_fill,
@@ -452,7 +477,7 @@ class _CommandPaletteDialogState extends ConsumerState<_CommandPaletteDialog> {
                   padding: const EdgeInsets.symmetric(vertical: 36),
                   child: Center(
                     child: Text(
-                      '没有匹配的结果',
+                      l10n.tr('没有匹配的结果', 'No matching results'),
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: p.textFaint,
                       ),
@@ -482,7 +507,10 @@ class _CommandPaletteDialogState extends ConsumerState<_CommandPaletteDialog> {
                 child: Row(
                   children: [
                     Text(
-                      '↑↓ 选择  ·  ↵ 打开  ·  Esc 关闭',
+                      l10n.tr(
+                        '↑↓ 选择  ·  ↵ 打开  ·  Esc 关闭',
+                        '↑↓ Select  ·  ↵ Open  ·  Esc Close',
+                      ),
                       style: TextStyle(
                         fontSize: TypeScale.small,
                         color: p.textFaint,
@@ -490,7 +518,10 @@ class _CommandPaletteDialogState extends ConsumerState<_CommandPaletteDialog> {
                     ),
                     const Spacer(),
                     Text(
-                      '${items.length} 项',
+                      l10n.tr(
+                        '${items.length} 项',
+                        l10n.plural(items.length, 'item'),
+                      ),
                       style: TextStyle(
                         fontSize: TypeScale.small,
                         color: p.textFaint,

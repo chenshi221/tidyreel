@@ -6,6 +6,7 @@ import 'package:tidyreel_core/tidyreel_core.dart';
 
 import '../../data/providers.dart';
 import '../../data/settings.dart';
+import '../../l10n/l10n.dart';
 import '../tasks/tasks_page.dart' show taskWorksProvider;
 
 import '../../ui/tokens.dart';
@@ -21,6 +22,7 @@ class SourcesPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final l10n = context.l10n;
     final open = ref.watch(openConnectionProvider);
     if (open != null) return FileBrowser(connection: open);
     final conns = ref.watch(connectionsEditorProvider);
@@ -36,7 +38,7 @@ class SourcesPage extends ConsumerWidget {
     final add = OutlinedButton.icon(
       onPressed: () => editConnection(context, ref),
       icon: const Icon(CupertinoIcons.plus, size: 13),
-      label: const Text('添加连接'),
+      label: Text(l10n.tr('添加连接', 'Add Connection')),
     );
     final missingTmdbKey =
         !ref.watch(bootstrapProvider).demo &&
@@ -48,7 +50,7 @@ class SourcesPage extends ConsumerWidget {
     final tmdbBanner = missingTmdbKey ? const _MissingTmdbKeyBanner() : null;
     if (conns.isEmpty) {
       return PageScaffold(
-        title: '来源',
+        title: l10n.tr('来源', 'Sources'),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -60,10 +62,13 @@ class SourcesPage extends ConsumerWidget {
             Expanded(
               child: EmptyState(
                 icon: CupertinoIcons.cloud,
-                title: '还没有连接',
-                message:
-                    '添加一个 Alist、WebDAV、SMB 共享或本地文件夹，就可以开始整理了\n\n'
-                    '添加连接 → 浏览并识别 → 确认后整理（可随时撤销）',
+                title: l10n.tr('还没有连接', 'No Connections Yet'),
+                message: l10n.tr(
+                  '添加一个 Alist、WebDAV、SMB 共享或本地文件夹，就可以开始整理了\n\n'
+                      '添加连接 → 浏览并识别 → 确认后整理（可随时撤销）',
+                  'Add an Alist, WebDAV, SMB share, or local folder to get started.\n\n'
+                      'Add source → Browse & match → Review & organize (always undoable)',
+                ),
                 action: add,
               ),
             ),
@@ -73,13 +78,13 @@ class SourcesPage extends ConsumerWidget {
     }
 
     return PageScaffold(
-      title: '来源',
+      title: l10n.tr('来源', 'Sources'),
       actions: [add],
       child: ListView(
         padding: const EdgeInsets.fromLTRB(48, 0, 32, 32),
         children: [
           if (tmdbBanner != null) ...[tmdbBanner, const SizedBox(height: 8)],
-          const SectionLabel('连接'),
+          SectionLabel(l10n.tr('连接', 'Connections')),
           Panel(
             padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
             child: Rows(
@@ -92,10 +97,13 @@ class SourcesPage extends ConsumerWidget {
               ],
             ),
           ),
-          const SectionLabel('收藏'),
+          SectionLabel(l10n.tr('收藏', 'Favorites')),
           if (favorites.isEmpty)
             Text(
-              '打开一个文件夹，点右上角的 ☆，常用目录就会出现在这里',
+              l10n.tr(
+                '打开一个文件夹，点右上角的 ☆，常用目录就会出现在这里',
+                'Open a folder and click ☆ in the top right to pin frequent directories here',
+              ),
               style: theme.textTheme.bodySmall,
             )
           else
@@ -109,7 +117,7 @@ class SourcesPage extends ConsumerWidget {
               ),
             ),
           if (done.isNotEmpty) ...[
-            const SectionLabel('最近整理'),
+            SectionLabel(l10n.tr('最近整理', 'Recently Organized')),
             Wrap(
               spacing: 20,
               runSpacing: 16,
@@ -134,6 +142,7 @@ class _MissingTmdbKeyBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
+    final l10n = context.l10n;
     return Container(
       key: const ValueKey('missing-tmdb-banner'),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -153,16 +162,19 @@ class _MissingTmdbKeyBanner extends StatelessWidget {
             color: p.warning,
           ),
           const SizedBox(width: 10),
-          const Expanded(
+          Expanded(
             child: Text(
-              '尚未配置 TMDB API key，无法自动识别影片信息',
-              style: TextStyle(fontSize: TypeScale.small),
+              l10n.tr(
+                '尚未配置 TMDB API key，无法自动识别影片信息',
+                'TMDB API key is not configured; automatic media matching is unavailable',
+              ),
+              style: const TextStyle(fontSize: TypeScale.small),
             ),
           ),
           const SizedBox(width: 8),
           OutlinedButton(
             onPressed: () => context.go('/settings'),
-            child: const Text('去设置'),
+            child: Text(l10n.tr('去设置', 'Settings')),
           ),
         ],
       ),
@@ -211,13 +223,19 @@ Future<void> editConnection(
       .setFor(draft.config.id, draft.dirPasswords);
   ref.invalidate(connectionStatusProvider(draft.config.id));
   if (isNew) {
+    final l10n = context.l10n;
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: Text('已添加「${draft.config.name}」'),
+          content: Text(
+            l10n.tr(
+              '已添加「${draft.config.name}」',
+              'Added "${draft.config.name}"',
+            ),
+          ),
           action: SnackBarAction(
-            label: '打开',
+            label: l10n.tr('打开', 'Open'),
             onPressed: () => openBrowser(ref, draft.config),
           ),
         ),
@@ -228,6 +246,7 @@ Future<void> editConnection(
 /// Deletes at once and offers 撤销: only the config and saved password go,
 /// never a file, so a confirmation dialog would be noise.
 void _delete(BuildContext context, WidgetRef ref, ConnectionConfig c) {
+  final l10n = context.l10n;
   final password = ref.read(connectionPasswordsProvider)[c.id];
   final dirPasswords = ref.read(connectionDirPasswordsProvider)[c.id];
   ref.read(connectionsEditorProvider.notifier).remove(c.id);
@@ -235,9 +254,9 @@ void _delete(BuildContext context, WidgetRef ref, ConnectionConfig c) {
     ..hideCurrentSnackBar()
     ..showSnackBar(
       SnackBar(
-        content: Text('已删除「${c.name}」'),
+        content: Text(l10n.tr('已删除「${c.name}」', 'Deleted "${c.name}"')),
         action: SnackBarAction(
-          label: '撤销',
+          label: l10n.undo,
           onPressed: () {
             ref.read(connectionsEditorProvider.notifier).upsert(c);
             if (password != null) {
@@ -265,39 +284,44 @@ class _ConnectionRow extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final l10n = context.l10n;
     final c = connection;
     final p = Palette.of(context);
     final status = ref.watch(connectionStatusProvider(c.id));
     final value = status.asData?.value;
     final (label, color) = switch (value?.status) {
-      ConnStatus.connected => ('已连接', p.success),
-      ConnStatus.authFailed => ('认证失败', p.danger),
-      ConnStatus.offline => ('离线', p.warning),
-      null => ('检测中', p.textFaint),
+      ConnStatus.connected => (l10n.tr('已连接', 'Connected'), p.success),
+      ConnStatus.authFailed => (l10n.tr('认证失败', 'Auth Failed'), p.danger),
+      ConnStatus.offline => (l10n.tr('离线', 'Offline'), p.warning),
+      null => (l10n.tr('检测中', 'Checking'), p.textFaint),
     };
     final failed = value != null && value.status != ConnStatus.connected;
     final start = normalizeDir(c.startDir);
 
     List<MenuAction?> menu() => [
-      MenuAction('打开', () => openBrowser(ref, c), icon: CupertinoIcons.folder),
       MenuAction(
-        '编辑',
+        l10n.tr('打开', 'Open'),
+        () => openBrowser(ref, c),
+        icon: CupertinoIcons.folder,
+      ),
+      MenuAction(
+        l10n.edit,
         () => editConnection(context, ref, c),
         icon: CupertinoIcons.pencil,
       ),
       MenuAction(
-        '复制为新连接',
+        l10n.tr('复制为新连接', 'Duplicate'),
         () => editConnection(context, ref, c, true),
         icon: CupertinoIcons.doc_on_doc,
       ),
       MenuAction(
-        '重新检测',
+        l10n.tr('重新检测', 'Recheck'),
         () => ref.invalidate(connectionStatusProvider(c.id)),
         icon: CupertinoIcons.arrow_clockwise,
       ),
       null,
       MenuAction(
-        '删除',
+        l10n.delete,
         () => _delete(context, ref, c),
         icon: CupertinoIcons.trash,
         destructive: true,
@@ -338,7 +362,7 @@ class _ConnectionRow extends ConsumerWidget {
                     const SizedBox(height: 5),
                     Row(
                       children: [
-                        _TypeTag(connectionTypeLabel(c.type)),
+                        _TypeTag(l10n.connectionTypeLabel(c.type)),
                         const SizedBox(width: 10),
                         Flexible(child: _Meta(null, c.endpoint, mono: true)),
                         if (start != '/') ...[
@@ -351,7 +375,7 @@ class _ConnectionRow extends ConsumerWidget {
                             child: _Meta(
                               CupertinoIcons.tray_arrow_down,
                               c.libraryRoot!,
-                              tooltip: '媒体库',
+                              tooltip: l10n.tr('媒体库', 'Media Library'),
                             ),
                           ),
                         ],
@@ -360,7 +384,7 @@ class _ConnectionRow extends ConsumerWidget {
                     if (failed && value.detail != null) ...[
                       const SizedBox(height: 4),
                       Text(
-                        value.detail!,
+                        l10n.coreMessage(value.detail!),
                         maxLines: 3,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(color: color, fontSize: 12),
@@ -373,12 +397,12 @@ class _ConnectionRow extends ConsumerWidget {
               StatusPill(label: label, color: color, busy: value == null),
               if (failed) ...[
                 IconButton(
-                  tooltip: '编辑',
+                  tooltip: l10n.edit,
                   icon: const Icon(CupertinoIcons.pencil),
                   onPressed: () => editConnection(context, ref, c),
                 ),
                 IconButton(
-                  tooltip: '重新检测',
+                  tooltip: l10n.tr('重新检测', 'Recheck'),
                   icon: const Icon(CupertinoIcons.arrow_clockwise),
                   onPressed: () =>
                       ref.invalidate(connectionStatusProvider(c.id)),
@@ -407,15 +431,17 @@ class _FavoriteRow extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final p = Palette.of(context);
-    final name = path.split('/').where((s) => s.isNotEmpty).lastOrNull ?? '根目录';
+    final l10n = context.l10n;
+    final name =
+        path.split('/').where((s) => s.isNotEmpty).lastOrNull ?? l10n.rootDir;
     List<MenuAction?> menu() => [
       MenuAction(
-        '打开',
+        l10n.tr('打开', 'Open'),
         () => openBrowser(ref, connection, path),
         icon: CupertinoIcons.folder,
       ),
       MenuAction(
-        '取消收藏',
+        l10n.tr('取消收藏', 'Unfavorite'),
         () => ref
             .read(connectionsEditorProvider.notifier)
             .toggleFavorite(connection.id, path),
@@ -487,6 +513,7 @@ class _RecentTask extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final p = Palette.of(context);
+    final l10n = context.l10n;
     final works = ref.watch(taskWorksProvider(task.id)).value ?? const [];
     final w = works.firstOrNull;
     final title = w == null
@@ -494,9 +521,12 @@ class _RecentTask extends ConsumerWidget {
                   ?.split('/')
                   .where((s) => s.isNotEmpty)
                   .lastOrNull ??
-              '根目录'
+              l10n.rootDir
         : works.length > 1
-        ? '${w.title} 等 ${works.length} 部'
+        ? l10n.tr(
+            '${w.title} 等 ${works.length} 部',
+            '${w.title} + ${works.length - 1} more',
+          )
         : w.title;
     return Hoverable(
       key: ValueKey('recent ${task.id.value}'),
@@ -530,7 +560,10 @@ class _RecentTask extends ConsumerWidget {
               Text(
                 [
                   if (w?.year != null) '${w!.year}',
-                  '${task.videoCount} 个视频',
+                  l10n.tr(
+                    '${task.videoCount} 个视频',
+                    l10n.plural(task.videoCount, 'video'),
+                  ),
                 ].join('  '),
                 style: TextStyle(fontSize: TypeScale.small, color: p.textFaint),
               ),

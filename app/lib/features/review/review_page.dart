@@ -9,6 +9,7 @@ import 'package:tidyreel_core/tidyreel_core.dart';
 
 import '../../data/providers.dart';
 import '../../data/settings.dart';
+import '../../l10n/l10n.dart';
 import '../../ui/tokens.dart';
 import '../../ui/widgets.dart';
 import '../../widgets/common.dart';
@@ -336,7 +337,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
       if (mounted) {
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
-          ..showSnackBar(SnackBar(content: Text('$e')));
+          ..showSnackBar(SnackBar(content: Text(context.trCore('$e'))));
       }
       return null;
     } finally {
@@ -374,9 +375,16 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
       },
     );
     if (r != null && mounted && targetTitle.isNotEmpty) {
+      final l10n = context.l10n;
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text('已归入「$targetTitle」')));
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              l10n.tr('已归入「$targetTitle」', 'Assigned to "$targetTitle"'),
+            ),
+          ),
+        );
     }
   }
 
@@ -414,9 +422,16 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
       },
     );
     if (r != null && mounted && targetTitle.isNotEmpty) {
+      final l10n = context.l10n;
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text('已合并到「$targetTitle」')));
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              l10n.tr('已合并到「$targetTitle」', 'Merged into "$targetTitle"'),
+            ),
+          ),
+        );
     }
   }
 
@@ -431,15 +446,16 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
     final created = r.scan.groups
         .where((g) => !beforeIds.contains(g.id))
         .firstOrNull;
+    final l10n = context.l10n;
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: const Text('已拆分为新作品'),
+          content: Text(l10n.tr('已拆分为新作品', 'Split into a new group')),
           action: created == null
               ? null
               : SnackBarAction(
-                  label: '去查看',
+                  label: l10n.tr('去查看', 'View'),
                   onPressed: () {
                     if (!mounted) return;
                     setState(() {
@@ -514,15 +530,22 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
       before.copyWith(overrides: {...before.overrides, ...set}),
     );
     if (!mounted || set.length < 2) return;
+    final l10n = context.l10n;
+    final shifted = set.length - 1;
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: Text('后面 ${set.length - 1} 个文件已依次顺延'),
+          content: Text(
+            l10n.tr(
+              '后面 $shifted 个文件已依次顺延',
+              'Shifted $shifted following ${shifted == 1 ? 'file' : 'files'}',
+            ),
+          ),
           persist: false,
           duration: const Duration(seconds: 6),
           action: SnackBarAction(
-            label: '撤销',
+            label: l10n.undo,
             onPressed: () => _update(g.id, before),
           ),
         ),
@@ -566,16 +589,20 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
   }
 
   void _showShortcutsSheet() {
-    const shortcuts = [
-      ('↑ / ↓', '切换左侧作品'),
-      ('← / →', '切换季标签 / 文件夹'),
-      ('空格', '勾选或取消当前作品'),
-      ('⌘F / Ctrl+F', '聚焦作品搜索框'),
-      ('⌘↩ / Ctrl+↩', '开始整理'),
-    ];
     showDialog<void>(
       context: context,
       builder: (ctx) {
+        final l10n = ctx.l10n;
+        final shortcuts = [
+          ('↑ / ↓', l10n.tr('切换左侧作品', 'Switch title in sidebar')),
+          ('← / →', l10n.tr('切换季标签 / 文件夹', 'Switch season / folder tab')),
+          (
+            l10n.tr('空格', 'Space'),
+            l10n.tr('勾选或取消当前作品', 'Toggle current title'),
+          ),
+          ('⌘F / Ctrl+F', l10n.tr('聚焦作品搜索框', 'Focus title search')),
+          ('⌘↩ / Ctrl+↩', l10n.tr('开始整理', 'Start organizing')),
+        ];
         final p = Palette.of(ctx);
         return MacSheet(
           child: SizedBox(
@@ -586,7 +613,10 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text('快捷键', style: Theme.of(ctx).textTheme.titleMedium),
+                  Text(
+                    l10n.tr('快捷键', 'Keyboard Shortcuts'),
+                    style: Theme.of(ctx).textTheme.titleMedium,
+                  ),
                   const SizedBox(height: 12),
                   Panel(
                     framed: true,
@@ -642,7 +672,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                     alignment: Alignment.centerRight,
                     child: OutlinedButton(
                       onPressed: () => Navigator.pop(ctx),
-                      child: const Text('关闭'),
+                      child: Text(l10n.close),
                     ),
                   ),
                 ],
@@ -658,6 +688,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
     if (_executing || _pendingUpdates > 0) return;
     var r = _review;
     if (r == null) return;
+    final l10n = context.l10n;
     // Shows landing in a folder that's already there (or filled twice by
     // this task): ask every time, and say where.
     final merges = [
@@ -668,7 +699,14 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(
-          SnackBar(content: Text('仍有 ${r.preview.conflicts.length} 处冲突，请先处理')),
+          SnackBar(
+            content: Text(
+              l10n.tr(
+                '仍有 ${r.preview.conflicts.length} 处冲突，请先处理',
+                'Resolve ${l10n.plural(r.preview.conflicts.length, 'remaining conflict')} first',
+              ),
+            ),
+          ),
         );
       return;
     }
@@ -700,7 +738,10 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
           ..showSnackBar(
             SnackBar(
               content: Text(
-                '仍有 ${r.preview.conflicts.length} 处冲突，可在弹窗中选择「分开保留」或先修改集号',
+                l10n.tr(
+                  '仍有 ${r.preview.conflicts.length} 处冲突，可在弹窗中选择「分开保留」或先修改集号',
+                  '${l10n.plural(r.preview.conflicts.length, 'conflict')} remaining — choose "Keep separate" in the dialog or adjust episode numbers',
+                ),
               ),
             ),
           );
@@ -732,7 +773,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
       if (mounted) {
         messenger
           ..hideCurrentSnackBar()
-          ..showSnackBar(SnackBar(content: Text('$e')));
+          ..showSnackBar(SnackBar(content: Text(l10n.coreMessage('$e'))));
       }
     } finally {
       if (mounted) setState(() => _executing = false);
@@ -833,16 +874,18 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
         .firstOrNull;
     final paths = taskSummary?.paths;
     final scrapeOnly = taskSummary?.scrapeOnly ?? false;
+    final l10n = context.l10n;
     return PageScaffold(
-      title: '识别结果',
+      title: l10n.tr('识别结果', 'Review Matches'),
       subtitle: [
         if (paths != null && paths.length == 1) paths.single,
-        if (paths != null && paths.length > 1) '${paths.length} 个文件夹',
+        if (paths != null && paths.length > 1)
+          l10n.tr('${paths.length} 个文件夹', l10n.plural(paths.length, 'folder')),
       ].join('  ·  '),
       actions: [
         if (scrapeOnly)
           Tag(
-            '仅刮削',
+            l10n.tr('仅刮削', 'Scrape only'),
             key: const ValueKey('scrape-only-tag'),
             color: Palette.of(context).accent,
           ),
@@ -857,27 +900,32 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
           ),
         IconButton(
           key: const ValueKey('shortcuts-button'),
-          tooltip: '快捷键（点击查看）\n↑ ↓  切换作品\n← →  切换季 / 文件夹\n空格  勾选或取消作品\n⌘F  搜索\n⌘↩  开始整理',
+          tooltip: l10n.tr(
+            '快捷键（点击查看）\n↑ ↓  切换作品\n← →  切换季 / 文件夹\n空格  勾选或取消作品\n⌘F  搜索\n⌘↩  开始整理',
+            'Keyboard shortcuts (click to view)\n↑ ↓  Switch title\n← →  Switch season / folder\nSpace  Toggle title\n⌘F  Search\n⌘↩  Start organizing',
+          ),
           icon: const Icon(CupertinoIcons.keyboard, size: 16),
           onPressed: _showShortcutsSheet,
         ),
         IconButton(
           key: const ValueKey('toggle-actions'),
-          tooltip: _showActions ? '隐藏作品操作' : '显示作品操作',
+          tooltip: _showActions
+              ? l10n.tr('隐藏作品操作', 'Hide inspector')
+              : l10n.tr('显示作品操作', 'Show inspector'),
           icon: const Icon(CupertinoIcons.sidebar_right),
           onPressed: () => setState(() => _showActions = !_showActions),
         ),
       ],
       leading: IconButton(
-        tooltip: '返回任务',
+        tooltip: l10n.tr('返回任务', 'Back to Tasks'),
         icon: const Icon(CupertinoIcons.chevron_left),
         onPressed: () => context.go('/tasks'),
       ),
       child: _error != null
           ? EmptyState(
               icon: CupertinoIcons.exclamationmark_triangle,
-              title: '无法读取识别结果',
-              message: '$_error',
+              title: l10n.tr('无法读取识别结果', 'Could not load review'),
+              message: l10n.coreMessage('$_error'),
             )
           : r == null
           ? const Center(child: Spinner(size: 20))
@@ -900,6 +948,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
   }
 
   Widget _body(TaskReview r) {
+    final l10n = context.l10n;
     final g = _selectedGroup;
     final matchedBase = _baseGroups(matched: true);
     final unmatchedBase = _baseGroups(matched: false);
@@ -1019,12 +1068,12 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                             CupertinoIcons.search,
                             size: 14,
                           ),
-                          hintText: '搜索作品  ⌘F',
+                          hintText: l10n.tr('搜索作品  ⌘F', 'Search titles  ⌘F'),
                           suffixIcon: _search.text.isEmpty
                               ? null
                               : IconButton(
                                   key: const ValueKey('review-search-clear'),
-                                  tooltip: '清空搜索',
+                                  tooltip: l10n.tr('清空搜索', 'Clear search'),
                                   iconSize: 14,
                                   icon: const Icon(
                                     CupertinoIcons.xmark_circle_fill,
@@ -1042,8 +1091,14 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                       padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
                       child: Segmented<int>(
                         options: {
-                          0: '可整理 ${matchedBase.length}',
-                          1: '需手动匹配 ${unmatchedBase.length}',
+                          0: l10n.tr(
+                            '可整理 ${matchedBase.length}',
+                            'Matched ${matchedBase.length}',
+                          ),
+                          1: l10n.tr(
+                            '需手动匹配 ${unmatchedBase.length}',
+                            'Unmatched ${unmatchedBase.length}',
+                          ),
                         },
                         value: _tab,
                         onChanged: (v) => setState(() => _changeTab(v)),
@@ -1061,7 +1116,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                               children: [
                                 ReviewFilterChip(
                                   key: const ValueKey('filter-all'),
-                                  label: '全部',
+                                  label: l10n.tr('全部', 'All'),
                                   selected: _filter == ReviewFilter.all,
                                   onTap: () => setState(() {
                                     _filter = ReviewFilter.all;
@@ -1072,7 +1127,10 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                                     _filter == ReviewFilter.conflict)
                                   ReviewFilterChip(
                                     key: const ValueKey('filter-conflict'),
-                                    label: '冲突 $conflictCount',
+                                    label: l10n.tr(
+                                      '冲突 $conflictCount',
+                                      'Conflicts $conflictCount',
+                                    ),
                                     color: p.danger,
                                     selected: _filter == ReviewFilter.conflict,
                                     onTap: () => setState(() {
@@ -1084,7 +1142,10 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                                     _filter == ReviewFilter.incomplete)
                                   ReviewFilterChip(
                                     key: const ValueKey('filter-incomplete'),
-                                    label: '缺集 $incompleteCount',
+                                    label: l10n.tr(
+                                      '缺集 $incompleteCount',
+                                      'Missing $incompleteCount',
+                                    ),
                                     color: p.warning,
                                     selected:
                                         _filter == ReviewFilter.incomplete,
@@ -1097,7 +1158,10 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                                     _filter == ReviewFilter.lowConfidence)
                                   ReviewFilterChip(
                                     key: const ValueKey('filter-lowConfidence'),
-                                    label: '低置信 $lowConfCount',
+                                    label: l10n.tr(
+                                      '低置信 $lowConfCount',
+                                      'Low conf $lowConfCount',
+                                    ),
                                     color: p.warning,
                                     selected:
                                         _filter == ReviewFilter.lowConfidence,
@@ -1113,7 +1177,10 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                               Row(
                                 children: [
                                   Text(
-                                    '已选 $selectedVisibleCount/${visible.length}',
+                                    l10n.tr(
+                                      '已选 $selectedVisibleCount/${visible.length}',
+                                      'Selected $selectedVisibleCount/${visible.length}',
+                                    ),
                                     style: TextStyle(
                                       fontSize: 11.5,
                                       color: p.textFaint,
@@ -1134,7 +1201,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                                         vertical: 2,
                                       ),
                                       child: Text(
-                                        '全选',
+                                        l10n.tr('全选', 'All'),
                                         style: TextStyle(
                                           fontSize: 11.5,
                                           color: hover ? p.text : p.textMuted,
@@ -1160,7 +1227,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                                         vertical: 2,
                                       ),
                                       child: Text(
-                                        '反选',
+                                        l10n.tr('反选', 'Invert'),
                                         style: TextStyle(
                                           fontSize: 11.5,
                                           color: hover ? p.text : p.textMuted,
@@ -1180,19 +1247,27 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                           ? EmptyState(
                               icon: CupertinoIcons.tray,
                               title: _search.text.trim().isNotEmpty
-                                  ? '没有符合搜索条件的作品'
+                                  ? l10n.tr('没有符合搜索条件的作品', 'No matching titles')
                                   : _tab == 0 && _filter != ReviewFilter.all
-                                  ? '没有符合筛选条件的作品'
+                                  ? l10n.tr(
+                                      '没有符合筛选条件的作品',
+                                      'No titles match filter',
+                                    )
                                   : _tab == 0
-                                  ? '没有可整理的作品'
-                                  : '没有需要手动匹配的作品',
+                                  ? l10n.tr('没有可整理的作品', 'No matched titles')
+                                  : l10n.tr(
+                                      '没有需要手动匹配的作品',
+                                      'No unmatched titles',
+                                    ),
                               action: _tab == 0 && _filter != ReviewFilter.all
                                   ? TextButton(
                                       onPressed: () => setState(() {
                                         _filter = ReviewFilter.all;
                                         _selectFirstVisible();
                                       }),
-                                      child: const Text('显示全部作品'),
+                                      child: Text(
+                                        l10n.tr('显示全部作品', 'Show all titles'),
+                                      ),
                                     )
                                   : otherGroups.isEmpty
                                   ? null
@@ -1201,8 +1276,14 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                                           setState(() => _changeTab(1 - _tab)),
                                       child: Text(
                                         _tab == 1
-                                            ? '查看可整理的 ${otherGroups.length} 个作品'
-                                            : '查看需手动匹配的 ${otherGroups.length} 个作品',
+                                            ? l10n.tr(
+                                                '查看可整理的 ${otherGroups.length} 个作品',
+                                                'View ${l10n.plural(otherGroups.length, 'matched title')}',
+                                              )
+                                            : l10n.tr(
+                                                '查看需手动匹配的 ${otherGroups.length} 个作品',
+                                                'View ${l10n.plural(otherGroups.length, 'unmatched title')}',
+                                              ),
                                       ),
                                     ),
                             )
@@ -1268,7 +1349,13 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
                                       Text(
-                                        '未归类 ${r.scan.unassigned.length} 个文件',
+                                        l10n.tr(
+                                          '未归类 ${r.scan.unassigned.length} 个文件',
+                                          l10n.plural(
+                                            r.scan.unassigned.length,
+                                            'unassigned file',
+                                          ),
+                                        ),
                                         style: theme.textTheme.bodyMedium
                                             ?.copyWith(
                                               fontWeight: FontWeight.w500,
@@ -1277,8 +1364,14 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                                       const SizedBox(height: 1),
                                       Text(
                                         unassignedDeletes > 0
-                                            ? '其中 $unassignedDeletes 个垃圾文件将被永久删除'
-                                            : '没归进任何作品，不会被整理',
+                                            ? l10n.tr(
+                                                '其中 $unassignedDeletes 个垃圾文件将被永久删除',
+                                                '${l10n.plural(unassignedDeletes, 'junk file')} marked for permanent deletion',
+                                              )
+                                            : l10n.tr(
+                                                '没归进任何作品，不会被整理',
+                                                'Not in any title; left untouched',
+                                              ),
                                         style: theme.textTheme.bodySmall
                                             ?.copyWith(
                                               color: unassignedDeletes > 0
@@ -1354,7 +1447,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                                   CupertinoIcons.chevron_left,
                                   size: 14,
                                 ),
-                                label: const Text('返回作品'),
+                                label: Text(l10n.tr('返回作品', 'Back to titles')),
                               ),
                             ),
                             Expanded(
@@ -1371,9 +1464,12 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                         ),
                       )
                     : g == null
-                    ? const EmptyState(
+                    ? EmptyState(
                         icon: CupertinoIcons.rectangle_stack,
-                        title: '选择左侧的作品查看明细',
+                        title: l10n.tr(
+                          '选择左侧的作品查看明细',
+                          'Select a title on the left to inspect',
+                        ),
                       )
                     : Padding(
                         padding: const EdgeInsets.only(top: 12, bottom: 104),
@@ -1477,6 +1573,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
   }
 
   Widget _bottomBar(TaskReview r) {
+    final l10n = context.l10n;
     final p = Palette.of(context);
     final conflicts = r.preview.conflicts.length;
     final merges = [
@@ -1494,11 +1591,13 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
     final ops = r.preview.ops.where((o) => o.selected).length;
     String? blockedReason;
     if (_executing) {
-      blockedReason = scrapeOnly ? '正在刮削，请稍候' : '正在整理，请稍候';
+      blockedReason = scrapeOnly
+          ? l10n.tr('正在刮削，请稍候', 'Scraping, please wait')
+          : l10n.tr('正在整理，请稍候', 'Organizing, please wait');
     } else if (_pendingUpdates > 0) {
-      blockedReason = '正在更新整理计划，请稍候';
+      blockedReason = l10n.tr('正在更新整理计划，请稍候', 'Updating plan, please wait');
     } else if (conflicts > 0 && merges.isEmpty) {
-      blockedReason = '存在冲突，请先处理';
+      blockedReason = l10n.tr('存在冲突，请先处理', 'Resolve conflicts first');
     } else if (ops == 0) {
       final matched = r.scan.groups
           .where((g) => isMatched(g, r.decisions[g.id]))
@@ -1507,11 +1606,20 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
           .where((g) => r.decisions[g.id]?.selected ?? true)
           .toList();
       if (matched.isEmpty) {
-        blockedReason = '没有可整理的作品，请先手动匹配';
+        blockedReason = l10n.tr(
+          '没有可整理的作品，请先手动匹配',
+          'No matched titles; match manually first',
+        );
       } else if (selected.isEmpty) {
-        blockedReason = '未勾选作品，请在左侧勾选';
+        blockedReason = l10n.tr(
+          '未勾选作品，请在左侧勾选',
+          'No titles selected; check titles on the left',
+        );
       } else if (r.preview.ops.any((o) => o.warning != null)) {
-        blockedReason = '有文件需要确认，请勾选文件或修正对应关系';
+        blockedReason = l10n.tr(
+          '有文件需要确认，请勾选文件或修正对应关系',
+          'Some files need review; check files or adjust episodes',
+        );
       } else if (selected.any(
         (g) => g.files.any(
           (f) =>
@@ -1519,17 +1627,29 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
               !(r.decisions[g.id]?.overrides[f.path]?.ignore ?? false),
         ),
       )) {
-        blockedReason = '没有可执行的改动，请检查文件对应关系';
+        blockedReason = l10n.tr(
+          '没有可执行的改动，请检查文件对应关系',
+          'No executable changes; check file mappings',
+        );
       } else {
-        blockedReason = '未选择可整理的文件，请勾选文件';
+        blockedReason = l10n.tr(
+          '未选择可整理的文件，请勾选文件',
+          'No files selected; check files to organize',
+        );
       }
     }
     final canStart = blockedReason == null;
     final conflictLabel = conflicts == 0
-        ? '没有冲突'
+        ? l10n.tr('没有冲突', 'No conflicts')
         : merges.isNotEmpty
-        ? '$conflicts 处冲突，点「开始整理」可分开保留'
-        : '$conflicts 处冲突，处理后才能整理';
+        ? l10n.tr(
+            '$conflicts 处冲突，点「开始整理」可分开保留',
+            '${l10n.plural(conflicts, 'conflict')} — click Organize to keep separate',
+          )
+        : l10n.tr(
+            '$conflicts 处冲突，处理后才能整理',
+            '${l10n.plural(conflicts, 'conflict')} to resolve first',
+          );
     final conflictWidget = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -1567,12 +1687,19 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (scrapeOnly)
-            Tag('仅刮削 · 保留原文件名', color: p.accent)
+            Tag(
+              l10n.tr('仅刮削 · 保留原文件名', 'Scrape only · Keep filenames'),
+              color: p.accent,
+            )
           else
             Segmented<OrganizeMode>(
-              options: const {
-                OrganizeMode.inPlace: '原地整理',
-                OrganizeMode.moveToLibrary: '移动到媒体库',
+              options: {
+                OrganizeMode.inPlace: l10n.organizeModeLabel(
+                  OrganizeMode.inPlace,
+                ),
+                OrganizeMode.moveToLibrary: l10n.organizeModeLabel(
+                  OrganizeMode.moveToLibrary,
+                ),
               },
               value: mode ?? OrganizeMode.inPlace,
               onChanged: (v) async {
@@ -1583,8 +1710,14 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
                 } on Object catch (e) {
                   if (!mounted) return;
                   final msg = '$e'.contains('libraryRoot')
-                      ? '这个连接还没设置媒体库，去「来源」编辑连接后再选'
-                      : '没能切换整理方式，请重试';
+                      ? l10n.tr(
+                          '这个连接还没设置媒体库，去「来源」编辑连接后再选',
+                          'No library path set for this connection. Edit it in Sources first.',
+                        )
+                      : l10n.tr(
+                          '没能切换整理方式，请重试',
+                          'Could not switch organize mode. Please try again.',
+                        );
                   ScaffoldMessenger.of(context)
                     ..hideCurrentSnackBar()
                     ..showSnackBar(SnackBar(content: Text(msg)));
@@ -1596,7 +1729,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
           const SizedBox(width: 16),
           if (conflicts > 0)
             Tooltip(
-              message: '点击定位到冲突文件',
+              message: l10n.tr('点击定位到冲突文件', 'Jump to first conflict'),
               child: Hoverable(
                 key: const ValueKey('conflict-jump'),
                 onTap: () => _jumpToFirstConflict(r),
@@ -1613,7 +1746,7 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
             conflictWidget,
           const SizedBox(width: 12),
           Text(
-            '$ops 处改动',
+            l10n.tr('$ops 处改动', l10n.plural(ops, 'change')),
             style: TextStyle(fontSize: TypeScale.small, color: p.textMuted),
           ),
           const SizedBox(width: 18),
@@ -1622,7 +1755,11 @@ class _ReviewPageState extends ConsumerState<ReviewPage> {
             child: FilledButton(
               key: const ValueKey('execute-button'),
               onPressed: canStart ? _execute : null,
-              child: Text(scrapeOnly ? '开始刮削' : '开始整理'),
+              child: Text(
+                scrapeOnly
+                    ? l10n.tr('开始刮削', 'Start Scraping')
+                    : l10n.tr('开始整理', 'Start Organizing'),
+              ),
             ),
           ),
         ],

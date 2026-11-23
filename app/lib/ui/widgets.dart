@@ -1,6 +1,7 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
+import '../l10n/l10n.dart';
 import 'tokens.dart';
 
 /// A section of a page: a slightly lighter sheet on the paper. No shadow;
@@ -766,7 +767,7 @@ class MoreButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Builder(
     builder: (context) => IconButton(
-      tooltip: '更多',
+      tooltip: context.l10n.more,
       icon: const Icon(CupertinoIcons.ellipsis, size: 16),
       onPressed: () {
         final box = context.findRenderObject()! as RenderBox;

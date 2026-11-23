@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
+import '../../l10n/l10n.dart';
 import '../../ui/tokens.dart';
 import '../../ui/widgets.dart';
 import '../../widgets/common.dart';
@@ -41,8 +42,13 @@ Future<Map<int, Set<int>>> episodesIn(StorageBackend be, String dir) async {
 }
 
 /// 「Season 01 E01–E05、E07；Season 02」.
-String describeEpisodes(Map<int, Set<int>> bySeason) {
-  if (bySeason.isEmpty) return '（没有识别到剧集）';
+String describeEpisodes(
+  Map<int, Set<int>> bySeason, {
+  AppL10n l10n = AppL10n.zh,
+}) {
+  if (bySeason.isEmpty) {
+    return l10n.tr('（没有识别到剧集）', '(no episodes detected)');
+  }
   String two(int n) => n.toString().padLeft(2, '0');
   final parts = <String>[];
   for (final s in bySeason.keys.toList()..sort()) {
@@ -57,9 +63,11 @@ String describeEpisodes(Map<int, Set<int>> bySeason) {
       i = j;
     }
     final name = s == 0 ? 'Specials' : 'Season ${two(s)}';
-    parts.add(runs.isEmpty ? name : '$name ${runs.join('、')}');
+    parts.add(
+      runs.isEmpty ? name : '$name ${runs.join(l10n.isEn ? ', ' : '、')}',
+    );
   }
-  return parts.join('；');
+  return parts.join(l10n.isEn ? '; ' : '；');
 }
 
 /// Asks about each [PlanMerge] before running: where the show goes, what is
@@ -102,21 +110,24 @@ Future<Set<GroupId>?> showMergeDialog(
     return out;
   }
 
-  String separatedPreview(PlanMerge m, MediaGroup? g) {
+  String separatedPreview(PlanMerge m, MediaGroup? g, AppL10n l10n) {
     final effectiveMode =
         mode ??
         (g != null && _parentDir(m.into) == _parentDir(g.rootDir)
             ? OrganizeMode.inPlace
             : OrganizeMode.moveToLibrary);
     if (effectiveMode == OrganizeMode.inPlace && g != null) {
-      return '保留原目录：${g.rootDir}';
+      return l10n.tr(
+        '保留原目录：${g.rootDir}',
+        'Keep original folder: ${g.rootDir}',
+      );
     }
     var n = 2;
     for (final prev in merges) {
       if (prev.group == m.group) break;
       if (prev.into == m.into && separate.contains(prev.group)) n++;
     }
-    return '独立目录：${m.into} ($n)';
+    return l10n.tr('独立目录：${m.into} ($n)', 'Separate folder: ${m.into} ($n)');
   }
 
   return showDialog<Set<GroupId>>(
@@ -124,6 +135,7 @@ Future<Set<GroupId>?> showMergeDialog(
     builder: (ctx) => StatefulBuilder(
       builder: (ctx, setState) {
         final p = Palette.of(ctx);
+        final l10n = ctx.l10n;
         final small = TextStyle(fontSize: 12, color: p.textMuted);
         return MacSheet(
           child: SizedBox(
@@ -135,11 +147,17 @@ Future<Set<GroupId>?> showMergeDialog(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
-                    '合并到已有剧集文件夹？',
+                    l10n.tr('合并到已有剧集文件夹？', 'Merge into Existing Show Folder?'),
                     style: Theme.of(ctx).textTheme.titleMedium,
                   ),
                   const SizedBox(height: 4),
-                  Text('下面的作品会和已有的（或本次另一个文件夹里的）同一部作品放进同一个文件夹。', style: small),
+                  Text(
+                    l10n.tr(
+                      '下面的作品会和已有的（或本次另一个文件夹里的）同一部作品放进同一个文件夹。',
+                      'The titles below will be combined with an existing folder (or another folder in this batch) for the same show.',
+                    ),
+                    style: small,
+                  ),
                   const SizedBox(height: 12),
                   ConstrainedBox(
                     constraints: const BoxConstraints(maxHeight: 420),
@@ -157,6 +175,8 @@ Future<Set<GroupId>?> showMergeDialog(
                                     ? null
                                     : byId[m.withGroup];
                                 final keep = separate.contains(m.group);
+                                final name =
+                                    match?.title ?? g?.anchorTitle ?? '';
                                 return Container(
                                   key: ValueKey('merge-${m.group.value}'),
                                   margin: const EdgeInsets.only(bottom: 10),
@@ -187,8 +207,9 @@ Future<Set<GroupId>?> showMergeDialog(
                                               CrossAxisAlignment.start,
                                           children: [
                                             Text(
-                                              '《${match?.title ?? g?.anchorTitle ?? ''}》'
-                                              '${match?.year == null ? '' : ' (${match!.year})'}',
+                                              l10n.isEn
+                                                  ? '$name${match?.year == null ? '' : ' (${match!.year})'}'
+                                                  : '《$name》${match?.year == null ? '' : ' (${match!.year})'}',
                                               style: const TextStyle(
                                                 fontSize: TypeScale.body,
                                                 fontWeight: FontWeight.w500,
@@ -197,8 +218,11 @@ Future<Set<GroupId>?> showMergeDialog(
                                             const SizedBox(height: 4),
                                             SelectableText(
                                               keep
-                                                  ? separatedPreview(m, g)
-                                                  : '合并到 ${m.into}',
+                                                  ? separatedPreview(m, g, l10n)
+                                                  : l10n.tr(
+                                                      '合并到 ${m.into}',
+                                                      'Merge into ${m.into}',
+                                                    ),
                                               style: TextStyle(
                                                 fontSize: TypeScale.small,
                                                 color: p.text,
@@ -210,25 +234,43 @@ Future<Set<GroupId>?> showMergeDialog(
                                                 future: existingFutures[m.into],
                                                 builder: (context, snap) => Text(
                                                   snap.hasError
-                                                      ? '已有文件夹（读取内容失败）'
+                                                      ? l10n.tr(
+                                                          '已有文件夹（读取内容失败）',
+                                                          'Existing folder (failed to read contents)',
+                                                        )
                                                       : !snap.hasData
-                                                      ? '已有：读取中…'
-                                                      : '已有：${describeEpisodes(snap.data!)}',
+                                                      ? l10n.tr(
+                                                          '已有：读取中…',
+                                                          'Existing: loading…',
+                                                        )
+                                                      : l10n.tr(
+                                                          '已有：${describeEpisodes(snap.data!, l10n: l10n)}',
+                                                          'Existing: ${describeEpisodes(snap.data!, l10n: l10n)}',
+                                                        ),
                                                   style: small,
                                                 ),
                                               )
                                             else if (other != null)
                                               Text(
-                                                '和本次的 ${other.rootDir} 放在一起',
+                                                l10n.tr(
+                                                  '和本次的 ${other.rootDir} 放在一起',
+                                                  'Combined with ${other.rootDir} from this batch',
+                                                ),
                                                 style: small,
                                               ),
                                             Text(
-                                              '本次加入：${describeEpisodes(adding(m))}',
+                                              l10n.tr(
+                                                '本次加入：${describeEpisodes(adding(m), l10n: l10n)}',
+                                                'Adding: ${describeEpisodes(adding(m), l10n: l10n)}',
+                                              ),
                                               style: small,
                                             ),
                                             if (g != null)
                                               Text(
-                                                '本次来源：${g.rootDir}',
+                                                l10n.tr(
+                                                  '本次来源：${g.rootDir}',
+                                                  'Source: ${g.rootDir}',
+                                                ),
                                                 style: small,
                                               ),
                                           ],
@@ -239,9 +281,12 @@ Future<Set<GroupId>?> showMergeDialog(
                                         key: ValueKey(
                                           'merge-choice-${m.group.value}',
                                         ),
-                                        options: const {
-                                          false: '合并',
-                                          true: '分开保留',
+                                        options: {
+                                          false: l10n.tr('合并', 'Merge'),
+                                          true: l10n.tr(
+                                            '分开保留',
+                                            'Keep Separate',
+                                          ),
                                         },
                                         value: keep,
                                         onChanged: (v) => setState(
@@ -259,20 +304,26 @@ Future<Set<GroupId>?> showMergeDialog(
                       ),
                     ),
                   ),
-                  Text('已有的集不会被覆盖：两边有相同的集时会标为冲突，由你决定保留哪个。', style: small),
+                  Text(
+                    l10n.tr(
+                      '已有的集不会被覆盖：两边有相同的集时会标为冲突，由你决定保留哪个。',
+                      'Existing episodes are never overwritten; duplicate episodes are flagged as conflicts for you to resolve.',
+                    ),
+                    style: small,
+                  ),
                   const SizedBox(height: 12),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
                       OutlinedButton(
                         onPressed: () => Navigator.pop(ctx),
-                        child: const Text('取消'),
+                        child: Text(l10n.cancel),
                       ),
                       const SizedBox(width: 8),
                       FilledButton(
                         key: const ValueKey('merge-continue'),
                         onPressed: () => Navigator.pop(ctx, separate),
-                        child: const Text('继续'),
+                        child: Text(l10n.tr('继续', 'Continue')),
                       ),
                     ],
                   ),

@@ -55,7 +55,15 @@ class Completeness {
 
   bool get incomplete => tmdbEpisodes != null && localEpisodes < tmdbEpisodes!;
 
-  String get label {
+  String get label => localizedLabel();
+
+  String localizedLabel({bool isEn = false}) {
+    if (isEn) {
+      final local = 'Local ${localSeasons}S ${localEpisodes}E';
+      return tmdbEpisodes == null
+          ? local
+          : '$local / TMDB ${tmdbSeasons}S ${tmdbEpisodes}E';
+    }
     final local = '本地 $localSeasons 季 $localEpisodes 集';
     return tmdbEpisodes == null
         ? local
@@ -107,11 +115,13 @@ class ReviewRow {
       op == null || op!.dst.isEmpty ? null : op!.dst.split('/').last;
 
   /// What the row shows after the arrow.
-  String get newLabel => ignored
-      ? '已忽略'
+  String get newLabel => localizedNewLabel();
+
+  String localizedNewLabel({bool isEn = false}) => ignored
+      ? (isEn ? 'Ignored' : '已忽略')
       : op != null && op!.src == op!.dst
-      ? '（名称不变）'
-      : newName ?? '（无改动）';
+      ? (isEn ? '(Unchanged)' : '（名称不变）')
+      : newName ?? (isEn ? '(No change)' : '（无改动）');
 }
 
 List<ReviewRow> rowsOf(MediaGroup g, GroupDecision? d, TaskReview r) {
@@ -423,11 +433,11 @@ bool matchesReviewFilter(
 // ---------------------------------------------------------------- tech badges & diff
 
 /// Compact technical badges derived from [file] and its [ParsedName] / [MediaProbeInfo].
-List<String> fileTechBadges(ScanFile file) {
+List<String> fileTechBadges(ScanFile file, {bool isEn = false}) {
   final p = file.parsed;
   final badges = <String>[];
   if (file.isDiscDir || (p?.isDisc ?? false)) {
-    badges.add('原盘');
+    badges.add(isEn ? 'Disc' : '原盘');
   }
   if (p != null) {
     final tech = <String>[];
@@ -469,7 +479,7 @@ List<String> fileTechBadges(ScanFile file) {
     for (final raw in p.subFlags) {
       final norm = raw.trim().toLowerCase();
       if (norm.isEmpty) continue;
-      final label = norm == 'bilingual' ? '双语' : norm;
+      final label = norm == 'bilingual' ? (isEn ? 'Bilingual' : '双语') : norm;
       if (seenFlags.add(label)) badges.add(label);
     }
   }
@@ -533,7 +543,10 @@ List<DiffToken> diffFilenameTokens(String oldName, String newName) {
       newName == oldName ||
       newName == '已忽略' ||
       newName == '（名称不变）' ||
-      newName == '（无改动）') {
+      newName == '（无改动）' ||
+      newName == 'Ignored' ||
+      newName == '(Unchanged)' ||
+      newName == '(No change)') {
     return [DiffToken(newName, DiffTokenKind.unchanged)];
   }
 

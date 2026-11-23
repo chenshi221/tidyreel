@@ -3,28 +3,36 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
+import '../../l10n/l10n.dart';
+
 /// Filter tabs on the lightweight Library Health page.
 enum HealthCategory {
-  duplicates('重复'),
-  missingAssets('缺元数据'),
-  cleanup('待清理');
+  duplicates('重复', 'Duplicates'),
+  missingAssets('缺元数据', 'Missing Metadata'),
+  cleanup('待清理', 'Cleanup');
 
   final String label;
+  final String englishLabel;
 
-  const HealthCategory(this.label);
+  const HealthCategory(this.label, this.englishLabel);
+
+  String localizedLabel(AppL10n l10n) => l10n.isEn ? englishLabel : label;
 }
 
 /// Stages of a read-only local library health scan.
 enum HealthScanPhase {
-  walking('正在扫描目录'),
-  probingDuplicates('正在比对重复片源'),
-  checkingAssets('正在检查 NFO 与海报'),
-  checkingCleanup('正在扫描垃圾与空目录'),
-  done('体检完成');
+  walking('正在扫描目录', 'Scanning folders'),
+  probingDuplicates('正在比对重复片源', 'Comparing duplicate files'),
+  checkingAssets('正在检查 NFO 与海报', 'Checking NFO and artwork'),
+  checkingCleanup('正在扫描垃圾与空目录', 'Checking junk files & empty folders'),
+  done('体检完成', 'Health check complete');
 
   final String label;
+  final String englishLabel;
 
-  const HealthScanPhase(this.label);
+  const HealthScanPhase(this.label, this.englishLabel);
+
+  String localizedLabel(AppL10n l10n) => l10n.isEn ? englishLabel : label;
 }
 
 /// Live progress snapshot emitted by [HealthScanner].
@@ -102,9 +110,21 @@ class DuplicateMediaCopy {
     return badges;
   }
 
+  /// Concise quality badges (e.g. `2160p`, `DV`, `Atmos`, `HEVC`).
+  List<String> localizedQualityBadges(AppL10n l10n) => [
+    for (final b in qualityBadges) b == '原盘' ? l10n.tr('原盘', 'Disc') : b,
+  ];
+
   /// Single-line quality summary (e.g. `2160p · DV · Atmos`).
   String get qualitySummary =>
       qualityBadges.isEmpty ? '未知画质' : qualityBadges.join(' · ');
+
+  String localizedQualitySummary(AppL10n l10n) {
+    final badges = localizedQualityBadges(l10n);
+    return badges.isEmpty
+        ? l10n.tr('未知画质', 'Unknown quality')
+        : badges.join(' · ');
+  }
 }
 
 /// Audit 1: Two or more copies of the same movie or TV episode.

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
 import '../../data/providers.dart';
+import '../../l10n/l10n.dart';
 import '../../ui/tokens.dart';
 import '../../ui/widgets.dart';
 import '../../widgets/common.dart';
@@ -22,7 +23,8 @@ final showDetailProvider = FutureProvider.autoDispose.family<ShowDetail, int>(
   (ref, id) => ref.watch(metadataProvider).show(id),
 );
 
-String seasonTabLabel(int season) => season == 0 ? '特别篇' : '第 $season 季';
+String seasonTabLabel(int season, [AppL10n l10n = AppL10n.zh]) =>
+    l10n.seasonTitle(season);
 
 String _pad(int n) => n.toString().padLeft(2, '0');
 
@@ -116,12 +118,16 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
     _RowKind.ignore => row.override?.kind,
   };
 
-  String? _validationError(bool fields) {
+  String? _validationError(bool fields, AppL10n l10n) {
     if (!fields) return null;
     final s = int.tryParse(seasonC.text.trim());
-    if (s == null || s < 0) return '季号需为不小于 0 的整数';
+    if (s == null || s < 0) {
+      return l10n.tr('季号需为不小于 0 的整数', 'Season must be an integer ≥ 0');
+    }
     final e = int.tryParse(epC.text.trim());
-    if (e == null || e < 1) return '集号需为大于 0 的整数';
+    if (e == null || e < 1) {
+      return l10n.tr('集号需为大于 0 的整数', 'Episode must be an integer ≥ 1');
+    }
     return null;
   }
 
@@ -155,6 +161,7 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = context.l10n;
     final theme = Theme.of(context);
     final match = effectiveMatch(widget.group, widget.decision);
     final tmdbId = match?.tmdbId;
@@ -197,7 +204,7 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
         !waiting &&
         kind != _RowKind.ignore &&
         kind != _RowKind.extra;
-    final error = _validationError(fields);
+    final error = _validationError(fields, l10n);
     final laterCount =
         isTv && row.file.role == FileRole.video && kind == _RowKind.main
         ? shiftFollowingCount(widget.rows, row)
@@ -213,7 +220,10 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text('修正这个文件', style: theme.textTheme.titleMedium),
+              Text(
+                l10n.tr('修正这个文件', 'Edit File Assignment'),
+                style: theme.textTheme.titleMedium,
+              ),
               const SizedBox(height: 4),
               Text(
                 row.file.name,
@@ -224,11 +234,11 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
               const SizedBox(height: 14),
               Center(
                 child: Segmented<_RowKind>(
-                  options: const {
-                    _RowKind.main: '正片',
-                    _RowKind.special: '特别篇',
-                    _RowKind.extra: '花絮',
-                    _RowKind.ignore: '忽略',
+                  options: {
+                    _RowKind.main: l10n.tr('正片', 'Main'),
+                    _RowKind.special: l10n.specials,
+                    _RowKind.extra: l10n.tr('花絮', 'Extra'),
+                    _RowKind.ignore: l10n.tr('忽略', 'Ignore'),
                   },
                   value: kind,
                   onChanged: (v) => setState(() {
@@ -269,8 +279,8 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
               if (fields) ...[
                 const SizedBox(height: 12),
                 FormRow(
-                  label: '季',
-                  labelWidth: 56,
+                  label: l10n.tr('季', 'Season'),
+                  labelWidth: 64,
                   child: TextField(
                     key: const ValueKey('edit-season'),
                     controller: seasonC,
@@ -279,8 +289,8 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
                   ),
                 ),
                 FormRow(
-                  label: '集',
-                  labelWidth: 56,
+                  label: l10n.tr('集', 'Episode'),
+                  labelWidth: 64,
                   child: TextField(
                     key: const ValueKey('edit-episode'),
                     controller: epC,
@@ -313,7 +323,10 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
                     const SizedBox(width: 6),
                     Expanded(
                       child: Text(
-                        '同时顺延本季后续集号（影响后续 $laterCount 个文件）',
+                        l10n.tr(
+                          '同时顺延本季后续集号（影响后续 $laterCount 个文件）',
+                          'Also shift following episodes in this season (${l10n.plural(laterCount, 'file')} affected)',
+                        ),
                         style: TextStyle(
                           fontSize: TypeScale.small,
                           color: Palette.of(context).textMuted,
@@ -333,12 +346,16 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
                     TextButton(
                       key: const ValueKey('edit-manual'),
                       onPressed: () => setState(() => manual = !manual),
-                      child: Text(manual ? '从 TMDB 剧集里选' : '手动填写季和集'),
+                      child: Text(
+                        manual
+                            ? l10n.tr('从 TMDB 剧集里选', 'Pick from TMDB list')
+                            : l10n.tr('手动填写季和集', 'Enter manually'),
+                      ),
                     ),
                   const Spacer(),
                   OutlinedButton(
                     onPressed: () => Navigator.pop(context),
-                    child: const Text('取消'),
+                    child: Text(l10n.cancel),
                   ),
                   if (picking) ...[
                     const SizedBox(width: 8),
@@ -347,7 +364,7 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
                       onPressed: picked == null
                           ? null
                           : () => _confirm(picked!),
-                      child: const Text('确认'),
+                      child: Text(l10n.tr('确认', 'Confirm')),
                     ),
                   ],
                   if (!picking && !waiting) ...[
@@ -355,7 +372,7 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
                     FilledButton(
                       key: const ValueKey('edit-save'),
                       onPressed: error != null ? null : _save,
-                      child: const Text('保存'),
+                      child: Text(l10n.save),
                     ),
                   ],
                 ],
@@ -426,7 +443,7 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
                 ),
               ),
               child: Text(
-                seasonTabLabel(s),
+                seasonTabLabel(s, context.l10n),
                 style: TextStyle(
                   fontSize: 13,
                   fontWeight: s == season ? FontWeight.w600 : FontWeight.w400,
@@ -441,6 +458,7 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
 
   Widget _episodeList(int tmdbId, int season) {
     final p = Palette.of(context);
+    final l10n = context.l10n;
     // Which file each episode already gets, so double-booking shows.
     final taken = <EpisodeRef, String>{
       for (final r in widget.rows)
@@ -457,10 +475,10 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
         .watch(seasonEpisodesProvider((tmdbId, season)))
         .when(
           loading: () => const Center(child: Spinner(size: 18)),
-          error: (e, _) => const EmptyState(
+          error: (e, _) => EmptyState(
             icon: CupertinoIcons.exclamationmark_triangle,
-            title: '读不到这一季的剧集',
-            message: '可以用「手动填写季和集」',
+            title: l10n.tr('读不到这一季的剧集', 'Unable to Load Episodes'),
+            message: l10n.tr('可以用「手动填写季和集」', 'Use "Enter manually" instead'),
           ),
           data: (eps) => ListView(
             padding: const EdgeInsets.all(4),
@@ -505,7 +523,11 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
                               children: [
                                 Text(
                                   [
-                                    e.title ?? '第 ${e.number} 集',
+                                    e.title ??
+                                        l10n.tr(
+                                          '第 ${e.number} 集',
+                                          'Episode ${e.number}',
+                                        ),
                                     if (e.airDate != null) fmtDate(e.airDate),
                                   ].join('  ·  '),
                                   maxLines: 1,
@@ -514,7 +536,7 @@ class _EditRowSheetState extends ConsumerState<_EditRowSheet> {
                                 ),
                                 if (other != null)
                                   Text(
-                                    '已对应：$other',
+                                    l10n.tr('已对应：$other', 'Assigned: $other'),
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: TextStyle(

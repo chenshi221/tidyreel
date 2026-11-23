@@ -9,12 +9,12 @@ import 'package:tidyreel_core/tidyreel_core.dart';
 
 import '../../data/providers.dart';
 import '../../data/settings.dart';
+import '../../l10n/l10n.dart';
 import '../../ui/tokens.dart';
 import '../../ui/widgets.dart';
 import '../../widgets/common.dart';
 import '../map/map_providers.dart';
 import '../map/repo_map_view.dart';
-import 'connection_dialog.dart' show connectionTypeLabel;
 import 'scan_preview.dart';
 import 'sources_page.dart' show editConnection;
 import 'sources_providers.dart';
@@ -67,6 +67,7 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
     context: context,
     builder: (ctx) => Consumer(
       builder: (ctx, ref, _) {
+        final l10n = ctx.l10n;
         final theme = Theme.of(ctx);
         final sel = ref.watch(browserSelectionProvider).toList()..sort();
         if (sel.isEmpty) {
@@ -84,7 +85,7 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
-                    '已选 ${sel.length} 项',
+                    l10n.tr('已选 ${sel.length} 项', '${sel.length} Selected'),
                     style: theme.textTheme.titleMedium,
                   ),
                   const SizedBox(height: 12),
@@ -113,7 +114,7 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
                                   _goto(i <= 0 ? '/' : path.substring(0, i));
                                 },
                                 trailing: IconButton(
-                                  tooltip: '移出选择',
+                                  tooltip: l10n.tr('移出选择', 'Remove'),
                                   icon: const Icon(
                                     CupertinoIcons.xmark,
                                     size: 14,
@@ -134,7 +135,7 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
                     children: [
                       TextButton(
                         onPressed: () => Navigator.of(ctx).pop(),
-                        child: const Text('完成'),
+                        child: Text(l10n.tr('完成', 'Done')),
                       ),
                     ],
                   ),
@@ -148,13 +149,19 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
   );
 
   void _warnMissingLibrary() {
+    final l10n = context.l10n;
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: const Text('此连接尚未设置媒体库，请先编辑连接设置媒体库路径'),
+          content: Text(
+            l10n.tr(
+              '此连接尚未设置媒体库，请先编辑连接设置媒体库路径',
+              'No media library folder is set for this connection. Edit the connection first.',
+            ),
+          ),
           action: SnackBarAction(
-            label: '编辑连接',
+            label: l10n.tr('编辑连接', 'Edit Connection'),
             onPressed: () => editConnection(context, ref, widget.connection),
           ),
         ),
@@ -230,6 +237,7 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
   Widget build(BuildContext context) {
     final c = widget.connection;
     final p = Palette.of(context);
+    final l10n = context.l10n;
     final dir = ref.watch(browserDirProvider);
     final selection = ref.watch(browserSelectionProvider);
     final entries = ref.watch(browserEntriesProvider);
@@ -258,28 +266,29 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
         ref.read(connectionsEditorProvider.notifier).toggleFavorite(c.id, path);
     void copyPath(String path) {
       Clipboard.setData(ClipboardData(text: path));
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('已复制路径')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(l10n.tr('已复制路径', 'Path copied'))));
     }
 
     List<MenuAction?> organizeItems(String path) => [
       MenuAction(
-        '整理（原地）',
+        l10n.tr('整理（原地）', 'Organize (In-place)'),
         () => _submit(path, OrganizeMode.inPlace),
         icon: CupertinoIcons.wand_stars,
       ),
       MenuAction(
-        '整理（移动到媒体库）',
+        l10n.tr('整理（移动到媒体库）', 'Organize (Move to Library)'),
         () => _submit(path, OrganizeMode.moveToLibrary),
         icon: CupertinoIcons.tray_arrow_down,
       ),
       MenuAction(
-        '刮削',
+        l10n.tr('刮削', 'Scrape'),
         () => _submit(path, null, true),
         icon: CupertinoIcons.photo_on_rectangle,
       ),
       MenuAction(
-        '仅刮削（不改文件名）',
+        l10n.tr('仅刮削（不改文件名）', 'Scrape Only (Keep Filenames)'),
         () => _submit(path, null, true, true),
         icon: CupertinoIcons.sparkles,
       ),
@@ -287,17 +296,25 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
 
     List<MenuAction?> entryMenu(RemoteEntry e) => [
       if (e.isDir)
-        MenuAction('打开', () => _goto(e.path), icon: CupertinoIcons.folder),
+        MenuAction(
+          l10n.tr('打开', 'Open'),
+          () => _goto(e.path),
+          icon: CupertinoIcons.folder,
+        ),
       ...organizeItems(e.path),
       null,
       MenuAction(
-        selection.contains(e.path) ? '取消选中' : '选中',
+        selection.contains(e.path)
+            ? l10n.tr('取消选中', 'Deselect')
+            : l10n.tr('选中', 'Select'),
         () => ref.read(browserSelectionProvider.notifier).toggle(e.path),
         icon: CupertinoIcons.checkmark_square,
       ),
       if (e.isDir)
         MenuAction(
-          favs.contains(e.path) ? '取消收藏' : '收藏',
+          favs.contains(e.path)
+              ? l10n.tr('取消收藏', 'Unfavorite')
+              : l10n.tr('收藏', 'Favorite'),
           () => toggleFav(e.path),
           icon: favs.contains(e.path)
               ? CupertinoIcons.star_slash
@@ -305,7 +322,7 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
         ),
       if (ref.read(organizedMarksProvider(c.id))[e.path] != true)
         MenuAction(
-          '标记为已整理',
+          l10n.tr('标记为已整理', 'Mark as Organized'),
           () => ref
               .read(organizedMarksProvider(c.id).notifier)
               .mark(e.path, true),
@@ -313,14 +330,14 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
         ),
       if (ref.read(organizedMarksProvider(c.id))[e.path] != false)
         MenuAction(
-          '标记为未整理',
+          l10n.tr('标记为未整理', 'Mark as Unorganized'),
           () => ref
               .read(organizedMarksProvider(c.id).notifier)
               .mark(e.path, false),
           icon: CupertinoIcons.circle,
         ),
       MenuAction(
-        '复制路径',
+        l10n.tr('复制路径', 'Copy Path'),
         () => copyPath(e.path),
         icon: CupertinoIcons.doc_on_clipboard,
       ),
@@ -328,20 +345,26 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
 
     List<MenuAction?> folderMenu() => [
       MenuAction(
-        '刷新',
+        l10n.refresh,
         () => _refresh(dir),
         icon: CupertinoIcons.arrow_clockwise,
       ),
-      MenuAction('全选 / 取消全选', selectAll, icon: CupertinoIcons.checkmark_square),
+      MenuAction(
+        l10n.tr('全选 / 取消全选', 'Select / Deselect All'),
+        selectAll,
+        icon: CupertinoIcons.checkmark_square,
+      ),
       null,
       ...organizeItems(dir),
       MenuAction(
-        fav ? '取消收藏当前文件夹' : '收藏当前文件夹',
+        fav
+            ? l10n.tr('取消收藏当前文件夹', 'Unfavorite Current Folder')
+            : l10n.tr('收藏当前文件夹', 'Favorite Current Folder'),
         () => toggleFav(dir),
         icon: fav ? CupertinoIcons.star_slash : CupertinoIcons.star,
       ),
       MenuAction(
-        '复制当前路径',
+        l10n.tr('复制当前路径', 'Copy Current Path'),
         () => copyPath(dir),
         icon: CupertinoIcons.doc_on_clipboard,
       ),
@@ -349,20 +372,22 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
 
     return PageScaffold(
       title: c.name,
-      subtitle: '${connectionTypeLabel(c.type)}  ·  ${c.endpoint}',
+      subtitle: '${l10n.connectionTypeLabel(c.type)}  ·  ${c.endpoint}',
       leading: IconButton(
-        tooltip: '返回连接列表',
+        tooltip: l10n.tr('返回连接列表', 'Back to Connections'),
         icon: const Icon(CupertinoIcons.chevron_left),
         onPressed: () => ref.read(openConnectionProvider.notifier).set(null),
       ),
       actions: [
         IconButton(
-          tooltip: '刷新',
+          tooltip: l10n.refresh,
           icon: const Icon(CupertinoIcons.arrow_clockwise),
           onPressed: () => _refresh(dir),
         ),
         IconButton(
-          tooltip: fav ? '取消收藏此文件夹' : '收藏此文件夹',
+          tooltip: fav
+              ? l10n.tr('取消收藏此文件夹', 'Unfavorite Folder')
+              : l10n.tr('收藏此文件夹', 'Favorite Folder'),
           icon: Icon(
             fav ? CupertinoIcons.star_fill : CupertinoIcons.star,
             color: fav ? p.accent : null,
@@ -381,14 +406,14 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
               children: [
                 IconButton(
                   key: const ValueKey('browser-home'),
-                  tooltip: '回到主页',
+                  tooltip: l10n.tr('回到主页', 'Home Folder'),
                   iconSize: 15,
                   icon: const Icon(CupertinoIcons.house),
                   onPressed: dir == _root ? null : () => _goto(_root),
                 ),
                 IconButton(
                   key: const ValueKey('browser-up'),
-                  tooltip: '上一级',
+                  tooltip: l10n.tr('上一级', 'Up One Level'),
                   iconSize: 15,
                   icon: const Icon(CupertinoIcons.arrow_up),
                   onPressed: dir == _root
@@ -415,7 +440,10 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
               children: [
                 Segmented<bool>(
                   key: const ValueKey('browser-view'),
-                  options: const {false: '列表', true: '地图'},
+                  options: {
+                    false: l10n.tr('列表', 'List'),
+                    true: l10n.tr('地图', 'Map'),
+                  },
                   value: mapMode,
                   onChanged: ref.read(browserMapModeProvider.notifier).set,
                 ),
@@ -423,16 +451,16 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
                   key: const ValueKey('organize-current-dir'),
                   onPressed: () => _submit(dir),
                   icon: const Icon(CupertinoIcons.wand_stars, size: 13),
-                  label: const Text('整理当前文件夹'),
+                  label: Text(l10n.tr('整理当前文件夹', 'Organize Current Folder')),
                 ),
                 if (!mapMode) ...[
                   SizedBox(
                     width: 260,
                     child: TextField(
                       controller: _search,
-                      decoration: const InputDecoration(
-                        prefixIcon: Icon(CupertinoIcons.search, size: 14),
-                        hintText: '在当前文件夹内搜索',
+                      decoration: InputDecoration(
+                        prefixIcon: const Icon(CupertinoIcons.search, size: 14),
+                        hintText: l10n.tr('在当前文件夹内搜索', 'Search in this folder'),
                       ),
                       onChanged: ref.read(browserSearchProvider.notifier).set,
                     ),
@@ -443,7 +471,7 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
                   ),
                   // Hook: browserEntriesProvider filters via HistoryStore.areOrganized.
                   FilterChip(
-                    label: const Text('只看未整理的'),
+                    label: Text(l10n.tr('只看未整理的', 'Unorganized Only')),
                     selected: ref.watch(onlyUnorganizedProvider),
                     onSelected: ref.read(onlyUnorganizedProvider.notifier).set,
                   ),
@@ -454,8 +482,8 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
                               selection.containsAll(
                                 entries.asData!.value.map((e) => e.path),
                               )
-                          ? '取消全选'
-                          : '全选',
+                          ? l10n.tr('取消全选', 'Deselect All')
+                          : l10n.tr('全选', 'Select All'),
                     ),
                   ),
                 ],
@@ -499,20 +527,27 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
                               return EmptyState(
                                 icon: CupertinoIcons.exclamationmark_triangle,
                                 title: info.status == ConnStatus.authFailed
-                                    ? '认证失败'
-                                    : '无法读取文件夹',
-                                message: info.detail ?? '$e',
+                                    ? l10n.tr('认证失败', 'Authentication Failed')
+                                    : l10n.tr(
+                                        '无法读取文件夹',
+                                        'Unable to Read Folder',
+                                      ),
+                                message: info.detail != null
+                                    ? l10n.coreMessage(info.detail!)
+                                    : l10n.coreMessage('$e'),
                                 action: Wrap(
                                   spacing: 8,
                                   children: [
                                     OutlinedButton(
                                       onPressed: () => _refresh(dir),
-                                      child: const Text('重试'),
+                                      child: Text(l10n.retry),
                                     ),
                                     OutlinedButton(
                                       onPressed: () =>
                                           editConnection(context, ref, c),
-                                      child: const Text('编辑连接'),
+                                      child: Text(
+                                        l10n.tr('编辑连接', 'Edit Connection'),
+                                      ),
                                     ),
                                   ],
                                 ),
@@ -529,7 +564,10 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
                                 return hasFilter
                                     ? EmptyState(
                                         icon: CupertinoIcons.search,
-                                        title: '没有符合筛选条件的项目',
+                                        title: l10n.tr(
+                                          '没有符合筛选条件的项目',
+                                          'No Matching Items',
+                                        ),
                                         action: OutlinedButton(
                                           onPressed: () {
                                             _search.clear();
@@ -546,12 +584,17 @@ class _FileBrowserState extends ConsumerState<FileBrowser> {
                                                 )
                                                 .set(false);
                                           },
-                                          child: const Text('清除筛选'),
+                                          child: Text(
+                                            l10n.tr('清除筛选', 'Clear Filters'),
+                                          ),
                                         ),
                                       )
-                                    : const EmptyState(
+                                    : EmptyState(
                                         icon: CupertinoIcons.folder,
-                                        title: '这个文件夹是空的',
+                                        title: l10n.tr(
+                                          '这个文件夹是空的',
+                                          'This Folder Is Empty',
+                                        ),
                                       );
                               }
                               return ListView.separated(
@@ -663,6 +706,7 @@ class _SelectionBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
+    final l10n = context.l10n;
     return Container(
       constraints: const BoxConstraints(maxWidth: 960),
       padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
@@ -682,18 +726,18 @@ class _SelectionBar extends StatelessWidget {
             icon: const Icon(CupertinoIcons.chevron_up, size: 11),
             iconAlignment: IconAlignment.end,
             label: Text(
-              '已选 $count 项',
+              l10n.tr('已选 $count 项', '$count selected'),
               style: const TextStyle(fontWeight: FontWeight.w600),
             ),
           ),
           const SizedBox(width: 6),
           PopupMenuButton<MediaHint>(
             key: const ValueKey('media-hint'),
-            tooltip: '切换后作为识别类型提示',
+            tooltip: l10n.tr('切换后作为识别类型提示', 'Hint used for media matching'),
             initialValue: hint,
             onSelected: onHint,
             itemBuilder: (_) => [
-              for (final e in mediaHintLabels.entries)
+              for (final e in l10n.mediaHintOptions.entries)
                 PopupMenuItem(value: e.key, child: Text(e.value)),
             ],
             child: Padding(
@@ -702,7 +746,10 @@ class _SelectionBar extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    '类型：${mediaHintLabels[hint]}',
+                    l10n.tr(
+                      '类型：${l10n.mediaHintLabel(hint)}',
+                      'Type: ${l10n.mediaHintLabel(hint)}',
+                    ),
                     style: const TextStyle(fontSize: 13),
                   ),
                   const Icon(CupertinoIcons.chevron_down, size: 11),
@@ -712,40 +759,53 @@ class _SelectionBar extends StatelessWidget {
           ),
           const SizedBox(width: 6),
           Segmented<OrganizeMode>(
-            options: const {
-              OrganizeMode.inPlace: '原地整理',
-              OrganizeMode.moveToLibrary: '移动到媒体库',
+            options: {
+              OrganizeMode.inPlace: l10n.organizeModeLabel(
+                OrganizeMode.inPlace,
+              ),
+              OrganizeMode.moveToLibrary: l10n.organizeModeLabel(
+                OrganizeMode.moveToLibrary,
+              ),
             },
             value: mode,
             onChanged: onMode,
           ),
           const SizedBox(width: 12),
-          TextButton(onPressed: onCancel, child: const Text('取消')),
+          TextButton(onPressed: onCancel, child: Text(l10n.cancel)),
           const SizedBox(width: 4),
           Tooltip(
-            message: '重命名并整理文件（不写 NFO 和海报）',
+            message: l10n.tr(
+              '重命名并整理文件（不写 NFO 和海报）',
+              'Rename and organize files (without NFO or artwork)',
+            ),
             child: FilledButton(
               key: const ValueKey('organize'),
               onPressed: onOrganize,
-              child: const Text('整理'),
+              child: Text(l10n.tr('整理', 'Organize')),
             ),
           ),
           const SizedBox(width: 6),
           Tooltip(
-            message: '整理，并写入 NFO 和海报',
+            message: l10n.tr(
+              '整理，并写入 NFO 和海报',
+              'Organize and write NFO metadata and artwork',
+            ),
             child: OutlinedButton(
               key: const ValueKey('scrape'),
               onPressed: onScrape,
-              child: const Text('刮削'),
+              child: Text(l10n.tr('刮削', 'Scrape')),
             ),
           ),
           const SizedBox(width: 6),
           Tooltip(
-            message: '不移动、不重命名文件，仅在原位补全 NFO 与海报',
+            message: l10n.tr(
+              '不移动、不重命名文件，仅在原位补全 NFO 与海报',
+              'Write NFO and artwork in place without moving or renaming files',
+            ),
             child: OutlinedButton(
               key: const ValueKey('scrape-only'),
               onPressed: onScrapeOnly,
-              child: const Text('仅刮削'),
+              child: Text(l10n.tr('仅刮削', 'Scrape Only')),
             ),
           ),
         ],
@@ -760,41 +820,43 @@ class _SortMenu extends StatelessWidget {
 
   const _SortMenu({required this.value, required this.onChanged});
 
-  static const _labels = {
-    BrowserSort.name: '按名称',
-    BrowserSort.time: '按时间',
-    BrowserSort.size: '按大小',
-  };
-
   @override
-  Widget build(BuildContext context) => PopupMenuButton<BrowserSort>(
-    tooltip: '排序',
-    initialValue: value,
-    onSelected: onChanged,
-    itemBuilder: (_) => [
-      for (final e in _labels.entries)
-        PopupMenuItem(value: e.key, height: 30, child: Text(e.value)),
-    ],
-    child: Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
-      decoration: BoxDecoration(
-        border: Border.all(
-          color: Palette.of(context).lineStrong,
-          width: hairline,
+  Widget build(BuildContext context) {
+    final l10n = context.l10n;
+    final labels = {
+      BrowserSort.name: l10n.tr('按名称', 'Name'),
+      BrowserSort.time: l10n.tr('按时间', 'Modified'),
+      BrowserSort.size: l10n.tr('按大小', 'Size'),
+    };
+    return PopupMenuButton<BrowserSort>(
+      tooltip: l10n.tr('排序', 'Sort'),
+      initialValue: value,
+      onSelected: onChanged,
+      itemBuilder: (_) => [
+        for (final e in labels.entries)
+          PopupMenuItem(value: e.key, height: 30, child: Text(e.value)),
+      ],
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+        decoration: BoxDecoration(
+          border: Border.all(
+            color: Palette.of(context).lineStrong,
+            width: hairline,
+          ),
+          borderRadius: BorderRadius.circular(Radii.sm),
+          color: Palette.of(context).panel,
         ),
-        borderRadius: BorderRadius.circular(Radii.sm),
-        color: Palette.of(context).panel,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(CupertinoIcons.arrow_up_arrow_down, size: 12),
+            const SizedBox(width: 6),
+            Text(labels[value]!, style: const TextStyle(fontSize: 13)),
+          ],
+        ),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Icon(CupertinoIcons.arrow_up_arrow_down, size: 12),
-          const SizedBox(width: 6),
-          Text(_labels[value]!, style: const TextStyle(fontSize: 13)),
-        ],
-      ),
-    ),
-  );
+    );
+  }
 }
 
 class _Breadcrumbs extends StatelessWidget {
@@ -837,7 +899,11 @@ class _Breadcrumbs extends StatelessWidget {
     return Wrap(
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
-        crumb(rootParts.lastOrNull ?? '根目录', root, parts.isEmpty),
+        crumb(
+          rootParts.lastOrNull ?? context.l10n.rootDir,
+          root,
+          parts.isEmpty,
+        ),
         for (var i = 0; i < parts.length; i++) ...[
           Icon(CupertinoIcons.chevron_right, size: 11, color: p.textFaint),
           crumb(
@@ -953,7 +1019,7 @@ class _EntryTile extends StatelessWidget {
                   key: ValueKey('organize ${e.name}'),
                   onPressed: onOrganize,
                   icon: const Icon(CupertinoIcons.wand_stars, size: 13),
-                  label: const Text('整理'),
+                  label: Text(context.tr('整理', 'Organize')),
                 ),
               ),
             ),

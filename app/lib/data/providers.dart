@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tidyreel_core/testing.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
+import '../l10n/l10n.dart';
 import 'bootstrap.dart';
 import 'drift_history_store.dart';
 import 'drift_task_store.dart';
@@ -431,10 +432,11 @@ const _namingKey = 'naming';
 class NamingProfileNotifier extends Notifier<NamingProfile> {
   @override
   NamingProfile build() {
-    final j = ref.read(bootstrapProvider).prefs.read(_namingKey);
+    final boot = ref.read(bootstrapProvider);
+    final j = boot.prefs.read(_namingKey);
     return j is Map
         ? namingProfileFromJson(j.cast<String, Object?>())
-        : NamingProfile.vidhub;
+        : defaultNamingProfileFor(boot.systemLocale);
   }
 
   void set(NamingProfile profile) {

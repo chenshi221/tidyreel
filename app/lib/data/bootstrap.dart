@@ -1,10 +1,12 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' show Locale;
 
 import 'package:drift/native.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../l10n/l10n.dart';
 import 'database.dart';
 import 'tmdb_cache.dart';
 
@@ -22,15 +24,19 @@ class Bootstrap {
   /// Demo mode: memory backend with sample files and fake TMDB.
   final bool demo;
 
+  /// OS locale detected on startup (used for install-time language defaults).
+  final Locale systemLocale;
+
   Bootstrap._(
     this.db,
     this.prefs,
     this.secrets, {
     required this.demo,
+    required this.systemLocale,
     this.tmdbCache,
   });
 
-  static Future<Bootstrap> open() async {
+  static Future<Bootstrap> open({Locale? systemLocale}) async {
     final dir = await getApplicationSupportDirectory();
     await dir.create(recursive: true);
     return Bootstrap._(
@@ -40,18 +46,21 @@ class Bootstrap {
         File('${dir.path}${Platform.pathSeparator}secrets.json'),
       ),
       demo: false,
+      systemLocale: systemLocale ?? detectSystemLocale(),
       tmdbCache: FileTmdbCache.load(
         File('${dir.path}${Platform.pathSeparator}tmdb_cache.json'),
       ),
     );
   }
 
-  factory Bootstrap.demo() => Bootstrap._(
-    AppDatabase(NativeDatabase.memory()),
-    JsonStore.memory(),
-    SecretStore.memory(),
-    demo: true,
-  );
+  factory Bootstrap.demo({Locale systemLocale = const Locale('zh', 'CN')}) =>
+      Bootstrap._(
+        AppDatabase(NativeDatabase.memory()),
+        JsonStore.memory(),
+        SecretStore.memory(),
+        demo: true,
+        systemLocale: systemLocale,
+      );
 }
 
 /// Small JSON document; each [write] rewrites the file (it's a few KB at most).

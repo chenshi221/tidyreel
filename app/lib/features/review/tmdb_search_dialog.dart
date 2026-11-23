@@ -5,25 +5,27 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
 import '../../data/providers.dart';
+import '../../l10n/l10n.dart';
 import '../../ui/tokens.dart';
 import '../../ui/widgets.dart';
 import '../../widgets/common.dart';
 
-String countryLabel(String? code) => switch (code) {
-  null => '',
-  'CN' => '中国大陆',
-  'HK' => '中国香港',
-  'TW' => '中国台湾',
-  'JP' => '日本',
-  'KR' => '韩国',
-  'US' => '美国',
-  'GB' => '英国',
-  'FR' => '法国',
-  'DE' => '德国',
-  'TH' => '泰国',
-  'IN' => '印度',
-  _ => code,
-};
+String countryLabel(String? code, [AppL10n l10n = AppL10n.zh]) =>
+    switch (code) {
+      null => '',
+      'CN' => l10n.tr('中国大陆', 'China'),
+      'HK' => l10n.tr('中国香港', 'Hong Kong'),
+      'TW' => l10n.tr('中国台湾', 'Taiwan'),
+      'JP' => l10n.tr('日本', 'Japan'),
+      'KR' => l10n.tr('韩国', 'South Korea'),
+      'US' => l10n.tr('美国', 'USA'),
+      'GB' => l10n.tr('英国', 'UK'),
+      'FR' => l10n.tr('法国', 'France'),
+      'DE' => l10n.tr('德国', 'Germany'),
+      'TH' => l10n.tr('泰国', 'Thailand'),
+      'IN' => l10n.tr('印度', 'India'),
+      _ => code,
+    };
 
 class RatingBadge extends StatelessWidget {
   final double value;
@@ -79,8 +81,11 @@ class CandidateTile extends StatelessWidget {
               if (c.originalTitle != null && c.originalTitle != c.title)
                 c.originalTitle!,
               if (c.year != null) '${c.year}',
-              c.kind == MediaKind.movie ? '电影' : '剧集',
-              if (c.originCountry != null) countryLabel(c.originCountry),
+              c.kind == MediaKind.movie
+                  ? context.l10n.movie
+                  : context.l10n.tvShow,
+              if (c.originCountry != null)
+                countryLabel(c.originCountry, context.l10n),
             ].join(' · '),
           ),
           if (c.overview != null)
@@ -183,7 +188,15 @@ class _TmdbSearchBoxState extends ConsumerState<TmdbSearchBox> {
           );
       if (mounted && seq == _searchSeq) setState(() => _results = r);
     } catch (e) {
-      if (mounted && seq == _searchSeq) setState(() => _error = '搜索失败：$e');
+      if (mounted && seq == _searchSeq) {
+        final l10n = context.l10n;
+        setState(
+          () => _error = l10n.tr(
+            '搜索失败：$e',
+            'Search failed: ${l10n.coreMessage('$e')}',
+          ),
+        );
+      }
     } finally {
       if (mounted && seq == _searchSeq) setState(() => _busy = false);
     }
@@ -192,6 +205,7 @@ class _TmdbSearchBoxState extends ConsumerState<TmdbSearchBox> {
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
+    final l10n = context.l10n;
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -200,7 +214,7 @@ class _TmdbSearchBoxState extends ConsumerState<TmdbSearchBox> {
           controller: _c,
           style: const TextStyle(fontSize: 13),
           decoration: InputDecoration(
-            hintText: '搜索 TMDB',
+            hintText: l10n.tr('搜索 TMDB', 'Search TMDB'),
             prefixIcon: const Icon(CupertinoIcons.search, size: 14),
             suffixIcon: _busy
                 ? const Padding(
@@ -208,7 +222,7 @@ class _TmdbSearchBoxState extends ConsumerState<TmdbSearchBox> {
                     child: Spinner(size: 14),
                   )
                 : IconButton(
-                    tooltip: '搜索',
+                    tooltip: l10n.tr('搜索', 'Search'),
                     iconSize: 15,
                     icon: const Icon(CupertinoIcons.arrow_right_circle_fill),
                     onPressed: _search,
@@ -224,10 +238,10 @@ class _TmdbSearchBoxState extends ConsumerState<TmdbSearchBox> {
           children: [
             Segmented<MediaKind>(
               key: const ValueKey('search-kind'),
-              options: const {
-                MediaKind.unknown: '全部',
-                MediaKind.episode: '剧集',
-                MediaKind.movie: '电影',
+              options: {
+                MediaKind.unknown: l10n.tr('全部', 'All'),
+                MediaKind.episode: l10n.tvShow,
+                MediaKind.movie: l10n.movie,
               },
               value: _kind,
               onChanged: (k) {
@@ -247,17 +261,17 @@ class _TmdbSearchBoxState extends ConsumerState<TmdbSearchBox> {
                   LengthLimitingTextInputFormatter(4),
                 ],
                 decoration: InputDecoration(
-                  hintText: '年份',
+                  hintText: l10n.tr('年份', 'Year'),
                   suffixIcon: PopupMenuButton<int>(
-                    tooltip: '选择年份',
+                    tooltip: l10n.tr('选择年份', 'Choose year'),
                     iconSize: 14,
                     icon: const Icon(CupertinoIcons.calendar),
                     onSelected: (y) => _setYear(y == 0 ? null : y),
                     itemBuilder: (_) => [
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: 0,
                         height: 28,
-                        child: Text('不限'),
+                        child: Text(l10n.tr('不限', 'Any')),
                       ),
                       for (var y = DateTime.now().year + 1; y >= 1950; y--)
                         PopupMenuItem(value: y, height: 28, child: Text('$y')),
@@ -280,7 +294,10 @@ class _TmdbSearchBoxState extends ConsumerState<TmdbSearchBox> {
         if (_results != null && _results!.isEmpty)
           Padding(
             padding: const EdgeInsets.all(10),
-            child: Text('没有找到结果', style: Theme.of(context).textTheme.bodySmall),
+            child: Text(
+              l10n.tr('没有找到结果', 'No results found'),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
           ),
         if (_results != null && _results!.isNotEmpty) const SizedBox(height: 4),
         for (final c in _results ?? const <Candidate>[])
@@ -302,69 +319,84 @@ Future<({Candidate match, String? pin})?> showTmdbSearchDialog(
   return showDialog<({Candidate match, String? pin})>(
     context: context,
     builder: (ctx) => StatefulBuilder(
-      builder: (ctx, setState) => MacSheet(
-        child: SizedBox(
-          width: 520,
-          height: 520,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text('重新搜索 TMDB', style: Theme.of(ctx).textTheme.titleMedium),
-                const SizedBox(height: 12),
-                Expanded(
-                  child: SingleChildScrollView(
-                    child: TmdbSearchBox(
-                      initial: initial,
-                      autoSearch: true,
-                      onPick: (c) => Navigator.pop(ctx, (
-                        match: c,
-                        pin: pin && keyword.text.trim().isNotEmpty
-                            ? keyword.text.trim()
-                            : null,
-                      )),
+      builder: (ctx, setState) {
+        final l10n = ctx.l10n;
+        return MacSheet(
+          child: SizedBox(
+            width: 520,
+            height: 520,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    l10n.tr('重新搜索 TMDB', 'Search TMDB'),
+                    style: Theme.of(ctx).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      child: TmdbSearchBox(
+                        initial: initial,
+                        autoSearch: true,
+                        onPick: (c) => Navigator.pop(ctx, (
+                          match: c,
+                          pin: pin && keyword.text.trim().isNotEmpty
+                              ? keyword.text.trim()
+                              : null,
+                        )),
+                      ),
                     ),
                   ),
-                ),
-                if (pinKeyword != null) ...[
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Checkbox(
-                        key: const ValueKey('pin-match'),
-                        value: pin,
-                        onChanged: (v) => setState(() => pin = v ?? false),
-                      ),
-                      const Text('以后文件夹名包含', style: TextStyle(fontSize: 13)),
-                      const SizedBox(width: 6),
-                      SizedBox(
-                        width: 150,
-                        child: TextField(
-                          key: const ValueKey('pin-keyword'),
-                          controller: keyword,
-                          enabled: pin,
+                  if (pinKeyword != null) ...[
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Checkbox(
+                          key: const ValueKey('pin-match'),
+                          value: pin,
+                          onChanged: (v) => setState(() => pin = v ?? false),
+                        ),
+                        Text(
+                          l10n.tr('以后文件夹名包含', 'Always match folders with'),
                           style: const TextStyle(fontSize: 13),
                         ),
-                      ),
-                      const SizedBox(width: 6),
-                      const Text('时都匹配到选中的作品', style: TextStyle(fontSize: 13)),
-                    ],
+                        const SizedBox(width: 6),
+                        SizedBox(
+                          width: 140,
+                          child: TextField(
+                            key: const ValueKey('pin-keyword'),
+                            controller: keyword,
+                            enabled: pin,
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            l10n.tr('时都匹配到选中的作品', 'to the selected title'),
+                            style: const TextStyle(fontSize: 13),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                  const SizedBox(height: 10),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: Text(l10n.cancel),
+                    ),
                   ),
                 ],
-                const SizedBox(height: 10),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: OutlinedButton(
-                    onPressed: () => Navigator.pop(ctx),
-                    child: const Text('取消'),
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     ),
   ).whenComplete(keyword.dispose);
 }
