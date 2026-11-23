@@ -13,6 +13,7 @@ abstract interface class TaskManager {
     List<String> paths,
     OrganizeMode mode, {
     bool scrape = false,
+    bool scrapeOnly = false,
   });
 
   /// All tasks, newest first; emits on every change.
@@ -30,12 +31,44 @@ abstract interface class TaskManager {
 
   Future<TaskReview> setMode(TaskId id, OrganizeMode mode);
 
+  /// Moves a file from [ScanResult.unassigned] into [targetGroup] and re-plans.
+  Future<TaskReview> assignUnassigned(
+    TaskId id,
+    String filePath,
+    GroupId targetGroup,
+  );
+
+  /// Sets an explicit delete decision for an unassigned junk file and re-plans.
+  Future<TaskReview> setUnassignedDelete(
+    TaskId id,
+    String filePath,
+    bool delete,
+  );
+
+  /// Merges [absorb] group's files into [keep] group and re-plans.
+  Future<TaskReview> mergeGroups(TaskId id, GroupId keep, GroupId absorb);
+
+  /// Splits [filePaths] out of [group] into a new group and re-plans.
+  Future<TaskReview> splitGroup(
+    TaskId id,
+    GroupId group,
+    Set<String> filePaths,
+  );
+
   /// [onlyConfident]: 立即执行 — run only high-confidence, conflict-free ops.
   Future<void> run(TaskId id, {bool onlyConfident = false});
 
   Future<void> cancel(TaskId id);
 
   Future<void> undo(TaskId id, {Set<OpId>? only});
+
+  /// Lists source directories that became empty (or contain only OS junk)
+  /// after this task executed.
+  Future<List<String>> findEmptyDirs(TaskId id);
+
+  /// Removes user-confirmed empty directories on the task's backend.
+  /// Returns the number of removed directories.
+  Future<int> removeEmptyDirs(TaskId id, List<String> dirs);
 
   /// Runs a partly failed task's failed (and therefore skipped) ops again.
   Future<void> retryFailed(TaskId id);

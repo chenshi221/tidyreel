@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
+import '../../l10n/l10n.dart';
 import '../../ui/tokens.dart';
 import '../../ui/widgets.dart';
 import '../../widgets/common.dart';
@@ -18,9 +19,34 @@ import 'size_scanner.dart';
 const _maxBlocks = 150;
 const restId = '__rest__';
 
+String _blockTooltip(String name, FolderStats st, AppL10n l10n) {
+  final size = fmtSize(st.total);
+  final header = size.isEmpty ? name : '$name · $size';
+  final String progress;
+  if (st.video == 0) {
+    progress = l10n.tr('非视频文件', 'Non-video files');
+  } else if (st.unorganized == 0) {
+    progress = l10n.tr('全部已整理', 'All organized');
+  } else if (st.organized == 0) {
+    progress = l10n.tr('全部未整理', 'All unorganized');
+  } else {
+    final pct = (st.organized * 100 / st.video).round().clamp(1, 99);
+    progress = l10n.tr(
+      '已整理 $pct% · 未整理 ${fmtSize(st.unorganized)}',
+      '$pct% organized · ${fmtSize(st.unorganized)} unorganized',
+    );
+  }
+  return '$header\n$progress\n'
+      '${l10n.tr('共 ${st.files} 个文件', l10n.plural(st.files, 'file'))}';
+}
+
 /// Folder [dir] as blocks: one per child, area = recursive size, tone =
 /// organize state; only past [_maxBlocks] does the tail fold into 「其余」.
-List<MapBlock> mapBlocksFor(SizeScanner s, String dir) {
+List<MapBlock> mapBlocksFor(
+  SizeScanner s,
+  String dir, {
+  AppL10n l10n = AppL10n.zh,
+}) {
   final entries = s.entriesOf(dir);
   final stats = [for (final e in entries) (e, s.statsOf(e))]
     ..removeWhere((x) => x.$2.total <= 0)
@@ -37,6 +63,7 @@ List<MapBlock> mapBlocksFor(SizeScanner s, String dir) {
           bytes: st.total,
           state: blockStateOf(st),
           caption: fmtSize(st.total),
+          tooltip: _blockTooltip(e.name, st, l10n),
         ),
       );
     } else {
@@ -45,13 +72,15 @@ List<MapBlock> mapBlocksFor(SizeScanner s, String dir) {
     }
   }
   if (restCount > 0) {
+    final restLabel = l10n.tr('其余 $restCount 项', '$restCount more');
     keep.add(
       MapBlock(
         id: restId,
-        label: '其余 $restCount 项',
+        label: restLabel,
         bytes: rest.total,
         state: blockStateOf(rest),
         caption: fmtSize(rest.total),
+        tooltip: _blockTooltip(restLabel, rest, l10n),
       ),
     );
   }
@@ -158,6 +187,7 @@ class _RepoMapViewState extends ConsumerState<RepoMapView> {
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
+    final l10n = context.l10n;
     final s = ref.watch(sizeScannerProvider(widget.connection));
     if (!identical(s, _scanner)) {
       _scanner?.removeListener(_changed);
@@ -165,9 +195,21 @@ class _RepoMapViewState extends ConsumerState<RepoMapView> {
       _start();
     }
     final dir = widget.dir;
-    final blocks = mapBlocksFor(s, dir);
+    final blocks = mapBlocksFor(s, dir, l10n: l10n);
     final busy = s.running != null;
-    final byPath = {for (final e in s.entriesOf(dir)) e.path: e};
+    final entries = s.entriesOf(dir);
+    final byPath = {for (final e in entries) e.path: e};
+    final unorganizedPaths = <String>[
+      for (final e in entries)
+        if (switch (blockStateOf(s.statsOf(e))) {
+          BlockState.unorganized || BlockState.mixed => true,
+          BlockState.organized || BlockState.other => false,
+        })
+          e.path,
+    ];
+    final allUnorganizedSelected =
+        unorganizedPaths.isNotEmpty &&
+        unorganizedPaths.every(widget.selected.contains);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -180,13 +222,60 @@ class _RepoMapViewState extends ConsumerState<RepoMapView> {
               Expanded(
                 child: RepoMapSummary(scanner: s, dir: dir),
               ),
+              if (unorganizedPaths.isNotEmpty) ...[
+                const SizedBox(width: 12),
+                OutlinedButton.icon(
+                  key: const ValueKey('map-select-unorganized'),
+                  style: OutlinedButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    textStyle: const TextStyle(fontSize: TypeScale.small),
+                  ),
+                  onPressed: () {
+                    if (allUnorganizedSelected) {
+                      for (final path in unorganizedPaths) {
+                        if (widget.selected.contains(path)) {
+                          widget.onToggleSelect(path);
+                        }
+                      }
+                    } else {
+                      for (final path in unorganizedPaths) {
+                        if (!widget.selected.contains(path)) {
+                          widget.onToggleSelect(path);
+                        }
+                      }
+                    }
+                  },
+                  icon: Icon(
+                    allUnorganizedSelected
+                        ? CupertinoIcons.checkmark_square_fill
+                        : CupertinoIcons.checkmark_square,
+                    size: 13,
+                  ),
+                  label: Text(
+                    allUnorganizedSelected
+                        ? l10n.tr('取消选中未整理', 'Deselect Unorganized')
+                        : l10n.tr(
+                            '选中未整理 (${unorganizedPaths.length})',
+                            'Select Unorganized (${unorganizedPaths.length})',
+                          ),
+                  ),
+                ),
+                const SizedBox(width: 14),
+              ],
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   const MapLegend(),
                   Text(
-                    '点击进入 · ⌘/⇧ 点选多选 · 右键更多',
+                    l10n.tr(
+                      '点击进入 · ⌘/⇧ 点选多选 · 右键更多',
+                      'Click to open · ⌘/⇧ click to select · Right-click for more',
+                    ),
                     style: TextStyle(
                       fontSize: TypeScale.small,
                       color: p.textFaint,
@@ -202,20 +291,20 @@ class _RepoMapViewState extends ConsumerState<RepoMapView> {
               ? (!busy && s.error != null
                     ? EmptyState(
                         icon: CupertinoIcons.exclamationmark_triangle,
-                        title: '这里统计不了', // the summary says why
+                        title: l10n.tr('这里统计不了', 'Unable to Scan Folder'),
                         action: OutlinedButton(
                           onPressed: () => unawaited(s.scan(dir, fresh: true)),
-                          child: const Text('重试'),
+                          child: Text(l10n.retry),
                         ),
                       )
                     : busy || !s.isListed(dir)
                     ? const Center(child: Spinner(size: 22))
                     : EmptyState(
                         icon: CupertinoIcons.folder,
-                        title: '这里没有文件',
+                        title: l10n.tr('这里没有文件', 'No Files Here'),
                         action: OutlinedButton(
                           onPressed: widget.onShowList,
-                          child: const Text('切回列表视图'),
+                          child: Text(l10n.tr('切回列表视图', 'Switch to List View')),
                         ),
                       ))
               : AnimatedSwitcher(
@@ -254,10 +343,16 @@ class _RepoMapViewState extends ConsumerState<RepoMapView> {
   }
 }
 
-String scanErrorText(Object e) =>
+String scanErrorText(Object e, {AppL10n l10n = AppL10n.zh}) =>
     e is StorageException && e.code == StorageErrorCode.notFound
-    ? '统计出错：找不到这个文件夹，可能已被移动或删除'
-    : '统计出错：${e is StorageException ? e.message : e}';
+    ? l10n.tr(
+        '统计出错：找不到这个文件夹，可能已被移动或删除',
+        'Scan failed: folder not found (it may have been moved or deleted)',
+      )
+    : l10n.tr(
+        '统计出错：${e is StorageException ? e.message : e}',
+        'Scan failed: ${l10n.coreMessage('${e is StorageException ? e.message : e}')}',
+      );
 
 /// Big size number with file count, 未整理 total and count progress.
 class RepoMapSummary extends StatelessWidget {
@@ -274,6 +369,7 @@ class RepoMapSummary extends StatelessWidget {
       builder: (ctx) {
         final theme = Theme.of(ctx);
         final p = Palette.of(ctx);
+        final l10n = ctx.l10n;
         return MacSheet(
           child: SizedBox(
             width: 520,
@@ -284,7 +380,10 @@ class RepoMapSummary extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
-                    '跳过 ${entries.length} 个读不了的文件夹',
+                    l10n.tr(
+                      '跳过 ${entries.length} 个读不了的文件夹',
+                      'Skipped ${l10n.plural(entries.length, 'unreadable folder')}',
+                    ),
                     style: theme.textTheme.titleMedium,
                   ),
                   const SizedBox(height: 12),
@@ -315,7 +414,7 @@ class RepoMapSummary extends StatelessWidget {
                                 ),
                                 const SizedBox(height: 2),
                                 SelectableText(
-                                  e.value,
+                                  l10n.coreMessage(e.value),
                                   style: TextStyle(
                                     fontSize: TypeScale.small,
                                     color: p.textMuted,
@@ -334,7 +433,7 @@ class RepoMapSummary extends StatelessWidget {
                     children: [
                       TextButton(
                         onPressed: () => Navigator.of(ctx).pop(),
-                        child: const Text('关闭'),
+                        child: Text(l10n.close),
                       ),
                     ],
                   ),
@@ -350,6 +449,7 @@ class RepoMapSummary extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
+    final l10n = context.l10n;
     final s = scanner;
     final stats = s.statsOfDir(dir);
     final size = fmtSize(stats.total);
@@ -362,8 +462,13 @@ class RepoMapSummary extends StatelessWidget {
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               const Spinner(size: 13),
-              Text('正在统计，已读 ${s.dirsListed} 个文件夹'),
-              LinkText('停止', onTap: s.cancel),
+              Text(
+                l10n.tr(
+                  '正在统计，已读 ${s.dirsListed} 个文件夹',
+                  'Scanning, ${l10n.plural(s.dirsListed, 'folder')} read',
+                ),
+              ),
+              LinkText(l10n.tr('停止', 'Stop'), onTap: s.cancel),
             ],
           )
         : s.error != null
@@ -372,15 +477,18 @@ class RepoMapSummary extends StatelessWidget {
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               Tooltip(
-                message: '${s.error}',
+                message: l10n.coreMessage('${s.error}'),
                 child: Text(
-                  scanErrorText(s.error!),
+                  scanErrorText(s.error!, l10n: l10n),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(color: p.danger),
                 ),
               ),
-              LinkText('重试', onTap: () => unawaited(s.scan(dir, fresh: true))),
+              LinkText(
+                l10n.retry,
+                onTap: () => unawaited(s.scan(dir, fresh: true)),
+              ),
             ],
           )
         : s.isComplete(dir)
@@ -390,15 +498,24 @@ class RepoMapSummary extends StatelessWidget {
             children: [
               Text(
                 [
-                  '${stats.files} 个文件',
+                  l10n.tr(
+                    '${stats.files} 个文件',
+                    l10n.plural(stats.files, 'file'),
+                  ),
                   if (stats.unorganized > 0)
-                    '未整理 ${fmtSize(stats.unorganized)}',
-                ].join('，'),
+                    l10n.tr(
+                      '未整理 ${fmtSize(stats.unorganized)}',
+                      '${fmtSize(stats.unorganized)} unorganized',
+                    ),
+                ].join(l10n.isEn ? ', ' : '，'),
                 style: TextStyle(color: p.textMuted),
               ),
               if (s.skipped.isNotEmpty)
                 LinkText(
-                  '跳过 ${s.skipped.length} 个读不了的文件夹',
+                  l10n.tr(
+                    '跳过 ${s.skipped.length} 个读不了的文件夹',
+                    'Skipped ${l10n.plural(s.skipped.length, 'unreadable folder')}',
+                  ),
                   onTap: () => _showSkipped(context),
                 ),
             ],
@@ -407,8 +524,14 @@ class RepoMapSummary extends StatelessWidget {
             spacing: 10,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              Text('已停止，结果不完整', style: TextStyle(color: p.textMuted)),
-              LinkText('继续统计', onTap: () => unawaited(s.scan(dir))),
+              Text(
+                l10n.tr('已停止，结果不完整', 'Stopped; results are incomplete'),
+                style: TextStyle(color: p.textMuted),
+              ),
+              LinkText(
+                l10n.tr('继续统计', 'Resume'),
+                onTap: () => unawaited(s.scan(dir)),
+              ),
             ],
           );
     return BigNumber(value, unit: unit, captions: [status]);
@@ -422,6 +545,7 @@ class MapLegend extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
+    final l10n = context.l10n;
     final dark = Theme.of(context).brightness == Brightness.dark;
     Widget item(BlockState st, String label) {
       final fill = blockFill(st, p, dark: dark);
@@ -468,10 +592,10 @@ class MapLegend extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          item(BlockState.unorganized, '未整理'),
-          item(BlockState.mixed, '部分整理'),
-          item(BlockState.organized, '已整理'),
-          item(BlockState.other, '非视频'),
+          item(BlockState.unorganized, l10n.tr('未整理', 'Unorganized')),
+          item(BlockState.mixed, l10n.tr('部分整理', 'Partial')),
+          item(BlockState.organized, l10n.tr('已整理', 'Organized')),
+          item(BlockState.other, l10n.tr('非视频', 'Other')),
         ],
       ),
     );

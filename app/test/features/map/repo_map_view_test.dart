@@ -52,6 +52,18 @@ Future<ProviderContainer> _pump(
   return c;
 }
 
+/// Waits for any isolate-offloaded OrganicMap layout (> 24 blocks) to finish.
+Future<void> _settleIsolateLayout(WidgetTester tester) async {
+  await tester.pump();
+  for (var i = 0; i < 200 && debugPendingLayoutCount > 0; i++) {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 25)),
+    );
+    await tester.pump();
+  }
+  await tester.pumpAndSettle();
+}
+
 /// Where block [label] is drawn, by laying the map out the same way.
 Offset _centerOf(WidgetTester tester, ProviderContainer c, String label) {
   final map = tester.widget<OrganicMap>(find.byType(OrganicMap));
@@ -220,7 +232,7 @@ void main() {
         ),
       ),
     );
-    await tester.pumpAndSettle();
+    await _settleIsolateLayout(tester);
     final viewer = tester.widget<InteractiveViewer>(
       find.byKey(const ValueKey('map-viewer')),
     );
@@ -387,7 +399,7 @@ void main() {
         ),
       ),
     );
-    await tester.pumpAndSettle();
+    await _settleIsolateLayout(tester);
     for (final style in MapZoomStyle.values) {
       await tester.tap(find.text(style.label));
       await tester.pumpAndSettle();
@@ -426,5 +438,167 @@ void main() {
     expect(identical(before, after), isTrue);
     expect(find.byType(OrganicMap), findsOneWidget);
     expect(find.byType(Spinner), findsNothing);
+  });
+
+  testWidgets('一键选中未整理 button selects and deselects unorganized children', (
+    tester,
+  ) async {
+    final c = await _pump(tester);
+    await tester.tap(find.text('地图'));
+    await tester.pumpAndSettle();
+
+    final btn = find.byKey(const ValueKey('map-select-unorganized'));
+    expect(btn, findsOneWidget);
+    expect(find.text('选中未整理 (2)'), findsOneWidget);
+
+    await tester.tap(btn);
+    await tester.pumpAndSettle();
+    expect(c.read(browserSelectionProvider), {'$root/下载', '$root/待分类'});
+    expect(find.text('取消选中未整理'), findsOneWidget);
+
+    await tester.tap(btn);
+    await tester.pumpAndSettle();
+    expect(c.read(browserSelectionProvider), isEmpty);
+    expect(find.text('选中未整理 (2)'), findsOneWidget);
+
+    // Inside an all-organized folder the button stays hidden.
+    await tester.tapAt(_centerOf(tester, c, '电影'));
+    await tester.pumpAndSettle();
+    expect(c.read(browserDirProvider), '$root/电影');
+    expect(btn, findsNothing);
+  });
+
+  test(
+    'mapBlocksFor generates rich multi-line Chinese tooltip stats',
+    () async {
+      var marks = <String, bool>{};
+      final s = SizeScanner(
+        backend: MemoryStorageBackend(fakeLibrary),
+        organizedOf: (paths) async =>
+            paths.where(fakeOrganized.contains).toSet(),
+        marks: () => marks,
+      );
+      addTearDown(s.dispose);
+      await s.scan(root);
+
+      final blocks = mapBlocksFor(s, root);
+      MapBlock byLabel(String label) =>
+          blocks.firstWhere((b) => b.label == label);
+
+      final movieTip = byLabel('电影').tooltip!;
+      expect(movieTip, contains('电影 ·'));
+      expect(movieTip, contains('全部已整理'));
+      expect(movieTip, contains('共 '));
+      expect(movieTip, contains('个文件'));
+
+      final dlTip = byLabel('下载').tooltip!;
+      expect(dlTip, contains('下载 ·'));
+      expect(dlTip, contains('全部未整理'));
+      expect(dlTip, contains('个文件'));
+
+      final subTip = byLabel('字幕包').tooltip!;
+      expect(subTip, contains('字幕包 ·'));
+      expect(subTip, contains('非视频文件'));
+      expect(subTip, contains('共 120 个文件'));
+
+      // Mixed folder shows percentage and unorganized byte size.
+      marks = {'$root/动漫/海贼王 (1999)': false, '$root/动漫/咒术回战 (2020)': false};
+      s.marksChanged();
+      final mixedTip = mapBlocksFor(
+        s,
+        root,
+      ).firstWhere((b) => b.label == '动漫').tooltip!;
+      expect(mixedTip, contains('已整理 '));
+      expect(mixedTip, contains('% · 未整理 '));
+    },
+  );
+
+  testWidgets('OrganicMap hover card renders multi-line tooltip cleanly', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(900, 500);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: OrganicMap(
+            blocks: [
+              MapBlock(
+                id: '/a',
+                label: '动漫',
+                bytes: 1000,
+                state: BlockState.mixed,
+                caption: '42.3 GB',
+                tooltip: '动漫 · 42.3 GB\n已整理 72% · 未整理 11.8 GB\n共 120 个文件',
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(gesture.removePointer);
+    await gesture.addPointer(location: Offset.zero);
+    await gesture.moveTo(const Offset(450, 250));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('map-hover')), findsOneWidget);
+    expect(find.text('动漫 · 42.3 GB'), findsOneWidget);
+    expect(find.text('已整理 72% · 未整理 11.8 GB'), findsOneWidget);
+    expect(find.text('共 120 个文件'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('isolate layout handles updates and disposal cleanly', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(900, 500);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    List<MapBlock> makeBlocks(int n, int scale) => [
+      for (var i = 0; i < n; i++)
+        MapBlock(
+          id: '/b$i',
+          label: 'item $i',
+          bytes: (i + 1) * scale,
+          state: BlockState.organized,
+        ),
+    ];
+
+    final tapped = <String>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: OrganicMap(
+            blocks: makeBlocks(30, 1000),
+            onTap: (b) => tapped.add(b.id),
+          ),
+        ),
+      ),
+    );
+    expect(debugPendingLayoutCount, greaterThan(0));
+    await _settleIsolateLayout(tester);
+    expect(debugPendingLayoutCount, 0);
+
+    // Trigger an update while another isolate layout is spawned, then dispose
+    // immediately to confirm stale callbacks never call setState after dispose.
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: OrganicMap(
+            blocks: makeBlocks(35, 2000),
+            onTap: (b) => tapped.add(b.id),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpWidget(const MaterialApp(home: Scaffold()));
+    await _settleIsolateLayout(tester);
+    expect(tester.takeException(), isNull);
   });
 }

@@ -1,13 +1,20 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
+import '../../l10n/l10n.dart';
 import '../../ui/tokens.dart';
 import '../../ui/widgets.dart';
 import 'organic_layout.dart';
 import 'size_scanner.dart';
+
+/// Above this block count, Voronoi layout runs on a background isolate so
+/// crowded folders never stall UI frames.
+const isolateLayoutThreshold = 24;
 
 /// Smallest area a block is drawn with (logical px²): big enough to hover
 /// and click, small enough that areas still read as sizes.
@@ -54,12 +61,16 @@ class MapBlock {
   /// Second line; defaults to nothing.
   final String? caption;
 
+  /// Optional multi-line rich hover card text.
+  final String? tooltip;
+
   const MapBlock({
     required this.id,
     required this.label,
     required this.bytes,
     required this.state,
     this.caption,
+    this.tooltip,
   });
 }
 
@@ -98,15 +109,18 @@ class OrganicMap extends StatefulWidget {
 enum MapZoomStyle {
   /// Geometric zoom; pebbles past the edge are clipped by the frame and
   /// re-rounded, so every one on screen looks whole.
-  frame('缩放'),
+  frame('缩放', 'Zoom'),
 
   /// Zooming re-lays out the pebbles in view to fill the frame, morphing
   /// from the old picture to the new.
-  semantic('展开');
+  semantic('展开', 'Expand');
 
   final String label;
+  final String englishLabel;
 
-  const MapZoomStyle(this.label);
+  const MapZoomStyle(this.label, this.englishLabel);
+
+  String localizedLabel(AppL10n l10n) => l10n.isEn ? englishLabel : label;
 }
 
 /// Shared by every map so it survives folder changes.
@@ -115,6 +129,11 @@ final mapZoomStyle = ValueNotifier(MapZoomStyle.frame);
 /// Pebbles over 200×200 px that got no name in the last paint (debug only).
 @visibleForTesting
 final debugUnlabeled = <String>{};
+
+/// Count of in-flight isolate layout computations (debug only; lets widget
+/// tests wait for background layout completion without deadlocking FakeAsync).
+@visibleForTesting
+int debugPendingLayoutCount = 0;
 
 /// Points per outline while morphing: enough that big pebbles show no facets.
 const _morphPoints = 96;
@@ -213,6 +232,8 @@ class _OrganicMapState extends State<OrganicMap> with TickerProviderStateMixin {
   /// Last layout and what it was for: a rebuild with equal sizes reuses it.
   List<MapCell> _cells = const [];
   String? _laidOut;
+  String? _pendingLayout;
+  var _layoutGen = 0;
 
   /// Canvas the view was last fitted to: a new canvas starts fitted again.
   Size? _fittedFor;
@@ -278,6 +299,7 @@ class _OrganicMapState extends State<OrganicMap> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    _layoutGen++;
     mapZoomStyle.removeListener(_onStyle);
     _anim.dispose();
     _morph.dispose();
@@ -288,7 +310,9 @@ class _OrganicMapState extends State<OrganicMap> with TickerProviderStateMixin {
   MapZoomStyle get _style => mapZoomStyle.value;
 
   /// Lays [items] out in [bounds]; the last result is reused when nothing
-  /// changed (the Voronoi layout is costly).
+  /// changed (the Voronoi layout is costly). Maps with more than
+  /// [isolateLayoutThreshold] blocks offload the computation to a background
+  /// isolate while keeping the previous cells visible to avoid flicker.
   List<MapCell> _layout(
     List<MapItem> items,
     Rect bounds, {
@@ -301,14 +325,69 @@ class _OrganicMapState extends State<OrganicMap> with TickerProviderStateMixin {
       seeds == null,
       for (final i in items) '${i.id}\u0000${i.value.round()}',
     ].join('\u0001');
-    if (key == _laidOut) return _cells;
-    _laidOut = key;
-    return _cells = layoutOrganic(
+    if (key == _laidOut) {
+      if (_pendingLayout != null) {
+        _layoutGen++;
+        _pendingLayout = null;
+      }
+      return _cells;
+    }
+    final iterations = rough ? 30 : 120;
+    if (widget.blocks.length <= isolateLayoutThreshold ||
+        items.isEmpty ||
+        bounds.isEmpty) {
+      _layoutGen++;
+      _pendingLayout = null;
+      _laidOut = key;
+      _rest = null;
+      return _cells = layoutOrganic(
+        items,
+        bounds,
+        iterations: iterations,
+        seeds: seeds,
+      );
+    }
+    if (key == _pendingLayout) return _cells;
+    _pendingLayout = key;
+    final gen = ++_layoutGen;
+    final req = packOrganicLayoutRequest(
       items,
       bounds,
-      iterations: rough ? 30 : 120,
+      iterations: iterations,
       seeds: seeds,
     );
+    unawaited(_computeLayout(gen, key, req));
+    return _cells;
+  }
+
+  Future<void> _computeLayout(
+    int gen,
+    String key,
+    OrganicLayoutRequest req,
+  ) async {
+    assert(() {
+      debugPendingLayoutCount++;
+      return true;
+    }());
+    try {
+      final raw = await compute(layoutOrganicInIsolate, req);
+      if (!mounted || gen != _layoutGen) return;
+      setState(() {
+        _laidOut = key;
+        _pendingLayout = null;
+        _cells = unpackOrganicLayoutCells(raw);
+        _rest = null;
+      });
+    } on Object {
+      if (mounted && gen == _layoutGen) {
+        _pendingLayout = null;
+      }
+    } finally {
+      assert(() {
+        debugPendingLayoutCount--;
+        return true;
+      }());
+    }
   }
 
   /// Each pebble's own share of the gap, so gaps vary like stones laid by
@@ -552,7 +631,7 @@ class _OrganicMapState extends State<OrganicMap> with TickerProviderStateMixin {
   /// across rebuilds that pass freshly allocated lists with identical items.
   String _blocksSig() => [
     for (final b in widget.blocks)
-      '${b.id}\u0000${b.label}\u0000${b.bytes}\u0000${b.state.index}\u0000${b.caption ?? ''}',
+      '${b.id}\u0000${b.label}\u0000${b.bytes}\u0000${b.state.index}\u0000${b.caption ?? ''}\u0000${b.tooltip ?? ''}',
   ].join('\u0001');
 
   static bool _matrixEquals(Matrix4? a, Matrix4 b) {
@@ -826,22 +905,9 @@ class _OrganicMapState extends State<OrganicMap> with TickerProviderStateMixin {
                 left: 0,
                 bottom: 0,
                 child: IgnorePointer(
-                  child: _MapPill(
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(
-                        maxWidth: viewport.width * 0.6,
-                      ),
-                      child: Text(
-                        [hovered.label, ?hovered.caption].join('  ·  '),
-                        key: const ValueKey('map-hover'),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: TypeScale.small,
-                          color: p.text,
-                        ),
-                      ),
-                    ),
+                  child: _HoverCard(
+                    block: hovered,
+                    maxWidth: math.min(viewport.width * 0.55, 340),
                   ),
                 ),
               ),
@@ -852,11 +918,15 @@ class _OrganicMapState extends State<OrganicMap> with TickerProviderStateMixin {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Tooltip(
-                    message: '缩放：几何放大并裁剪边缘  ·  展开：重排视野内的区块填满画面',
+                    message: context.tr(
+                      '缩放：几何放大并裁剪边缘  ·  展开：重排视野内的区块填满画面',
+                      'Zoom: geometric zoom with rounded frame edges · Expand: reflow visible blocks to fill the view',
+                    ),
                     child: Segmented<MapZoomStyle>(
                       key: const ValueKey('map-style'),
                       options: {
-                        for (final s in MapZoomStyle.values) s: s.label,
+                        for (final s in MapZoomStyle.values)
+                          s: s.localizedLabel(context.l10n),
                       },
                       value: style,
                       onChanged: (s) => mapZoomStyle.value = s,
@@ -871,19 +941,22 @@ class _OrganicMapState extends State<OrganicMap> with TickerProviderStateMixin {
                         _ZoomButton(
                           key: const ValueKey('map-zoom-out'),
                           icon: CupertinoIcons.minus,
-                          tooltip: '缩小',
+                          tooltip: context.tr('缩小', 'Zoom out'),
                           onTap: () => _zoomButton(1 / 1.5),
                         ),
                         _ZoomButton(
                           key: const ValueKey('map-zoom-in'),
                           icon: CupertinoIcons.plus,
-                          tooltip: '放大，显示更多名字',
+                          tooltip: context.tr(
+                            '放大，显示更多名字',
+                            'Zoom in to see more labels',
+                          ),
                           onTap: () => _zoomButton(1.5),
                         ),
                         _ZoomButton(
                           key: const ValueKey('map-fit'),
                           icon: CupertinoIcons.fullscreen_exit,
-                          tooltip: '显示全部',
+                          tooltip: context.tr('显示全部', 'Fit all'),
                           onTap: _fitAll,
                         ),
                       ],
@@ -895,6 +968,64 @@ class _OrganicMapState extends State<OrganicMap> with TickerProviderStateMixin {
           ],
         );
       },
+    );
+  }
+}
+
+/// Floating hover card over the bottom-left of the map.
+class _HoverCard extends StatelessWidget {
+  final MapBlock block;
+  final double maxWidth;
+
+  const _HoverCard({required this.block, required this.maxWidth});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    final tip = block.tooltip;
+    if (tip == null || tip.trim().isEmpty) {
+      return _MapPill(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: maxWidth),
+          child: Text(
+            [block.label, ?block.caption].join('  ·  '),
+            key: const ValueKey('map-hover'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: TypeScale.small, color: p.text),
+          ),
+        ),
+      );
+    }
+    final lines = tip
+        .split('\n')
+        .map((l) => l.trim())
+        .where((l) => l.isNotEmpty)
+        .toList();
+    return _MapPill(
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxWidth),
+        child: Column(
+          key: const ValueKey('map-hover'),
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (var i = 0; i < lines.length; i++)
+              Text(
+                lines[i],
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: TypeScale.small,
+                  fontWeight: i == 0 ? FontWeight.w500 : FontWeight.w400,
+                  color: i == 0 ? p.text : p.textMuted,
+                  height: 1.35,
+                ),
+              ),
+          ],
+        ),
+      ),
     );
   }
 }

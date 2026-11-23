@@ -1,6 +1,7 @@
 import 'ids.dart';
 import 'media.dart';
 import 'metadata.dart';
+import 'plan.dart';
 
 /// One entry as returned by a [StorageBackend]. [path] is absolute, '/'-separated.
 class RemoteEntry {
@@ -29,13 +30,34 @@ class ScanFile {
   /// Null for junk / other files.
   final ParsedName? parsed;
 
+  /// True when [path] is a Blu-ray (`BDMV`) or DVD (`VIDEO_TS`) root folder
+  /// treated as an indivisible disc unit (its inner streams are never touched).
+  final bool isDiscDir;
+
   const ScanFile({
     required this.path,
     required this.name,
     required this.size,
     required this.role,
     this.parsed,
+    this.isDiscDir = false,
   });
+
+  ScanFile copyWith({
+    String? path,
+    String? name,
+    int? size,
+    FileRole? role,
+    ParsedName? Function()? parsed,
+    bool? isDiscDir,
+  }) => ScanFile(
+    path: path ?? this.path,
+    name: name ?? this.name,
+    size: size ?? this.size,
+    role: role ?? this.role,
+    parsed: parsed != null ? parsed() : this.parsed,
+    isDiscDir: isDiscDir ?? this.isDiscDir,
+  );
 }
 
 /// One movie or one TV show found in a task (a card in the review page).
@@ -64,6 +86,13 @@ class MediaGroup {
   /// TV only, for the completeness line "本地 2 季 23 集 / TMDB 2 季 23 集".
   final ShowDetail? show;
 
+  /// Recommended non-default strategy inferred from local episode layout vs TMDB
+  /// (e.g. long-running anime with absolute numbering 1..291 → splitSequential).
+  final SeasonStrategy? suggestedStrategy;
+
+  /// Human-readable Chinese reason for [suggestedStrategy].
+  final String? suggestedStrategyReason;
+
   const MediaGroup({
     required this.id,
     required this.kind,
@@ -74,6 +103,8 @@ class MediaGroup {
     this.match,
     this.matchScore = 0,
     this.show,
+    this.suggestedStrategy,
+    this.suggestedStrategyReason,
   });
 }
 

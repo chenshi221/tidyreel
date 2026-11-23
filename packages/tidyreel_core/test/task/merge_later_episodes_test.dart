@@ -26,6 +26,7 @@ class ShowRecognizer implements Recognizer {
     List<String> roots,
     List<RemoteEntry> files, {
     Future<List<int>> Function(String path)? read,
+    StorageBackend? backend,
   }) async => scanOf([
     tvGroup([
       for (final f in files)

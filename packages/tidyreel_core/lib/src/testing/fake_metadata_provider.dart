@@ -4,7 +4,35 @@ import '../tmdb/metadata_provider.dart';
 import 'demo_data.dart';
 
 /// Searches [Demo.candidates] by substring of any title.
-class FakeMetadataProvider implements MetadataProvider {
+class FakeMetadataProvider implements MetadataProvider, ExternalIdLookup {
+  @override
+  Future<Candidate?> findByExternalId(
+    String source,
+    String id, {
+    MediaKind? kind,
+  }) async {
+    if (source == 'tmdb') {
+      final tmdbId = int.tryParse(id);
+      if (tmdbId == null) return null;
+      return Demo.candidates
+          .where((c) => c.tmdbId == tmdbId && (kind == null || c.kind == kind))
+          .firstOrNull;
+    }
+    if (source == 'imdb') {
+      return Demo.candidates
+          .where((c) => c.imdbId == id && (kind == null || c.kind == kind))
+          .firstOrNull;
+    }
+    if (source == 'tvdb') {
+      final tvdbId = int.tryParse(id);
+      if (tvdbId == null) return null;
+      return Demo.candidates
+          .where((c) => c.tvdbId == tvdbId && (kind == null || c.kind == kind))
+          .firstOrNull;
+    }
+    return null;
+  }
+
   @override
   Future<List<Candidate>> search(
     String query, {

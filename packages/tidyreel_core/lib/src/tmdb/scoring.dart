@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import '../model/media.dart';
 import '../model/metadata.dart';
 import '../plan/text.dart' show tradToSimp;
@@ -46,6 +48,21 @@ NormalizedQuery normalizeQuery(String raw) {
   return (text: text, year: year);
 }
 
+/// Subtle bounded tie-breaker (`0.0..0.03`) derived from TMDB [Candidate.voteCount]
+/// and [Candidate.popularity]. Returns `0.0` when both are absent or non-positive.
+double popularityBonus(Candidate c) {
+  final vc = c.voteCount;
+  final pop = c.popularity;
+  if (vc == null && pop == null) return 0.0;
+  final vcBonus = vc != null && vc > 0
+      ? min(0.02, (log(vc + 1) / ln10) / 4.0 * 0.02)
+      : 0.0;
+  final popBonus = pop != null && pop > 0 && pop.isFinite
+      ? min(0.01, (log(pop + 1) / ln10) / 3.0 * 0.01)
+      : 0.0;
+  return min(0.03, vcBonus + popBonus);
+}
+
 /// Scores how well [c] matches an already-normalized query [normalized].
 double scoreNormalized(
   Candidate c, {
@@ -72,7 +89,82 @@ double scoreNormalized(
       (isTv && c.kind == MediaKind.episode)) {
     score += 0.1;
   }
-  return score;
+  if (sim >= 0.5) {
+    score += popularityBonus(c);
+  }
+  return score.clamp(0.0, 1.0);
+}
+
+/// Scores how well a candidate TV show's TMDB season/episode structure matches
+/// local files, returning a bonus or penalty in `-0.12 .. +0.10`.
+///
+/// Compares [localMaxEp] against the show's max single-season episode count and
+/// total regular-season episode count (`s.number > 0`), and checks
+/// [localSeasonCount] against the number of regular TMDB seasons.
+double scoreEpisodeFit({
+  required int localMaxEp,
+  required int localSeasonCount,
+  required ShowDetail show,
+}) {
+  final regular = [
+    for (final s in show.seasons)
+      if (s.number > 0 && s.episodeCount > 0) s,
+  ];
+  if (localMaxEp <= 0 || regular.isEmpty) return 0.0;
+
+  final totalRegularEps = regular.fold<int>(
+    0,
+    (sum, s) => sum + s.episodeCount,
+  );
+  final maxSeasonEps = regular.fold<int>(
+    0,
+    (m, s) => s.episodeCount > m ? s.episodeCount : m,
+  );
+  final tmdbSeasonCount = regular.length;
+
+  var score = 0.0;
+  if (localMaxEp <= maxSeasonEps) {
+    score += 0.06;
+    if (localMaxEp >= 2 && regular.any((s) => s.episodeCount == localMaxEp)) {
+      score += 0.02;
+    }
+  } else if (localMaxEp <= totalRegularEps) {
+    score += 0.06;
+    if (localMaxEp >= 2 && localMaxEp == totalRegularEps) {
+      score += 0.02;
+    }
+  } else {
+    final excess = localMaxEp - totalRegularEps;
+    final ratio = localMaxEp / totalRegularEps;
+    if (excess <= 2 && ratio <= 1.25) {
+      score -= 0.02;
+    } else if (ratio <= 2.0 && excess < 10) {
+      score -= 0.06;
+    } else if (ratio < 3.0 && excess < 15) {
+      score -= 0.09;
+    } else {
+      score -= 0.12;
+    }
+  }
+
+  if (localSeasonCount > 0) {
+    if (localSeasonCount <= tmdbSeasonCount) {
+      if (score >= 0) {
+        score += (tmdbSeasonCount - localSeasonCount) <= 1 ? 0.02 : 0.01;
+      }
+    } else {
+      final extraSeasons = localSeasonCount - tmdbSeasonCount;
+      if (extraSeasons == 1) {
+        score -= 0.02;
+      } else if (extraSeasons == 2) {
+        score -= 0.06;
+      } else {
+        score -= 0.10;
+      }
+    }
+  }
+
+  return score.clamp(-0.12, 0.10);
 }
 
 /// Scores how well [c] matches a user/parsed [query], in 0..1 (higher is better).

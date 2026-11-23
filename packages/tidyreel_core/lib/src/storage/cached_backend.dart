@@ -9,7 +9,7 @@ import 'storage_backend.dart';
 /// a slow server (seconds per request) is asked once per folder. Concurrent
 /// lists of one folder share a request; our own writes drop the folders they
 /// touch. `refresh: true` and [exists] always go to the server.
-class CachedBackend implements StorageBackend {
+class CachedBackend implements StorageBackend, RangeReadableBackend {
   final StorageBackend _inner;
   final Duration ttl;
   final DateTime Function() now;
@@ -210,6 +210,15 @@ class CachedBackend implements StorageBackend {
 
   @override
   Future<List<int>> read(String path) => _inner.read(path);
+
+  @override
+  Future<List<int>> readRange(String path, int start, int length) async {
+    final data = await readRangeIfSupported(_inner, path, start, length);
+    if (data == null) {
+      throw const StorageException(StorageErrorCode.other, '不支持分段读取');
+    }
+    return data;
+  }
 
   @override
   Future<void> write(String path, List<int> bytes) async {

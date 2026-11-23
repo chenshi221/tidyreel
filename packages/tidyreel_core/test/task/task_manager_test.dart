@@ -18,6 +18,7 @@ class FakeRecognizer implements Recognizer {
     List<String> roots,
     List<RemoteEntry> files, {
     Future<List<int>> Function(String path)? read,
+    StorageBackend? backend,
   }) async {
     calls++;
     await gate?.future;
@@ -1459,6 +1460,365 @@ void main() {
       expect(msgs.any((m) => m.startsWith('正在刮削（写入元数据和海报）')), isTrue);
     });
   });
+
+  group(
+    'v1.0 interactive actions, scrapeOnly, BDMV short-circuit, and empty dirs',
+    () {
+      test('scrapeOnly forwards flag through submit/summary/options and writes NFO without moving files', () async {
+        final fs = MemoryStorageBackend({
+          '/in/Inception.2010/Inception.2010.mkv': 1,
+        });
+        final store = MemoryTaskStore();
+        final history = MemoryHistoryStore();
+        final tm = DefaultTaskManager(
+          backendFor: (_) => fs,
+          recognizer: AnchorRecognizer(
+            const RuleBasedParser(),
+            FakeMetadataProvider(),
+          ),
+          planner: DefaultPlanner(FakeMetadataProvider()),
+          executor: DefaultExecutor(
+            history,
+            minInterval: Duration.zero,
+            fetch: (_) async => [1, 2, 3],
+          ),
+          history: history,
+          store: store,
+          options: (_, mode) => PlanOptions(mode: mode),
+          importUpdateInterval: Duration.zero,
+        );
+        addTearDown(tm.dispose);
+
+        final id = await tm.submit(
+          conn,
+          ['/in'],
+          OrganizeMode.inPlace,
+          scrapeOnly: true,
+        );
+        final ready = await tm
+            .watchAll()
+            .map((l) => l.where((t) => t.id == id).firstOrNull)
+            .firstWhere(
+              (t) => t != null && t.stage == TaskStage.awaitingReview,
+            );
+        expect(ready!.scrapeOnly, isTrue);
+        expect(ready.scrape, isTrue);
+
+        final rev = await tm.review(id);
+        expect(rev.preview.ops, isNotEmpty);
+        expect(rev.preview.ops.every((o) => o.kind == OpKind.write), isTrue);
+
+        await tm.run(id);
+        expect(fs.files, [
+          '/in/Inception.2010/Inception.2010.mkv',
+          '/in/Inception.2010/Inception.2010.nfo',
+        ]);
+      });
+
+      test('assignUnassigned and setUnassignedDelete update review, plan, and execution', () async {
+        final fs = MemoryStorageBackend({
+          '/in/异兽魔都 2020/S01E01.mkv': 1,
+          '/in/异兽魔都 2020/ad.txt': 1,
+          '/in/loose/S01E02.chs.srt': 1,
+        });
+        final store = MemoryTaskStore();
+        final history = MemoryHistoryStore();
+        final tm = DefaultTaskManager(
+          backendFor: (_) => fs,
+          recognizer: AnchorRecognizer(
+            const RuleBasedParser(),
+            FakeMetadataProvider(),
+          ),
+          planner: DefaultPlanner(FakeMetadataProvider()),
+          executor: DefaultExecutor(history, minInterval: Duration.zero),
+          history: history,
+          store: store,
+          options: (_, mode) => PlanOptions(mode: mode),
+          importUpdateInterval: Duration.zero,
+        );
+        addTearDown(tm.dispose);
+
+        final id = await tm.submit(conn, ['/in'], OrganizeMode.inPlace);
+        await tm.watchAll().firstWhere(
+          (l) =>
+              l.any((t) => t.id == id && t.stage == TaskStage.awaitingReview),
+        );
+
+        final before = await tm.review(id);
+        final gid = before.scan.groups.single.id;
+        expect(
+          before.scan.unassigned.map((f) => f.path),
+          containsAll(['/in/异兽魔都 2020/ad.txt', '/in/loose/S01E02.chs.srt']),
+        );
+
+        // Assign unassigned subtitle to group.
+        final afterAssign = await tm.assignUnassigned(
+          id,
+          '/in/loose/S01E02.chs.srt',
+          gid,
+        );
+        expect(
+          afterAssign.scan.unassigned.any(
+            (f) => f.path == '/in/loose/S01E02.chs.srt',
+          ),
+          isFalse,
+        );
+        expect(
+          afterAssign.scan.groups.single.files.any(
+            (f) => f.path == '/in/loose/S01E02.chs.srt',
+          ),
+          isTrue,
+        );
+
+        // Toggle unassigned junk deletion on.
+        final afterDel = await tm.setUnassignedDelete(
+          id,
+          '/in/异兽魔都 2020/ad.txt',
+          true,
+        );
+        final delOp = afterDel.preview.ops.singleWhere(
+          (o) => o.kind == OpKind.delete,
+        );
+        expect(delOp.selected, isTrue);
+
+        await tm.run(id);
+        expect(fs.files.any((p) => p.endsWith('ad.txt')), isFalse);
+      });
+
+      test('mergeGroups and splitGroup update groups, rootDirs, decisions, and persist', () async {
+        final fs = MemoryStorageBackend({
+          '/in/A/Dorohedoro S01E01.mkv': 1,
+          '/in/B/Dorohedoro S02E01.mkv': 1,
+        });
+        final store = MemoryTaskStore();
+        final history = MemoryHistoryStore();
+        final tm = DefaultTaskManager(
+          backendFor: (_) => fs,
+          recognizer: AnchorRecognizer(
+            const RuleBasedParser(),
+            FakeMetadataProvider(),
+          ),
+          planner: DefaultPlanner(FakeMetadataProvider()),
+          executor: DefaultExecutor(history, minInterval: Duration.zero),
+          history: history,
+          store: store,
+          options: (_, mode) => PlanOptions(mode: mode),
+          importUpdateInterval: Duration.zero,
+        );
+        addTearDown(tm.dispose);
+
+        final id = await tm.submit(conn, ['/in'], OrganizeMode.inPlace);
+        await tm.watchAll().firstWhere(
+          (l) =>
+              l.any((t) => t.id == id && t.stage == TaskStage.awaitingReview),
+        );
+        final initial = await tm.review(id);
+        expect(initial.scan.groups, hasLength(2));
+        final g1 = initial.scan.groups[0].id;
+        final g2 = initial.scan.groups[1].id;
+
+        // Merge g2 into g1.
+        final merged = await tm.mergeGroups(id, g1, g2);
+        expect(merged.scan.groups, hasLength(1));
+        expect(merged.scan.groups.single.id, g1);
+        expect(merged.scan.groups.single.rootDir, '/in');
+        expect(merged.scan.groups.single.files, hasLength(2));
+        expect(merged.decisions.containsKey(g2), isFalse);
+
+        // Invalid split (all files or empty set) throws ArgumentError.
+        await expectLater(tm.splitGroup(id, g1, {}), throwsArgumentError);
+        await expectLater(
+          tm.splitGroup(id, g1, {
+            '/in/A/Dorohedoro S01E01.mkv',
+            '/in/B/Dorohedoro S02E01.mkv',
+          }),
+          throwsArgumentError,
+        );
+
+        // Valid split puts S02E01 into a fresh group.
+        final split = await tm.splitGroup(id, g1, {
+          '/in/B/Dorohedoro S02E01.mkv',
+        });
+        expect(split.scan.groups, hasLength(2));
+        final kept = split.scan.groups.firstWhere((g) => g.id == g1);
+        final created = split.scan.groups.firstWhere((g) => g.id != g1);
+        expect(kept.rootDir, '/in/A');
+        expect(kept.files.map((f) => f.path), ['/in/A/Dorohedoro S01E01.mkv']);
+        expect(created.rootDir, '/in/B');
+        expect(created.files.map((f) => f.path), [
+          '/in/B/Dorohedoro S02E01.mkv',
+        ]);
+        expect(split.decisions.containsKey(created.id), isTrue);
+
+        // Persisted cleanly in TaskStore.
+        final stored = (await store.loadAll()).single;
+        expect(stored.scan!.groups, hasLength(2));
+      });
+
+      test('findEmptyDirs and removeEmptyDirs clean empty source trees while protecting roots', () async {
+        final fs = MemoryStorageBackend({
+          '/in/Show/Season 1/Dorohedoro S01E01.mkv': 1,
+          '/in/Show/Season 1/.DS_Store': 1,
+          '/in/Show/Thumbs.db': 1,
+        });
+        final store = MemoryTaskStore();
+        final history = MemoryHistoryStore();
+        final tm = DefaultTaskManager(
+          backendFor: (_) => fs,
+          recognizer: AnchorRecognizer(
+            const RuleBasedParser(),
+            FakeMetadataProvider(),
+          ),
+          planner: DefaultPlanner(FakeMetadataProvider()),
+          executor: DefaultExecutor(history, minInterval: Duration.zero),
+          history: history,
+          store: store,
+          options: (_, mode) => PlanOptions(mode: mode, libraryRoot: '/lib'),
+          importUpdateInterval: Duration.zero,
+        );
+        addTearDown(tm.dispose);
+
+        final id = await tm.submit(conn, ['/in'], OrganizeMode.moveToLibrary);
+        await tm.watchAll().firstWhere(
+          (l) =>
+              l.any((t) => t.id == id && t.stage == TaskStage.awaitingReview),
+        );
+        await tm.run(id);
+
+        final empty = await tm.findEmptyDirs(id);
+        expect(empty, ['/in/Show/Season 1', '/in/Show']);
+
+        // Attempting to remove protected root '/in' or '/' is ignored.
+        final removed = await tm.removeEmptyDirs(id, [...empty, '/in', '/']);
+        expect(removed, 2);
+        expect(await fs.exists('/in/Show/Season 1'), isFalse);
+        expect(await fs.exists('/in/Show'), isFalse);
+        expect(await fs.exists('/in'), isTrue);
+        expect(await fs.exists('/lib'), isTrue);
+      });
+
+      test('_listAll short-circuits BDMV/VIDEO_TS directories and passes backend to recognizer', () async {
+        final listed = <String>[];
+        final fs = _RecordingListBackend({
+          '/in/Inception.2010.BluRay/BDMV/STREAM/00001.m2ts': 50000,
+          '/in/Inception.2010.BluRay/BDMV/index.bdmv': 100,
+          '/in/Inception.2010.BluRay/CERTIFICATE/id.bdmv': 50,
+        }, listed);
+        StorageBackend? seenBackend;
+        final spyRecognizer = _BackendSpyRecognizer(
+          AnchorRecognizer(const RuleBasedParser(), FakeMetadataProvider()),
+          (be) => seenBackend = be,
+        );
+        final store = MemoryTaskStore();
+        final history = MemoryHistoryStore();
+        final tm = DefaultTaskManager(
+          backendFor: (_) => fs,
+          recognizer: spyRecognizer,
+          planner: DefaultPlanner(FakeMetadataProvider()),
+          executor: DefaultExecutor(history, minInterval: Duration.zero),
+          history: history,
+          store: store,
+          options: (_, mode) => PlanOptions(mode: mode),
+          importUpdateInterval: Duration.zero,
+        );
+        addTearDown(tm.dispose);
+
+        final id = await tm.submit(conn, ['/in'], OrganizeMode.inPlace);
+        await tm.watchAll().firstWhere(
+          (l) =>
+              l.any((t) => t.id == id && t.stage == TaskStage.awaitingReview),
+        );
+
+        // Never recursed into BDMV, BDMV/STREAM, or CERTIFICATE!
+        expect(listed.any((d) => d.contains('BDMV')), isFalse);
+        expect(listed.any((d) => d.contains('CERTIFICATE')), isFalse);
+        expect(seenBackend, same(fs));
+
+        final rev = await tm.review(id);
+        expect(rev.scan.groups.single.files.single.isDiscDir, isTrue);
+        await tm.run(id);
+        expect(fs.files, contains('/in/盗梦空间 (2010)/BDMV/STREAM/00001.m2ts'));
+      });
+
+      test(
+        'FakeTaskManager supports review actions and preserves scrapeOnly',
+        () async {
+          final fake = FakeTaskManager(step: Duration.zero);
+          addTearDown(fake.dispose);
+          final id = await fake.submit(
+            conn,
+            ['/dl'],
+            OrganizeMode.inPlace,
+            scrapeOnly: true,
+          );
+          final r0 = await fake.review(id);
+          final g1 = r0.scan.groups[0].id;
+          final g2 = r0.scan.groups[1].id;
+          final junkPath = r0.scan.unassigned.single.path;
+
+          final afterDel = await fake.setUnassignedDelete(id, junkPath, true);
+          expect(
+            afterDel.preview.ops
+                .singleWhere(
+                  (o) => o.kind == OpKind.delete && o.src == junkPath,
+                )
+                .selected,
+            isTrue,
+          );
+          final afterAssign = await fake.assignUnassigned(id, junkPath, g1);
+          expect(afterAssign.scan.unassigned, isEmpty);
+
+          final afterMerge = await fake.mergeGroups(id, g1, g2);
+          expect(afterMerge.scan.groups, hasLength(2));
+
+          final splitPath = afterMerge.scan.groups.first.files.last.path;
+          final afterSplit = await fake.splitGroup(id, g1, {splitPath});
+          expect(afterSplit.scan.groups, hasLength(3));
+
+          await fake.setMode(id, OrganizeMode.moveToLibrary);
+          final summary = (await fake.watchAll().first).single;
+          expect(summary.scrapeOnly, isTrue);
+          expect(await fake.findEmptyDirs(id), isEmpty);
+          expect(await fake.removeEmptyDirs(id, const ['/dl/empty']), 0);
+        },
+      );
+    },
+  );
+}
+
+class _RecordingListBackend extends MemoryStorageBackend {
+  final List<String> listed;
+  _RecordingListBackend(super.files, this.listed);
+
+  @override
+  Future<List<RemoteEntry>> list(String dir, {bool refresh = false}) {
+    listed.add(dir);
+    return super.list(dir, refresh: refresh);
+  }
+}
+
+class _BackendSpyRecognizer implements Recognizer {
+  final Recognizer inner;
+  final void Function(StorageBackend?) onBackend;
+  _BackendSpyRecognizer(this.inner, this.onBackend);
+
+  @override
+  Future<ScanResult> recognize(
+    ConnectionId connection,
+    List<String> roots,
+    List<RemoteEntry> files, {
+    Future<List<int>> Function(String path)? read,
+    StorageBackend? backend,
+  }) {
+    onBackend(backend);
+    return inner.recognize(
+      connection,
+      roots,
+      files,
+      read: read,
+      backend: backend,
+    );
+  }
 }
 
 class _FailingOncePlanner extends FakePlanner {

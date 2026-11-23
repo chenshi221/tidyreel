@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'dart:ui';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tidyreel/features/map/organic_layout.dart';
 
@@ -145,4 +146,53 @@ void main() {
       expect(c.area, greaterThan(c.value * 0.45), reason: c.id);
     }
   });
+
+  test('early stopping converges within strict area error tolerance', () {
+    final cells = layoutOrganic(items, bounds, iterations: 120);
+    expect(cells, hasLength(items.length));
+    final total = items.fold(0.0, (s, i) => s + i.value);
+    var maxRelErr = 0.0;
+    for (final c in cells) {
+      final want = bounds.width * bounds.height * c.value / total;
+      final err = (c.area - want).abs() / math.max(want, 1.0);
+      if (err > maxRelErr) maxRelErr = err;
+    }
+    expect(maxRelErr, lessThan(0.02));
+  });
+
+  test(
+    'layoutOrganicInIsolate matches layoutOrganic directly and via compute',
+    () async {
+      final seeds = {
+        'item0': const Offset(150, 120),
+        'item1': const Offset(600, 350),
+      };
+      final expected = layoutOrganic(
+        items,
+        bounds,
+        iterations: 80,
+        seeds: seeds,
+      );
+      final req = packOrganicLayoutRequest(
+        items,
+        bounds,
+        iterations: 80,
+        seeds: seeds,
+      );
+
+      final direct = unpackOrganicLayoutCells(layoutOrganicInIsolate(req));
+      final computed = unpackOrganicLayoutCells(
+        await compute(layoutOrganicInIsolate, req),
+      );
+
+      for (final actual in [direct, computed]) {
+        expect(actual, hasLength(expected.length));
+        for (var i = 0; i < expected.length; i++) {
+          expect(actual[i].id, expected[i].id);
+          expect(actual[i].value, expected[i].value);
+          expect(actual[i].polygon, expected[i].polygon);
+        }
+      }
+    },
+  );
 }

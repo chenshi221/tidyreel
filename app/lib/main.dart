@@ -10,15 +10,19 @@ import 'package:window_manager/window_manager.dart';
 import 'app.dart';
 import 'data/bootstrap.dart';
 import 'data/providers.dart';
+import 'data/settings.dart';
 import 'data/smb_backend.dart';
+import 'l10n/l10n.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   smbBackend = SmbBackend.new;
+  final boot = await Bootstrap.open();
+  final initialL10n = AppL10n.forLocale(initialLocaleFromBootstrap(boot));
   await windowManager.ensureInitialized();
   await windowManager.waitUntilReadyToShow(
     WindowOptions(
-      title: '理片 Tidyreel',
+      title: initialL10n.appTitle,
       size: const Size(1280, 800),
       minimumSize: const Size(1100, 700),
       center: true,
@@ -32,7 +36,6 @@ Future<void> main() async {
       await windowManager.focus();
     },
   );
-  final boot = await Bootstrap.open();
   var closed = false;
   Future<void> shutdown() async {
     if (closed) return;

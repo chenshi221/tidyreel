@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:tidyreel/data/database.dart';
 import 'package:tidyreel/data/drift_history_store.dart';
 import 'package:tidyreel/data/drift_task_store.dart';
+import 'package:tidyreel/data/folder_stats_store.dart';
 import 'package:tidyreel_core/testing.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
@@ -298,6 +299,56 @@ void main() {
       final got = (await store.loadAll()).single;
       expect(got.summary.mode, OrganizeMode.inPlace);
       expect(got.summary.stage, TaskStage.failed);
+    });
+
+    test('scrapeOnly round-trips', () async {
+      final s = TaskSummary(
+        id: const TaskId('T4-scrapeonly'),
+        connection: conn,
+        paths: const ['/影视库'],
+        mode: OrganizeMode.inPlace,
+        scrape: true,
+        scrapeOnly: true,
+        stage: TaskStage.awaitingReview,
+        createdAt: DateTime.utc(2026, 2, 1),
+      );
+      await store.saveSummary(s);
+      final got = (await store.loadAll()).single;
+      expect(got.summary.scrape, isTrue);
+      expect(got.summary.scrapeOnly, isTrue);
+    });
+  });
+
+  group('FolderStatsStore', () {
+    late FolderStatsStore stats;
+    setUp(() => stats = FolderStatsStore(db));
+
+    test('saves, marks complete, loads and invalidates subtrees', () async {
+      await stats.saveDir(conn, '/影视', const [
+        RemoteEntry(path: '/影视/剧集', name: '剧集', isDir: true),
+      ], complete: true);
+      await stats.saveDir(conn, '/影视/剧集', [
+        RemoteEntry(
+          path: '/影视/剧集/ep01.mkv',
+          name: 'ep01.mkv',
+          isDir: false,
+          size: 1024,
+          modified: DateTime.utc(2026, 1, 1),
+        ),
+      ], complete: true);
+
+      var loaded = await stats.loadFor(conn);
+      expect(loaded, hasLength(2));
+      expect(
+        loaded.firstWhere((e) => e.dirPath == '/影视/剧集').entries.single.size,
+        1024,
+      );
+
+      // Deleting below /影视/剧集 removes the subtree and marks /影视 incomplete.
+      await stats.deleteBelow(conn, '/影视/剧集');
+      loaded = await stats.loadFor(conn);
+      expect(loaded.map((e) => e.dirPath), ['/影视']);
+      expect(loaded.single.complete, isFalse);
     });
   });
 }

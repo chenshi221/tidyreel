@@ -30,20 +30,52 @@ String _date(DateTime? d) => d == null
           '${d.month.toString().padLeft(2, '0')}-'
           '${d.day.toString().padLeft(2, '0')}';
 
+String _actor(PersonCredit a) {
+  final b = StringBuffer('  <actor>\n');
+  b.write('    <name>${_esc(a.name)}</name>\n');
+  final role = a.role;
+  if (role != null && role.isNotEmpty) {
+    b.write('    <role>${_esc(role)}</role>\n');
+  }
+  final path = a.profilePath;
+  if (path != null && path.isNotEmpty) {
+    final thumb = path.startsWith('http://') || path.startsWith('https://')
+        ? path
+        : 'https://image.tmdb.org/t/p/w185${path.startsWith('/') ? path : '/$path'}';
+    b.write('    <thumb>${_esc(thumb)}</thumb>\n');
+  }
+  b.write('  </actor>');
+  return b.toString();
+}
+
 List<(String, Object?)> _common(Candidate c) => [
   ('title', c.title),
   ('originaltitle', c.originalTitle ?? c.englishTitle),
   ('year', c.year),
+  ('mpaa', c.certification),
   ('plot', c.overview),
   for (final g in c.genres) ('genre', g),
+  for (final t in c.tags) ('tag', t),
+  for (final s in c.studios) ('studio', s),
+  for (final d in c.directors) ('director', d),
+  for (final w in c.writers) ('credits', w),
   if (c.voteAverage != null)
     (
       '#raw',
       '  <ratings><rating name="themoviedb" max="10" default="true">'
-          '<value>${c.voteAverage!.toStringAsFixed(1)}</value></rating></ratings>',
+          '<value>${c.voteAverage!.toStringAsFixed(1)}</value>'
+          '${c.voteCount != null ? '<votes>${c.voteCount}</votes>' : ''}'
+          '</rating></ratings>',
     ),
   ('#raw', '  <uniqueid type="tmdb" default="true">${c.tmdbId}</uniqueid>'),
+  if (c.imdbId != null && c.imdbId!.isNotEmpty)
+    ('#raw', '  <uniqueid type="imdb">${_esc(c.imdbId!)}</uniqueid>'),
+  if (c.tvdbId != null)
+    ('#raw', '  <uniqueid type="tvdb">${c.tvdbId}</uniqueid>'),
   ('tmdbid', c.tmdbId),
+  if (c.imdbId != null && c.imdbId!.isNotEmpty) ('imdbid', c.imdbId),
+  for (final a in c.actors)
+    if (a.name.isNotEmpty) ('#raw', _actor(a)),
 ];
 
 /// `tvshow.nfo` for a show folder; its tmdb uniqueid lets the next scan (and
@@ -57,7 +89,11 @@ String tvShowNfo(ShowDetail show) {
 }
 
 /// `<video>.nfo` for a movie file.
-String movieNfo(Candidate movie) => _doc('movie', _common(movie));
+String movieNfo(Candidate movie) => _doc('movie', [
+  ..._common(movie),
+  if (movie.collectionName != null && movie.collectionName!.isNotEmpty)
+    ('#raw', '  <set><name>${_esc(movie.collectionName!)}</name></set>'),
+]);
 
 /// `<video>.nfo` for an episode file.
 String episodeNfo({

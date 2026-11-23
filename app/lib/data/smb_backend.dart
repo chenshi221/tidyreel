@@ -31,7 +31,7 @@ SmbTarget? parseSmbEndpoint(String endpoint) {
 }
 
 /// SMB2/3 share through dart_smb2 (libsmb2). Paths are relative to the share.
-class SmbBackend implements StorageBackend {
+class SmbBackend implements StorageBackend, RangeReadableBackend {
   final ConnectionConfig _config;
   final Credentials _credentials;
   Future<Smb2Pool>? _pool;
@@ -242,6 +242,15 @@ class SmbBackend implements StorageBackend {
   @override
   Future<List<int>> read(String path) =>
       _run(path, (pool) => pool.readFile(_rel(path)));
+
+  @override
+  Future<List<int>> readRange(String path, int start, int length) async {
+    if (start < 0 || length <= 0) return const [];
+    return _run(
+      path,
+      (pool) => pool.readFileRange(_rel(path), offset: start, length: length),
+    );
+  }
 
   @override
   Future<void> write(String path, List<int> bytes) async {

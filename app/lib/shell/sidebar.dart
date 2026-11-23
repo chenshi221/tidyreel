@@ -8,7 +8,8 @@ import '../data/providers.dart';
 import '../data/settings.dart';
 import '../features/sources/sources_page.dart' show openBrowser;
 import '../features/sources/sources_providers.dart';
-import '../features/tasks/tasks_page.dart' show isTmdbKeyError, stageLabel;
+import '../features/tasks/tasks_page.dart' show isTmdbKeyError;
+import '../l10n/l10n.dart';
 import '../ui/tokens.dart';
 import '../ui/widgets.dart';
 import '../widgets/common.dart';
@@ -38,6 +39,7 @@ class Sidebar extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final p = Palette.of(context);
+    final l10n = context.l10n;
     final collapsed = ref.watch(sidebarCollapsedProvider);
     final pending = ref.watch(
       tasksProvider.select(
@@ -66,6 +68,7 @@ class Sidebar extends ConsumerWidget {
     // Toast when a background task finishes recognizing, fails, or finishes
     // executing, unless that task's page is already open.
     ref.listen(tasksProvider, (prev, next) {
+      final t10n = context.l10n;
       final before = {for (final t in prev?.value ?? const []) t.id: t.stage};
       for (final t in next.value ?? const <TaskSummary>[]) {
         final was = before[t.id];
@@ -77,20 +80,35 @@ class Sidebar extends ConsumerWidget {
         }
         final (msg, path, actionLabel) = switch (t.stage) {
           TaskStage.awaitingReview => (
-            '识别完成，等你确认',
+            t10n.tr('识别完成，等你确认', 'Matching complete, ready for review'),
             '/tasks/${t.id.value}/review',
-            '查看',
+            t10n.tr('查看', 'View'),
           ),
-          TaskStage.done => ('整理完成', '/tasks/${t.id.value}', '查看'),
-          TaskStage.partiallyFailed => (
-            '整理完成，但有失败项',
+          TaskStage.done => (
+            t10n.tr('整理完成', 'Organization complete'),
             '/tasks/${t.id.value}',
-            '查看',
+            t10n.tr('查看', 'View'),
+          ),
+          TaskStage.partiallyFailed => (
+            t10n.tr('整理完成，但有失败项', 'Finished with some failures'),
+            '/tasks/${t.id.value}',
+            t10n.tr('查看', 'View'),
           ),
           TaskStage.failed =>
             isTmdbKeyError(t.message)
-                ? ('识别失败：请先填写 TMDB API key', '/settings', '去设置')
-                : ('识别失败', '/tasks/${t.id.value}', '查看'),
+                ? (
+                    t10n.tr(
+                      '识别失败：请先填写 TMDB API key',
+                      'Matching failed: enter your TMDB API key first',
+                    ),
+                    '/settings',
+                    t10n.tr('去设置', 'Settings'),
+                  )
+                : (
+                    t10n.tr('识别失败', 'Matching failed'),
+                    '/tasks/${t.id.value}',
+                    t10n.tr('查看', 'View'),
+                  ),
           _ => (null, null, null),
         };
         if (msg == null) continue;
@@ -110,7 +128,7 @@ class Sidebar extends ConsumerWidget {
           ..hideCurrentSnackBar()
           ..showSnackBar(
             SnackBar(
-              content: Text('「$name」$msg'),
+              content: Text(t10n.isEn ? '"$name": $msg' : '「$name」$msg'),
               action: SnackBarAction(
                 label: actionLabel!,
                 onPressed: () => context.go(path!),
@@ -146,7 +164,9 @@ class Sidebar extends ConsumerWidget {
     );
 
     final toggle = IconButton(
-      tooltip: collapsed ? '展开侧栏' : '收起侧栏',
+      tooltip: collapsed
+          ? l10n.tr('展开侧栏', 'Expand sidebar')
+          : l10n.tr('收起侧栏', 'Collapse sidebar'),
       iconSize: 16,
       icon: const Icon(CupertinoIcons.sidebar_left),
       onPressed: () => ref
@@ -194,15 +214,28 @@ class Sidebar extends ConsumerWidget {
                 if (collapsed && !mac) Center(child: toggle),
                 if (!collapsed) _Brand(trailing: mac ? null : toggle),
                 SizedBox(height: collapsed ? 12 : 26),
-                item('/sources', CupertinoIcons.folder, '来源'),
+                item(
+                  '/sources',
+                  CupertinoIcons.folder,
+                  l10n.tr('来源', 'Sources'),
+                ),
                 item(
                   '/tasks',
                   CupertinoIcons.square_list,
-                  '任务',
+                  l10n.tr('任务', 'Tasks'),
                   badge: pending,
                   running: hasRunning,
                 ),
-                item('/naming', CupertinoIcons.textformat, '命名规则'),
+                item(
+                  '/health',
+                  CupertinoIcons.checkmark_shield,
+                  l10n.tr('体检', 'Health'),
+                ),
+                item(
+                  '/naming',
+                  CupertinoIcons.textformat,
+                  l10n.tr('命名规则', 'Naming'),
+                ),
                 if (collapsed)
                   const Spacer()
                 else
@@ -211,7 +244,7 @@ class Sidebar extends ConsumerWidget {
                       padding: EdgeInsets.zero,
                       children: [
                         if (favorites.isNotEmpty) ...[
-                          sectionTitle('收藏'),
+                          sectionTitle(l10n.tr('收藏', 'Favorites')),
                           for (final f in favorites.take(6))
                             _FavItem(
                               key: ValueKey(
@@ -239,7 +272,10 @@ class Sidebar extends ConsumerWidget {
                                 ),
                                 alignment: Alignment.centerLeft,
                                 child: Text(
-                                  '还有 ${favorites.length - 6} 个收藏…',
+                                  l10n.tr(
+                                    '还有 ${favorites.length - 6} 个收藏…',
+                                    '${favorites.length - 6} more favorites…',
+                                  ),
                                   style: TextStyle(
                                     fontSize: TypeScale.small,
                                     color: p.textFaint,
@@ -254,7 +290,11 @@ class Sidebar extends ConsumerWidget {
                   ),
                 if (!collapsed)
                   Divider(height: 17, thickness: hairline, color: p.line),
-                item('/settings', CupertinoIcons.gear, '设置'),
+                item(
+                  '/settings',
+                  CupertinoIcons.gear,
+                  l10n.tr('设置', 'Settings'),
+                ),
               ],
             ),
           ),
@@ -288,7 +328,10 @@ class _ActiveTasksSection extends ConsumerWidget {
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 22, 10, 6),
-          child: Text('后台任务', style: Theme.of(context).textTheme.labelSmall),
+          child: Text(
+            context.tr('后台任务', 'Active Tasks'),
+            style: Theme.of(context).textTheme.labelSmall,
+          ),
         ),
         for (final t in active)
           _TaskItem(
@@ -312,30 +355,47 @@ class _Brand extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
+    final isEn = context.l10n.isEn;
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 6, 0, 2),
       child: Row(
         children: [
           const AppLogo(size: 22),
           const SizedBox(width: 9),
-          Text(
-            '理片',
-            style: TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w500,
-              color: p.text,
-              letterSpacing: 1,
+          if (isEn)
+            Expanded(
+              child: Text(
+                'Tidyreel',
+                maxLines: 1,
+                overflow: TextOverflow.clip,
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: p.text,
+                  letterSpacing: 0.2,
+                ),
+              ),
+            )
+          else ...[
+            Text(
+              '理片',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w500,
+                color: p.text,
+                letterSpacing: 1,
+              ),
             ),
-          ),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(
-              'Tidyreel',
-              maxLines: 1,
-              overflow: TextOverflow.clip,
-              style: TextStyle(fontSize: 12, color: p.textFaint),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                'Tidyreel',
+                maxLines: 1,
+                overflow: TextOverflow.clip,
+                style: TextStyle(fontSize: 12, color: p.textFaint),
+              ),
             ),
-          ),
+          ],
           ?trailing,
         ],
       ),
@@ -436,18 +496,27 @@ class _TaskItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
+    final l10n = context.l10n;
     final t = task;
     final review = t.stage == TaskStage.awaitingReview;
     final first = t.paths.isEmpty
         ? t.id.value
         : t.paths.first.split('/').where((s) => s.isNotEmpty).lastOrNull ??
-              '根目录';
-    final name = t.paths.length > 1 ? '$first 等 ${t.paths.length} 项' : first;
+              l10n.rootDir;
+    final name = t.paths.length > 1
+        ? l10n.tr(
+            '$first 等 ${t.paths.length} 项',
+            '$first + ${t.paths.length - 1} more',
+          )
+        : first;
     final status = switch (t.stage) {
-      TaskStage.importing => '已导入 ${t.importedCount} 个文件',
-      TaskStage.recognizing => '识别中…',
-      TaskStage.awaitingReview => '识别完成，待确认',
-      _ => stageLabel(t.stage),
+      TaskStage.importing => l10n.tr(
+        '已导入 ${t.importedCount} 个文件',
+        'Imported ${l10n.plural(t.importedCount, 'file')}',
+      ),
+      TaskStage.recognizing => l10n.tr('识别中…', 'Matching…'),
+      TaskStage.awaitingReview => l10n.tr('识别完成，待确认', 'Ready to review'),
+      _ => l10n.stageLabel(t.stage),
     };
     return Hoverable(
       onTap: onTap,
@@ -531,9 +600,11 @@ class _FavItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
-    final name = path.split('/').where((s) => s.isNotEmpty).lastOrNull ?? '根目录';
+    final l10n = context.l10n;
+    final name =
+        path.split('/').where((s) => s.isNotEmpty).lastOrNull ?? l10n.rootDir;
     return Tooltip(
-      message: '$connection：$path',
+      message: l10n.isEn ? '$connection: $path' : '$connection：$path',
       waitDuration: const Duration(milliseconds: 600),
       child: Hoverable(
         onTap: onTap,

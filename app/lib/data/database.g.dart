@@ -1129,6 +1129,21 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, TaskRow> {
     ),
     defaultValue: const Constant(false),
   );
+  static const VerificationMeta _scrapeOnlyMeta = const VerificationMeta(
+    'scrapeOnly',
+  );
+  @override
+  late final GeneratedColumn<bool> scrapeOnly = GeneratedColumn<bool>(
+    'scrape_only',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("scrape_only" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
   static const VerificationMeta _stageMeta = const VerificationMeta('stage');
   @override
   late final GeneratedColumn<String> stage = GeneratedColumn<String>(
@@ -1255,6 +1270,7 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, TaskRow> {
     pathsJson,
     mode,
     scrape,
+    scrapeOnly,
     stage,
     message,
     importedCount,
@@ -1315,6 +1331,12 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, TaskRow> {
       context.handle(
         _scrapeMeta,
         scrape.isAcceptableOrUnknown(data['scrape']!, _scrapeMeta),
+      );
+    }
+    if (data.containsKey('scrape_only')) {
+      context.handle(
+        _scrapeOnlyMeta,
+        scrapeOnly.isAcceptableOrUnknown(data['scrape_only']!, _scrapeOnlyMeta),
       );
     }
     if (data.containsKey('stage')) {
@@ -1438,6 +1460,10 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, TaskRow> {
         DriftSqlType.bool,
         data['${effectivePrefix}scrape'],
       )!,
+      scrapeOnly: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}scrape_only'],
+      )!,
       stage: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}stage'],
@@ -1497,6 +1523,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
   final String pathsJson;
   final String mode;
   final bool scrape;
+  final bool scrapeOnly;
   final String stage;
   final String message;
   final int importedCount;
@@ -1516,6 +1543,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
     required this.pathsJson,
     required this.mode,
     required this.scrape,
+    required this.scrapeOnly,
     required this.stage,
     required this.message,
     required this.importedCount,
@@ -1536,6 +1564,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
     map['paths_json'] = Variable<String>(pathsJson);
     map['mode'] = Variable<String>(mode);
     map['scrape'] = Variable<bool>(scrape);
+    map['scrape_only'] = Variable<bool>(scrapeOnly);
     map['stage'] = Variable<String>(stage);
     map['message'] = Variable<String>(message);
     map['imported_count'] = Variable<int>(importedCount);
@@ -1565,6 +1594,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
       pathsJson: Value(pathsJson),
       mode: Value(mode),
       scrape: Value(scrape),
+      scrapeOnly: Value(scrapeOnly),
       stage: Value(stage),
       message: Value(message),
       importedCount: Value(importedCount),
@@ -1598,6 +1628,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
       pathsJson: serializer.fromJson<String>(json['pathsJson']),
       mode: serializer.fromJson<String>(json['mode']),
       scrape: serializer.fromJson<bool>(json['scrape']),
+      scrapeOnly: serializer.fromJson<bool>(json['scrapeOnly']),
       stage: serializer.fromJson<String>(json['stage']),
       message: serializer.fromJson<String>(json['message']),
       importedCount: serializer.fromJson<int>(json['importedCount']),
@@ -1620,6 +1651,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
       'pathsJson': serializer.toJson<String>(pathsJson),
       'mode': serializer.toJson<String>(mode),
       'scrape': serializer.toJson<bool>(scrape),
+      'scrapeOnly': serializer.toJson<bool>(scrapeOnly),
       'stage': serializer.toJson<String>(stage),
       'message': serializer.toJson<String>(message),
       'importedCount': serializer.toJson<int>(importedCount),
@@ -1640,6 +1672,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
     String? pathsJson,
     String? mode,
     bool? scrape,
+    bool? scrapeOnly,
     String? stage,
     String? message,
     int? importedCount,
@@ -1657,6 +1690,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
     pathsJson: pathsJson ?? this.pathsJson,
     mode: mode ?? this.mode,
     scrape: scrape ?? this.scrape,
+    scrapeOnly: scrapeOnly ?? this.scrapeOnly,
     stage: stage ?? this.stage,
     message: message ?? this.message,
     importedCount: importedCount ?? this.importedCount,
@@ -1680,6 +1714,9 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
       pathsJson: data.pathsJson.present ? data.pathsJson.value : this.pathsJson,
       mode: data.mode.present ? data.mode.value : this.mode,
       scrape: data.scrape.present ? data.scrape.value : this.scrape,
+      scrapeOnly: data.scrapeOnly.present
+          ? data.scrapeOnly.value
+          : this.scrapeOnly,
       stage: data.stage.present ? data.stage.value : this.stage,
       message: data.message.present ? data.message.value : this.message,
       importedCount: data.importedCount.present
@@ -1712,6 +1749,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
           ..write('pathsJson: $pathsJson, ')
           ..write('mode: $mode, ')
           ..write('scrape: $scrape, ')
+          ..write('scrapeOnly: $scrapeOnly, ')
           ..write('stage: $stage, ')
           ..write('message: $message, ')
           ..write('importedCount: $importedCount, ')
@@ -1734,6 +1772,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
     pathsJson,
     mode,
     scrape,
+    scrapeOnly,
     stage,
     message,
     importedCount,
@@ -1755,6 +1794,7 @@ class TaskRow extends DataClass implements Insertable<TaskRow> {
           other.pathsJson == this.pathsJson &&
           other.mode == this.mode &&
           other.scrape == this.scrape &&
+          other.scrapeOnly == this.scrapeOnly &&
           other.stage == this.stage &&
           other.message == this.message &&
           other.importedCount == this.importedCount &&
@@ -1774,6 +1814,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
   final Value<String> pathsJson;
   final Value<String> mode;
   final Value<bool> scrape;
+  final Value<bool> scrapeOnly;
   final Value<String> stage;
   final Value<String> message;
   final Value<int> importedCount;
@@ -1792,6 +1833,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
     this.pathsJson = const Value.absent(),
     this.mode = const Value.absent(),
     this.scrape = const Value.absent(),
+    this.scrapeOnly = const Value.absent(),
     this.stage = const Value.absent(),
     this.message = const Value.absent(),
     this.importedCount = const Value.absent(),
@@ -1811,6 +1853,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
     required String pathsJson,
     required String mode,
     this.scrape = const Value.absent(),
+    this.scrapeOnly = const Value.absent(),
     required String stage,
     required String message,
     required int importedCount,
@@ -1840,6 +1883,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
     Expression<String>? pathsJson,
     Expression<String>? mode,
     Expression<bool>? scrape,
+    Expression<bool>? scrapeOnly,
     Expression<String>? stage,
     Expression<String>? message,
     Expression<int>? importedCount,
@@ -1859,6 +1903,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
       if (pathsJson != null) 'paths_json': pathsJson,
       if (mode != null) 'mode': mode,
       if (scrape != null) 'scrape': scrape,
+      if (scrapeOnly != null) 'scrape_only': scrapeOnly,
       if (stage != null) 'stage': stage,
       if (message != null) 'message': message,
       if (importedCount != null) 'imported_count': importedCount,
@@ -1880,6 +1925,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
     Value<String>? pathsJson,
     Value<String>? mode,
     Value<bool>? scrape,
+    Value<bool>? scrapeOnly,
     Value<String>? stage,
     Value<String>? message,
     Value<int>? importedCount,
@@ -1899,6 +1945,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
       pathsJson: pathsJson ?? this.pathsJson,
       mode: mode ?? this.mode,
       scrape: scrape ?? this.scrape,
+      scrapeOnly: scrapeOnly ?? this.scrapeOnly,
       stage: stage ?? this.stage,
       message: message ?? this.message,
       importedCount: importedCount ?? this.importedCount,
@@ -1931,6 +1978,9 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
     }
     if (scrape.present) {
       map['scrape'] = Variable<bool>(scrape.value);
+    }
+    if (scrapeOnly.present) {
+      map['scrape_only'] = Variable<bool>(scrapeOnly.value);
     }
     if (stage.present) {
       map['stage'] = Variable<String>(stage.value);
@@ -1979,6 +2029,7 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
           ..write('pathsJson: $pathsJson, ')
           ..write('mode: $mode, ')
           ..write('scrape: $scrape, ')
+          ..write('scrapeOnly: $scrapeOnly, ')
           ..write('stage: $stage, ')
           ..write('message: $message, ')
           ..write('importedCount: $importedCount, ')
@@ -1996,15 +2047,404 @@ class TasksCompanion extends UpdateCompanion<TaskRow> {
   }
 }
 
+class $FolderStatsCacheTable extends FolderStatsCache
+    with TableInfo<$FolderStatsCacheTable, FolderStatsCacheRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $FolderStatsCacheTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _connectionIdMeta = const VerificationMeta(
+    'connectionId',
+  );
+  @override
+  late final GeneratedColumn<String> connectionId = GeneratedColumn<String>(
+    'connection_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _dirPathMeta = const VerificationMeta(
+    'dirPath',
+  );
+  @override
+  late final GeneratedColumn<String> dirPath = GeneratedColumn<String>(
+    'dir_path',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _entriesJsonMeta = const VerificationMeta(
+    'entriesJson',
+  );
+  @override
+  late final GeneratedColumn<String> entriesJson = GeneratedColumn<String>(
+    'entries_json',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _completeMeta = const VerificationMeta(
+    'complete',
+  );
+  @override
+  late final GeneratedColumn<bool> complete = GeneratedColumn<bool>(
+    'complete',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("complete" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _scannedAtMeta = const VerificationMeta(
+    'scannedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> scannedAt = GeneratedColumn<DateTime>(
+    'scanned_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    connectionId,
+    dirPath,
+    entriesJson,
+    complete,
+    scannedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'folder_stats_cache';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<FolderStatsCacheRow> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('connection_id')) {
+      context.handle(
+        _connectionIdMeta,
+        connectionId.isAcceptableOrUnknown(
+          data['connection_id']!,
+          _connectionIdMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_connectionIdMeta);
+    }
+    if (data.containsKey('dir_path')) {
+      context.handle(
+        _dirPathMeta,
+        dirPath.isAcceptableOrUnknown(data['dir_path']!, _dirPathMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_dirPathMeta);
+    }
+    if (data.containsKey('entries_json')) {
+      context.handle(
+        _entriesJsonMeta,
+        entriesJson.isAcceptableOrUnknown(
+          data['entries_json']!,
+          _entriesJsonMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_entriesJsonMeta);
+    }
+    if (data.containsKey('complete')) {
+      context.handle(
+        _completeMeta,
+        complete.isAcceptableOrUnknown(data['complete']!, _completeMeta),
+      );
+    }
+    if (data.containsKey('scanned_at')) {
+      context.handle(
+        _scannedAtMeta,
+        scannedAt.isAcceptableOrUnknown(data['scanned_at']!, _scannedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_scannedAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {connectionId, dirPath};
+  @override
+  FolderStatsCacheRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return FolderStatsCacheRow(
+      connectionId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}connection_id'],
+      )!,
+      dirPath: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}dir_path'],
+      )!,
+      entriesJson: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}entries_json'],
+      )!,
+      complete: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}complete'],
+      )!,
+      scannedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}scanned_at'],
+      )!,
+    );
+  }
+
+  @override
+  $FolderStatsCacheTable createAlias(String alias) {
+    return $FolderStatsCacheTable(attachedDatabase, alias);
+  }
+}
+
+class FolderStatsCacheRow extends DataClass
+    implements Insertable<FolderStatsCacheRow> {
+  final String connectionId;
+  final String dirPath;
+
+  /// JSON array of serialized RemoteEntry objects: {p, n, d, s, m}.
+  final String entriesJson;
+  final bool complete;
+  final DateTime scannedAt;
+  const FolderStatsCacheRow({
+    required this.connectionId,
+    required this.dirPath,
+    required this.entriesJson,
+    required this.complete,
+    required this.scannedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['connection_id'] = Variable<String>(connectionId);
+    map['dir_path'] = Variable<String>(dirPath);
+    map['entries_json'] = Variable<String>(entriesJson);
+    map['complete'] = Variable<bool>(complete);
+    map['scanned_at'] = Variable<DateTime>(scannedAt);
+    return map;
+  }
+
+  FolderStatsCacheCompanion toCompanion(bool nullToAbsent) {
+    return FolderStatsCacheCompanion(
+      connectionId: Value(connectionId),
+      dirPath: Value(dirPath),
+      entriesJson: Value(entriesJson),
+      complete: Value(complete),
+      scannedAt: Value(scannedAt),
+    );
+  }
+
+  factory FolderStatsCacheRow.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return FolderStatsCacheRow(
+      connectionId: serializer.fromJson<String>(json['connectionId']),
+      dirPath: serializer.fromJson<String>(json['dirPath']),
+      entriesJson: serializer.fromJson<String>(json['entriesJson']),
+      complete: serializer.fromJson<bool>(json['complete']),
+      scannedAt: serializer.fromJson<DateTime>(json['scannedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'connectionId': serializer.toJson<String>(connectionId),
+      'dirPath': serializer.toJson<String>(dirPath),
+      'entriesJson': serializer.toJson<String>(entriesJson),
+      'complete': serializer.toJson<bool>(complete),
+      'scannedAt': serializer.toJson<DateTime>(scannedAt),
+    };
+  }
+
+  FolderStatsCacheRow copyWith({
+    String? connectionId,
+    String? dirPath,
+    String? entriesJson,
+    bool? complete,
+    DateTime? scannedAt,
+  }) => FolderStatsCacheRow(
+    connectionId: connectionId ?? this.connectionId,
+    dirPath: dirPath ?? this.dirPath,
+    entriesJson: entriesJson ?? this.entriesJson,
+    complete: complete ?? this.complete,
+    scannedAt: scannedAt ?? this.scannedAt,
+  );
+  FolderStatsCacheRow copyWithCompanion(FolderStatsCacheCompanion data) {
+    return FolderStatsCacheRow(
+      connectionId: data.connectionId.present
+          ? data.connectionId.value
+          : this.connectionId,
+      dirPath: data.dirPath.present ? data.dirPath.value : this.dirPath,
+      entriesJson: data.entriesJson.present
+          ? data.entriesJson.value
+          : this.entriesJson,
+      complete: data.complete.present ? data.complete.value : this.complete,
+      scannedAt: data.scannedAt.present ? data.scannedAt.value : this.scannedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('FolderStatsCacheRow(')
+          ..write('connectionId: $connectionId, ')
+          ..write('dirPath: $dirPath, ')
+          ..write('entriesJson: $entriesJson, ')
+          ..write('complete: $complete, ')
+          ..write('scannedAt: $scannedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(connectionId, dirPath, entriesJson, complete, scannedAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is FolderStatsCacheRow &&
+          other.connectionId == this.connectionId &&
+          other.dirPath == this.dirPath &&
+          other.entriesJson == this.entriesJson &&
+          other.complete == this.complete &&
+          other.scannedAt == this.scannedAt);
+}
+
+class FolderStatsCacheCompanion extends UpdateCompanion<FolderStatsCacheRow> {
+  final Value<String> connectionId;
+  final Value<String> dirPath;
+  final Value<String> entriesJson;
+  final Value<bool> complete;
+  final Value<DateTime> scannedAt;
+  final Value<int> rowid;
+  const FolderStatsCacheCompanion({
+    this.connectionId = const Value.absent(),
+    this.dirPath = const Value.absent(),
+    this.entriesJson = const Value.absent(),
+    this.complete = const Value.absent(),
+    this.scannedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  FolderStatsCacheCompanion.insert({
+    required String connectionId,
+    required String dirPath,
+    required String entriesJson,
+    this.complete = const Value.absent(),
+    required DateTime scannedAt,
+    this.rowid = const Value.absent(),
+  }) : connectionId = Value(connectionId),
+       dirPath = Value(dirPath),
+       entriesJson = Value(entriesJson),
+       scannedAt = Value(scannedAt);
+  static Insertable<FolderStatsCacheRow> custom({
+    Expression<String>? connectionId,
+    Expression<String>? dirPath,
+    Expression<String>? entriesJson,
+    Expression<bool>? complete,
+    Expression<DateTime>? scannedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (connectionId != null) 'connection_id': connectionId,
+      if (dirPath != null) 'dir_path': dirPath,
+      if (entriesJson != null) 'entries_json': entriesJson,
+      if (complete != null) 'complete': complete,
+      if (scannedAt != null) 'scanned_at': scannedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  FolderStatsCacheCompanion copyWith({
+    Value<String>? connectionId,
+    Value<String>? dirPath,
+    Value<String>? entriesJson,
+    Value<bool>? complete,
+    Value<DateTime>? scannedAt,
+    Value<int>? rowid,
+  }) {
+    return FolderStatsCacheCompanion(
+      connectionId: connectionId ?? this.connectionId,
+      dirPath: dirPath ?? this.dirPath,
+      entriesJson: entriesJson ?? this.entriesJson,
+      complete: complete ?? this.complete,
+      scannedAt: scannedAt ?? this.scannedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (connectionId.present) {
+      map['connection_id'] = Variable<String>(connectionId.value);
+    }
+    if (dirPath.present) {
+      map['dir_path'] = Variable<String>(dirPath.value);
+    }
+    if (entriesJson.present) {
+      map['entries_json'] = Variable<String>(entriesJson.value);
+    }
+    if (complete.present) {
+      map['complete'] = Variable<bool>(complete.value);
+    }
+    if (scannedAt.present) {
+      map['scanned_at'] = Variable<DateTime>(scannedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('FolderStatsCacheCompanion(')
+          ..write('connectionId: $connectionId, ')
+          ..write('dirPath: $dirPath, ')
+          ..write('entriesJson: $entriesJson, ')
+          ..write('complete: $complete, ')
+          ..write('scannedAt: $scannedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
   late final $BatchesTable batches = $BatchesTable(this);
   late final $HistoryRecordsTable historyRecords = $HistoryRecordsTable(this);
   late final $TasksTable tasks = $TasksTable(this);
+  late final $FolderStatsCacheTable folderStatsCache = $FolderStatsCacheTable(
+    this,
+  );
   late final Index historyRecordsDstStatus = Index(
     'history_records_dst_status',
     'CREATE INDEX history_records_dst_status ON history_records (dst, status)',
+  );
+  late final Index folderStatsCacheConn = Index(
+    'folder_stats_cache_conn',
+    'CREATE INDEX folder_stats_cache_conn ON folder_stats_cache (connection_id)',
   );
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
@@ -2014,7 +2454,9 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     batches,
     historyRecords,
     tasks,
+    folderStatsCache,
     historyRecordsDstStatus,
+    folderStatsCacheConn,
   ];
 }
 
@@ -2781,6 +3223,7 @@ typedef $$TasksTableCreateCompanionBuilder = TasksCompanion Function({
   required String pathsJson,
   required String mode,
   Value<bool> scrape,
+  Value<bool> scrapeOnly,
   required String stage,
   required String message,
   required int importedCount,
@@ -2800,6 +3243,7 @@ typedef $$TasksTableUpdateCompanionBuilder = TasksCompanion Function({
   Value<String> pathsJson,
   Value<String> mode,
   Value<bool> scrape,
+  Value<bool> scrapeOnly,
   Value<String> stage,
   Value<String> message,
   Value<int> importedCount,
@@ -2844,6 +3288,11 @@ class $$TasksTableFilterComposer extends Composer<_$AppDatabase, $TasksTable> {
 
   ColumnFilters<bool> get scrape => $composableBuilder(
     column: $table.scrape,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get scrapeOnly => $composableBuilder(
+    column: $table.scrapeOnly,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -2937,6 +3386,11 @@ class $$TasksTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<bool> get scrapeOnly => $composableBuilder(
+    column: $table.scrapeOnly,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get stage => $composableBuilder(
     column: $table.stage,
     builder: (column) => ColumnOrderings(column),
@@ -3019,6 +3473,11 @@ class $$TasksTableAnnotationComposer
   GeneratedColumn<bool> get scrape =>
       $composableBuilder(column: $table.scrape, builder: (column) => column);
 
+  GeneratedColumn<bool> get scrapeOnly => $composableBuilder(
+    column: $table.scrapeOnly,
+    builder: (column) => column,
+  );
+
   GeneratedColumn<String> get stage =>
       $composableBuilder(column: $table.stage, builder: (column) => column);
 
@@ -3096,6 +3555,7 @@ class $$TasksTableTableManager
                 Value<String> pathsJson = const Value.absent(),
                 Value<String> mode = const Value.absent(),
                 Value<bool> scrape = const Value.absent(),
+                Value<bool> scrapeOnly = const Value.absent(),
                 Value<String> stage = const Value.absent(),
                 Value<String> message = const Value.absent(),
                 Value<int> importedCount = const Value.absent(),
@@ -3114,6 +3574,7 @@ class $$TasksTableTableManager
                 pathsJson: pathsJson,
                 mode: mode,
                 scrape: scrape,
+                scrapeOnly: scrapeOnly,
                 stage: stage,
                 message: message,
                 importedCount: importedCount,
@@ -3134,6 +3595,7 @@ class $$TasksTableTableManager
                 required String pathsJson,
                 required String mode,
                 Value<bool> scrape = const Value.absent(),
+                Value<bool> scrapeOnly = const Value.absent(),
                 required String stage,
                 required String message,
                 required int importedCount,
@@ -3152,6 +3614,7 @@ class $$TasksTableTableManager
                 pathsJson: pathsJson,
                 mode: mode,
                 scrape: scrape,
+                scrapeOnly: scrapeOnly,
                 stage: stage,
                 message: message,
                 importedCount: importedCount,
@@ -3196,6 +3659,231 @@ typedef $$TasksTableProcessedTableManager =
       TaskRow,
       PrefetchHooks Function()
     >;
+typedef $$FolderStatsCacheTableCreateCompanionBuilder =
+    FolderStatsCacheCompanion Function({
+      required String connectionId,
+      required String dirPath,
+      required String entriesJson,
+      Value<bool> complete,
+      required DateTime scannedAt,
+      Value<int> rowid,
+    });
+typedef $$FolderStatsCacheTableUpdateCompanionBuilder =
+    FolderStatsCacheCompanion Function({
+      Value<String> connectionId,
+      Value<String> dirPath,
+      Value<String> entriesJson,
+      Value<bool> complete,
+      Value<DateTime> scannedAt,
+      Value<int> rowid,
+    });
+
+class $$FolderStatsCacheTableFilterComposer
+    extends Composer<_$AppDatabase, $FolderStatsCacheTable> {
+  $$FolderStatsCacheTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get connectionId => $composableBuilder(
+    column: $table.connectionId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get dirPath => $composableBuilder(
+    column: $table.dirPath,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get entriesJson => $composableBuilder(
+    column: $table.entriesJson,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get complete => $composableBuilder(
+    column: $table.complete,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get scannedAt => $composableBuilder(
+    column: $table.scannedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$FolderStatsCacheTableOrderingComposer
+    extends Composer<_$AppDatabase, $FolderStatsCacheTable> {
+  $$FolderStatsCacheTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get connectionId => $composableBuilder(
+    column: $table.connectionId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get dirPath => $composableBuilder(
+    column: $table.dirPath,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get entriesJson => $composableBuilder(
+    column: $table.entriesJson,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get complete => $composableBuilder(
+    column: $table.complete,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get scannedAt => $composableBuilder(
+    column: $table.scannedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$FolderStatsCacheTableAnnotationComposer
+    extends Composer<_$AppDatabase, $FolderStatsCacheTable> {
+  $$FolderStatsCacheTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get connectionId => $composableBuilder(
+    column: $table.connectionId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get dirPath =>
+      $composableBuilder(column: $table.dirPath, builder: (column) => column);
+
+  GeneratedColumn<String> get entriesJson => $composableBuilder(
+    column: $table.entriesJson,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<bool> get complete =>
+      $composableBuilder(column: $table.complete, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get scannedAt =>
+      $composableBuilder(column: $table.scannedAt, builder: (column) => column);
+}
+
+class $$FolderStatsCacheTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $FolderStatsCacheTable,
+          FolderStatsCacheRow,
+          $$FolderStatsCacheTableFilterComposer,
+          $$FolderStatsCacheTableOrderingComposer,
+          $$FolderStatsCacheTableAnnotationComposer,
+          $$FolderStatsCacheTableCreateCompanionBuilder,
+          $$FolderStatsCacheTableUpdateCompanionBuilder,
+          (
+            FolderStatsCacheRow,
+            BaseReferences<
+              _$AppDatabase,
+              $FolderStatsCacheTable,
+              FolderStatsCacheRow
+            >,
+          ),
+          FolderStatsCacheRow,
+          PrefetchHooks Function()
+        > {
+  $$FolderStatsCacheTableTableManager(
+    _$AppDatabase db,
+    $FolderStatsCacheTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$FolderStatsCacheTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$FolderStatsCacheTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$FolderStatsCacheTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> connectionId = const Value.absent(),
+                Value<String> dirPath = const Value.absent(),
+                Value<String> entriesJson = const Value.absent(),
+                Value<bool> complete = const Value.absent(),
+                Value<DateTime> scannedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => FolderStatsCacheCompanion(
+                connectionId: connectionId,
+                dirPath: dirPath,
+                entriesJson: entriesJson,
+                complete: complete,
+                scannedAt: scannedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String connectionId,
+                required String dirPath,
+                required String entriesJson,
+                Value<bool> complete = const Value.absent(),
+                required DateTime scannedAt,
+                Value<int> rowid = const Value.absent(),
+              }) => FolderStatsCacheCompanion.insert(
+                connectionId: connectionId,
+                dirPath: dirPath,
+                entriesJson: entriesJson,
+                complete: complete,
+                scannedAt: scannedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable<$FolderStatsCacheTable, FolderStatsCacheRow>(
+                    table,
+                  ),
+                  BaseReferences<
+                    _$AppDatabase,
+                    $FolderStatsCacheTable,
+                    FolderStatsCacheRow
+                  >(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$FolderStatsCacheTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $FolderStatsCacheTable,
+      FolderStatsCacheRow,
+      $$FolderStatsCacheTableFilterComposer,
+      $$FolderStatsCacheTableOrderingComposer,
+      $$FolderStatsCacheTableAnnotationComposer,
+      $$FolderStatsCacheTableCreateCompanionBuilder,
+      $$FolderStatsCacheTableUpdateCompanionBuilder,
+      (
+        FolderStatsCacheRow,
+        BaseReferences<
+          _$AppDatabase,
+          $FolderStatsCacheTable,
+          FolderStatsCacheRow
+        >,
+      ),
+      FolderStatsCacheRow,
+      PrefetchHooks Function()
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -3206,4 +3894,6 @@ class $AppDatabaseManager {
       $$HistoryRecordsTableTableManager(_db, _db.historyRecords);
   $$TasksTableTableManager get tasks =>
       $$TasksTableTableManager(_db, _db.tasks);
+  $$FolderStatsCacheTableTableManager get folderStatsCache =>
+      $$FolderStatsCacheTableTableManager(_db, _db.folderStatsCache);
 }

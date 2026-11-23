@@ -8,7 +8,10 @@ import '../map/map_providers.dart';
 import '../map/size_scanner.dart';
 
 export '../../data/providers.dart'
-    show connectionsProvider, connectionPasswordsProvider;
+    show
+        connectionsProvider,
+        connectionPasswordsProvider,
+        connectionDirPasswordsProvider;
 
 /// Single source of truth lives in the data layer (persisted).
 final connectionsEditorProvider = connectionsProvider;
@@ -84,49 +87,53 @@ final connectionStatusProvider = FutureProvider.family<ConnCheck, ConnectionId>(
   },
 );
 
+typedef ConnectionTester = Future<ConnCheck> Function(
+  ConnectionConfig config,
+  String password, {
+  Map<String, String> dirPasswords,
+});
+
 /// Pings an unsaved connection from the dialog (测试连接), and verifies
 /// non-root startDir and libraryRoot exist on the server.
-final connectionTesterProvider =
-    Provider<Future<ConnCheck> Function(ConnectionConfig, String password)>((
-      ref,
-    ) {
-      final demo = ref.watch(bootstrapProvider).demo;
-      return (c, password) async {
-        final backend = demo
-            ? ref.read(demoBackendProvider)
-            : createBackend(c, Credentials(password: password));
-        try {
-          await backend.ping();
-          final start = normalizeDir(c.startDir);
-          if (start != '/' && !await backend.exists(start)) {
-            return (
-              status: ConnStatus.offline,
-              detail: '服务器连接正常，但连接路径「$start」不存在',
-            );
-          }
-          final root = c.libraryRoot;
-          if (root != null &&
-              root.isNotEmpty &&
-              !await backend.exists(normalizeDir(root))) {
-            return (
-              status: ConnStatus.offline,
-              detail: '服务器连接正常，但媒体库路径「${normalizeDir(root)}」不存在',
-            );
-          }
-          return (status: ConnStatus.connected, detail: null);
-        } catch (e) {
-          return describeConnectionError(c, e);
-        } finally {
-          if (!demo) await backend.close();
-        }
-      };
-    });
+final connectionTesterProvider = Provider<ConnectionTester>((ref) {
+  final demo = ref.watch(bootstrapProvider).demo;
+  return (c, password, {dirPasswords = const {}}) async {
+    final backend = demo
+        ? ref.read(demoBackendProvider)
+        : createBackend(
+            c,
+            Credentials(password: password, dirPasswords: dirPasswords),
+          );
+    try {
+      await backend.ping();
+      final start = normalizeDir(c.startDir);
+      if (start != '/' && !await backend.exists(start)) {
+        return (status: ConnStatus.offline, detail: '服务器连接正常，但连接路径「$start」不存在');
+      }
+      final root = c.libraryRoot;
+      if (root != null &&
+          root.isNotEmpty &&
+          !await backend.exists(normalizeDir(root))) {
+        return (
+          status: ConnStatus.offline,
+          detail: '服务器连接正常，但媒体库路径「${normalizeDir(root)}」不存在',
+        );
+      }
+      return (status: ConnStatus.connected, detail: null);
+    } catch (e) {
+      return describeConnectionError(c, e);
+    } finally {
+      if (!demo) await backend.close();
+    }
+  };
+});
 
 typedef FolderLister = Future<List<RemoteEntry>> Function(
   ConnectionConfig config,
   String password,
-  String dir,
-);
+  String dir, {
+  Map<String, String> dirPasswords,
+});
 
 /// A temporary backend session for the folder picker dialog, closed once the
 /// dialog finishes so browsing multiple folders never leaks backends.
@@ -139,13 +146,14 @@ class FolderPickerSession {
 
 typedef FolderSessionOpener = FolderPickerSession Function(
   ConnectionConfig config,
-  String password,
-);
+  String password, {
+  Map<String, String> dirPasswords,
+});
 
 /// Opens one cached backend session for a folder picker dialog.
 final connectionListerSessionProvider = Provider<FolderSessionOpener>((ref) {
   final demo = ref.watch(bootstrapProvider).demo;
-  return (c, password) {
+  return (c, password, {dirPasswords = const {}}) {
     if (demo) {
       final be = ref.read(demoBackendProvider);
       return FolderPickerSession(
@@ -153,7 +161,12 @@ final connectionListerSessionProvider = Provider<FolderSessionOpener>((ref) {
         close: () async {},
       );
     }
-    final be = CachedBackend(createBackend(c, Credentials(password: password)));
+    final be = CachedBackend(
+      createBackend(
+        c,
+        Credentials(password: password, dirPasswords: dirPasswords),
+      ),
+    );
     return FolderPickerSession(list: (dir) => be.list(dir), close: be.close);
   };
 });
@@ -162,8 +175,8 @@ final connectionListerSessionProvider = Provider<FolderSessionOpener>((ref) {
 /// [connectionListerSessionProvider] for interactive pickers).
 final connectionListerProvider = Provider<FolderLister>((ref) {
   final open = ref.watch(connectionListerSessionProvider);
-  return (c, password, dir) async {
-    final session = open(c, password);
+  return (c, password, dir, {dirPasswords = const {}}) async {
+    final session = open(c, password, dirPasswords: dirPasswords);
     try {
       return await session.list(dir);
     } finally {

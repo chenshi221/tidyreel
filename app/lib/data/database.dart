@@ -67,6 +67,7 @@ class Tasks extends Table {
   TextColumn get pathsJson => text()();
   TextColumn get mode => text()();
   BoolColumn get scrape => boolean().withDefault(const Constant(false))();
+  BoolColumn get scrapeOnly => boolean().withDefault(const Constant(false))();
   TextColumn get stage => text()();
   TextColumn get message => text()();
   IntColumn get importedCount => integer()();
@@ -85,7 +86,23 @@ class Tasks extends Table {
   Set<Column> get primaryKey => {id};
 }
 
-@DriftDatabase(tables: [Batches, HistoryRecords, Tasks])
+/// Persisted directory listing cache per connection for instant Map & Health reopen.
+@DataClassName('FolderStatsCacheRow')
+@TableIndex(name: 'folder_stats_cache_conn', columns: {#connectionId})
+class FolderStatsCache extends Table {
+  TextColumn get connectionId => text()();
+  TextColumn get dirPath => text()();
+
+  /// JSON array of serialized RemoteEntry objects: {p, n, d, s, m}.
+  TextColumn get entriesJson => text()();
+  BoolColumn get complete => boolean().withDefault(const Constant(false))();
+  DateTimeColumn get scannedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {connectionId, dirPath};
+}
+
+@DriftDatabase(tables: [Batches, HistoryRecords, Tasks, FolderStatsCache])
 class AppDatabase extends _$AppDatabase {
   AppDatabase(super.executor);
 
@@ -101,7 +118,7 @@ class AppDatabase extends _$AppDatabase {
   }
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -121,6 +138,11 @@ class AppDatabase extends _$AppDatabase {
       }
       if (from < 3) {
         await m.addColumn(tasks, tasks.scrape);
+      }
+      if (from < 4) {
+        await m.addColumn(tasks, tasks.scrapeOnly);
+        await m.createTable(folderStatsCache);
+        await m.createIndex(folderStatsCacheConn);
       }
     },
   );

@@ -37,6 +37,9 @@ class TaskSummary {
 
   /// 刮削: also write .nfo files and TMDB artwork (PlanOptions.scrape).
   final bool scrape;
+
+  /// 仅刮削补全: write NFO & artwork without renaming/moving media files.
+  final bool scrapeOnly;
   final TaskStage stage;
 
   /// Human-readable status line, e.g. "锚点识别完成，正在进行后续处理".
@@ -61,6 +64,7 @@ class TaskSummary {
     required this.paths,
     required this.mode,
     this.scrape = false,
+    this.scrapeOnly = false,
     required this.stage,
     this.message = '',
     this.importedCount = 0,

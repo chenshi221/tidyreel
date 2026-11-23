@@ -1,4 +1,5 @@
 import '../model/media.dart';
+import '../plan/follow.dart' show subFlagsFromRemainder;
 import 'numerals.dart';
 
 // ---------------------------------------------------------------- classify
@@ -150,12 +151,18 @@ class Info {
   int? bare; // bare episode/absolute number
   String bareFrom = ''; // dash | trail | lone
   int? leadNum; // "01 Pilot.mkv": only counts with folder context
+  int? loneFourDigit; // "1080.mkv": only counts with folder context
   bool explicitEp = false;
   bool sxe = false;
   bool batch = false; // "全39集": a whole-season pack, not one episode
   DateTime? airDate; // "20240503" / "2024-05-03"
   bool specialKw = false, extraKw = false, movieKw = false, hasTech = false;
   String? res, group, lang, extra;
+  String? edition;
+  int? part;
+  String? partLabel;
+  List<String> subFlags = const [];
+  ExternalId? externalId;
 }
 
 const _cjkQuotes = {
@@ -194,6 +201,31 @@ String fold(String s) {
 
 const _cnNum = r'[0-9]+|[零〇一二三四五六七八九十百千两兩]+';
 
+// ---- external catalog IDs ({tmdb-27205}, [tmdbid=27205], {imdb-tt1375666},
+//      (tt1375666), {tvdb-81189}, etc.)
+final _extIdBracketedRe = RegExp(
+  r'[\{\[\(]\s*(?:(tmdb|tvdb)(?:id)?\s*[-=:]\s*(\d+)|(imdb)(?:id)?\s*[-=:]\s*(tt\d{7,9})|(tt\d{7,9}))\s*[\}\]\)]',
+  caseSensitive: false,
+);
+final _extIdBareRe = RegExp(
+  r'(?<![A-Za-z0-9])(?:(tmdb|tvdb)(?:id)?\s*[-=:]\s*(\d+)|(imdb)(?:id)?\s*[-=:]\s*(tt\d{7,9})|(tt\d{7,9}))(?![A-Za-z0-9])',
+  caseSensitive: false,
+);
+
+int _extIdPriority(String source) => switch (source) {
+  'tmdb' => 3,
+  'imdb' => 2,
+  'tvdb' => 1,
+  _ => 0,
+};
+
+ExternalId? _pickExtId(ExternalId? current, ExternalId candidate) {
+  if (current == null) return candidate;
+  return _extIdPriority(candidate.source) > _extIdPriority(current.source)
+      ? candidate
+      : current;
+}
+
 final _dateRe = RegExp(
   r'(?<![0-9])(?:(?:19|20)\d\d[-._ ](?:0[1-9]|1[0-2])[-._ ](?:0[1-9]|[12]\d|3[01])|(?:19|20)\d\d(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01]))(?![0-9])',
 );
@@ -205,7 +237,7 @@ const _techWords =
     r'webdl|webrip|webhd|bluray|bdrip|brrip|bdremux|remux|hdtv|pdtv|dvdrip|dvdscr|dvd|hdrip|hdcam|bd|'
     r'amzn|nf|dsnp|hmax|atvp|hulu|x26[45]|h26[45]|hevc|avc|xvid|divx|av1|vc1|10bits?|8bits?|hi10p?|'
     r'(?:ddp?|ddplus|aac|ac3|eac3|dts|dtshd|dtsx|flac|truehd|atmos|opus|lpcm|mp3)\d*|ch\d\d|'
-    r'hdr10(?:plus)?|hdr|dv|dovi|hlg|sdr|imax|proper|repack|rerip|extended|unrated|remastered|'
+    r'hdr10(?:plus)?|hdr|dv|dovi|hlg|sdr|imax|hsbs|halfsbs|hou|halfou|proper|repack|rerip|extended|unrated|remastered|'
     r'internal|multi|dual|dubbed|subbed|complete|batch|limited|hybrid|mkv|mp4|avi';
 final _techRe = RegExp(
   '(?<![A-Za-z0-9])(?:$_techWords|\\d{3,4}x\\d{3,4}|[248]k|uhd|fhd)(?![A-Za-z0-9])'
@@ -214,11 +246,31 @@ final _techRe = RegExp(
 );
 final _techOnlyRe = RegExp(
   '^(?:$_techWords|\\d{3,4}[pi]|\\d{3,4}x\\d{3,4}|[248]k|uhd|fhd|web|tv|big5|gb|chs|cht|sc|tc|'
+  'dc|3d|hsbs|sbs|hou|criterion|theatrical|forced|sdh|bilingual|default|'
   'mkv|mp4|v\\d|\\d{1,3}[-~]\\d{1,3}|\\d{4}|[\\s,&+/_.-])+\$',
   caseSensitive: false,
 );
 final _cnNoise = RegExp(
-  '国语|粤语|国粤|中字|中英|简繁|简体|繁体|繁體|高清|超清|蓝光|原盘|完整版|无删减|全集|合集|内封|内嵌|外挂|双语|字幕|修复版|珍藏版|导演剪辑|新版|首发|重制版',
+  '国粤双语|國粵雙語|国语版|國語版|粤语版|粵語版|国配|國配|粤配|粵配|'
+  '加长版|加長版|未分级版|未分級版|导演剪辑版?|導演剪輯版?|导剪版|導剪版|'
+  '国语|粤语|国粤|中字|中英|简繁|简体|繁体|繁體|高清|超清|蓝光|原盘|完整版|无删减|全集|合集|内封|内嵌|外挂|双语|字幕|修复版|珍藏版|新版|首发|重制版',
+);
+
+// ---- .5 recap patterns (anime specials, e.g. S01E12.5, E12.5, 第12.5话, - 12.5)
+final _seHalfRe = RegExp(
+  r'(?<![A-Za-z0-9])S(\d{1,2}) ?E(\d{1,4})\.5(?![0-9])',
+  caseSensitive: false,
+);
+final _cnEpHalfRe = RegExp(r'第 ?(\d{1,4})\.5 ?[集话話期回]');
+final _epHalfRe = RegExp(
+  r'(?<![A-Za-z0-9])(?:(?:EP|Episode) ?|E)(\d{1,4})\.5(?![0-9])',
+  caseSensitive: false,
+);
+final _dashHalfRe = RegExp(
+  r'(?:^| )- ?(\d{1,4})\.5(?:v\d{1,2})?(?![A-Za-z0-9])',
+);
+final _bareHalfRe = RegExp(
+  r'(?<![A-Za-z0-9])(\d{1,4})\.5(?:v\d)?(?![A-Za-z0-9])',
 );
 
 final _seRe = RegExp(
@@ -229,8 +281,10 @@ final _xRe = RegExp(
   r'(?<![A-Za-z0-9])(\d{1,2})x(\d{2,3})(?![A-Za-z0-9])',
   caseSensitive: false,
 );
-// "第01集", "第01-02集"
-final _cnEpRe = RegExp('第 ?($_cnNum)(?: ?[-~] ?($_cnNum))? ?[集话話期回]');
+// "第01集", "第01-02集", "第3期上", "第3期下"
+final _cnEpRe = RegExp(
+  '第 ?($_cnNum)(?: ?[-~] ?($_cnNum))? ?[集话話期回](?: ?([上中下])(?:集|部)?(?![一-鿿]))?',
+);
 final _batchRe = RegExp(r'[全共] ?\d+ ?[集话期]|更新?至 ?\d+ ?[集话期]');
 // "EP01", "E01", "Episode 1", ranges "EP01-EP02" / "E01-02"
 final _epRe = RegExp(
@@ -243,6 +297,10 @@ final _ofRe = RegExp(
   caseSensitive: false,
 );
 final _hashRe = RegExp(r'#(\d{1,4})(?![0-9])');
+final _volRe = RegExp(
+  r'(?<![A-Za-z0-9])Vol(?:ume)? ?(\d{1,3})(?![A-Za-z0-9])',
+  caseSensitive: false,
+);
 final _dashRe = RegExp(r'(?:^| )- ?(\d{1,4})(?:v\d{1,2})?(?![A-Za-z0-9])');
 final _seasonRes = <RegExp>[
   RegExp(r'(?<![A-Za-z0-9])S(\d{1,2})(?![A-Za-z0-9])', caseSensitive: false),
@@ -254,12 +312,13 @@ final _seasonRes = <RegExp>[
   RegExp('第 ?($_cnNum) ?季'),
 ];
 final _specialRe = RegExp(
-  r'(?<![A-Za-z0-9])(?:OVA|OAD|SPs?|Specials?) ?(\d{1,3})?(?![A-Za-z0-9])|(?:特别篇|特別篇|番外篇?) ?(\d{1,3})?',
+  r'(?<![A-Za-z0-9])(?:OVA|OAD|SPs?|Specials?) ?(\d{1,3})?(?![A-Za-z0-9])|(?:特别篇|特別篇|番外篇?|先导片|先導片) ?(\d{1,3})?',
   caseSensitive: false,
 );
 // Case-sensitive acronyms (PV/CM/OP/ED) and CJK extra words.
 final _extraCsRe = RegExp(
-  r'(?<![A-Za-z0-9])(?:PV|CM) ?\d{0,2}(?![A-Za-z0-9])|(?<![A-Za-z0-9])(?:OP|ED) ?\d{1,2}(?![A-Za-z0-9])|花絮|幕后|特典|预告片?|宣传片|访谈|片头曲|片尾曲|特辑|彩蛋',
+  r'(?<![A-Za-z0-9])(?:PV|CM) ?\d{0,2}(?![A-Za-z0-9])|(?<![A-Za-z0-9])(?:OP|ED) ?\d{1,2}(?![A-Za-z0-9])|'
+  r'未播花絮|未播片段|加更版|纯享版|純享版|衍生版|花絮|幕后|特典|预告片?|宣传片|访谈|片头曲|片尾曲|特辑|彩蛋',
 );
 // Case-insensitive extra words (consolidated once; not duplicated in _extraCsRe).
 final _extraCiRe = RegExp(
@@ -268,23 +327,105 @@ final _extraCiRe = RegExp(
 );
 // Unambiguous extra markers that are never standalone English movie titles.
 final _strictExtraRe = RegExp(
-  r'^(?:NCOP|NCED|PV|CM|OP|ED|花絮|幕后|特典|预告|宣传片|访谈|片头曲|片尾曲|特辑|彩蛋)',
+  r'^(?:NCOP|NCED|PV|CM|OP|ED|未播花絮|未播片段|加更版|纯享版|純享版|衍生版|花絮|幕后|特典|预告|宣传片|访谈|片头曲|片尾曲|特辑|彩蛋)',
 );
 final _theTitlePrefixRe = RegExp(r'^\s*the\s+$', caseSensitive: false);
-final _movieRe = RegExp(
-  r'剧场版|劇場版|电影版|Gekijouban|(?<![A-Za-z])The Movie(?![A-Za-z])',
+final _cjkMovieRe = RegExp(r'剧场版|劇場版|电影版|Gekijouban', caseSensitive: false);
+final _theMovieRe = RegExp(
+  r'(?<![A-Za-z])The Movie(?![A-Za-z])',
   caseSensitive: false,
 );
+final _afterTheatricalTitleRe = RegExp(r'[\u3400-\u9fff]{2,}|[A-Za-z]{3,}');
+
+// ---- Release editions
+final _edDirectorsCutRe = RegExp(
+  r"(?<![A-Za-z0-9])Director'?s? Cut(?![A-Za-z0-9])|导演剪辑版?|導演剪輯版?|导剪版|導剪版",
+  caseSensitive: false,
+);
+final _edDcTagRe = RegExp(r'(?<![A-Za-z0-9])DC(?![A-Za-z0-9])');
+final _edFinalCutRe = RegExp(
+  r'(?<![A-Za-z0-9])(?:The )?Final Cut(?![A-Za-z0-9])',
+  caseSensitive: false,
+);
+final _edExtendedRe = RegExp(
+  r'(?<![A-Za-z0-9])Extended(?: (?:Edition|Cut|Version))?(?![A-Za-z0-9])|加长版|加長版',
+  caseSensitive: false,
+);
+final _edUnratedRe = RegExp(
+  r'(?<![A-Za-z0-9])Unrated(?: (?:Edition|Cut|Version))?(?![A-Za-z0-9])|未分级版|未分級版',
+  caseSensitive: false,
+);
+final _edTheatricalRe = RegExp(
+  r'(?<![A-Za-z0-9])Theatrical(?: (?:Edition|Cut|Version))?(?![A-Za-z0-9])',
+  caseSensitive: false,
+);
+final _edCriterionRe = RegExp(
+  r'(?<![A-Za-z0-9])Criterion(?: Collection)?(?![A-Za-z0-9])',
+  caseSensitive: false,
+);
+final _edImaxRe = RegExp(
+  r'(?<![A-Za-z0-9])IMAX(?: Enhanced)?(?![A-Za-z0-9])',
+  caseSensitive: false,
+);
+final _ed3dExplicitRe = RegExp(
+  r'(?<![A-Za-z0-9])(?:H-?SBS|Half[- ]?SBS|HalfSBS|H-?OU|Half[- ]?OU|HalfOU)(?![A-Za-z0-9])',
+  caseSensitive: false,
+);
+final _ed3dRe = RegExp(
+  r'(?<![A-Za-z0-9])3D(?![A-Za-z0-9])',
+  caseSensitive: false,
+);
+final _edRemuxRe = RegExp(
+  r'(?<![A-Za-z0-9])(?:BD)?REMUX(?![A-Za-z0-9])',
+  caseSensitive: false,
+);
+final _edCnDualDubRe = RegExp(r'国粤双语|國粵雙語');
+final _edCnMandarinRe = RegExp(r'国语版|國語版|国配|國配');
+final _edCnCantoneseRe = RegExp(r'粤语版|粵語版|粤配|粵配');
+
+// ---- Multi-part movie / split tags
+final _partCdRe = RegExp(
+  r'(?<![A-Za-z0-9])CD ?([1-9])(?![A-Za-z0-9])',
+  caseSensitive: false,
+);
+final _partDiscRe = RegExp(
+  r'(?<![A-Za-z0-9])(?:Disc|Disk) ?([1-9])(?![A-Za-z0-9])',
+  caseSensitive: false,
+);
+final _partPtRe = RegExp(
+  r'(?<![A-Za-z0-9])Pt ?([1-9])(?![A-Za-z0-9])',
+  caseSensitive: false,
+);
+final _partWordRe = RegExp(
+  r'(?<![A-Za-z0-9])Part ?([1-9])(?![A-Za-z0-9])',
+  caseSensitive: false,
+);
+final _partCnJiRe = RegExp(r'(?<=.)([上中下])集(?![一-鿿])');
+final _partCnBracketedRe = RegExp(r'\u0001 ([上中下])(?:集|部)?(?=[\s\u0001]|$)');
+final _partCnLooseRe = RegExp(
+  r'(?<=[\s\u0001])([上中下])(?:\s*$|(?=\s*(?:\u0001|(?:19|20)\d\d|\d{3,4}[pi]|[248]k|BD|WEB|HD|UHD|BluRay|Remux|国|粤|中|简|繁|双语|字幕|高清|超清|蓝光|原盘)))',
+  caseSensitive: false,
+);
+
 // Not glued to CJK on the left: "请回答1988" keeps its number in the title.
 final _yearRe = RegExp(r'(?<![A-Za-z0-9㐀-鿿])((?:19|20)\d\d)(?![A-Za-z0-9])');
 final _cjk = RegExp(r'[぀-ヿ㐀-鿿가-힯]');
 final _langRe = RegExp(
-  r'(?<![A-Za-z0-9])(zh[- ]?(?:cn|tw|hans|hant|hk|sg)|chs|cht|zhs|zht|chi|zho|jpsc|jptc|sc|tc|gbk|gb2312|gb|big5|english|eng|en|japanese|jpn|jap|jp|ja|korean|kor|ko|zh|cn|chinese|'
+  r'(?<![A-Za-z0-9])(zh[-_ ]?(?:cn|tw|hans|hant|hk|sg)|en[-_ ]?(?:us|gb)|chs|cht|zhs|zht|chi|zho|jpsc|jptc|sc|tc|gbk|gb2312|gb|big5|english|eng|en|japanese|jpn|jap|jp|ja|korean|kor|ko|zh|cn|chinese|'
   r'简体中文|繁體中文|繁体中文|简体|繁体|繁體|简中|繁中|简日|繁日|简繁|简英|繁英|中英|中文|双语|雙語|日语|日文|韩语|韩文|英文|英语)(?![A-Za-z0-9])',
+  caseSensitive: false,
+);
+final _subFlagTrailerRe = RegExp(
+  r'^(?:forced|force|default|sdh|hi|cc|bilingual|强制|強制|默认|默認|听障|聽障)$',
+  caseSensitive: false,
+);
+final _trailingSubFlagRe = RegExp(
+  r'(?:^|[\s\u0001])(forced|default|sdh|bilingual|强制|強制|默认|默認|听障|聽障)(?=(?:[\s\u0001]+(?:forced|force|default|sdh|hi|cc|bilingual|强制|強制|默认|默認|听障|聽障))*\s*$)',
   caseSensitive: false,
 );
 
 final _fourDigitYearRe = RegExp(r'^(?:19|20)\d\d$');
+final _loneFourDigitRe = RegExp(r'^(\d{4})$');
 final _cnNoiseTagRe = RegExp(r'[一-鿿]{0,2}(?:字幕|画质|版|语|字)(?![一-鿿])');
 final _splitNoiseRe = RegExp(r'[\s,&+/_.-]+');
 
@@ -315,15 +456,32 @@ RegExpMatch? _firstExtraMatch(String s) {
 
 bool _hasEpisodeMarker(String c) =>
     _seRe.hasMatch(c) ||
+    _seHalfRe.hasMatch(c) ||
     _xRe.hasMatch(c) ||
     _cnEpRe.hasMatch(c) ||
+    _cnEpHalfRe.hasMatch(c) ||
     _epRe.hasMatch(c) ||
+    _epHalfRe.hasMatch(c) ||
     _specialRe.hasMatch(c) ||
     _hasExtraMarker(c) ||
     _seasonRes.any((r) => r.hasMatch(c));
 
 final _webdlRe = RegExp(r'web[-. _]?dl', caseSensitive: false);
 final _blurayRe = RegExp(r'blu[-. ]?ray', caseSensitive: false);
+final _half3dRe = RegExp(
+  r'(?<![A-Za-z0-9])(half|h)[-. _]?(sbs|ou)(?![A-Za-z0-9])',
+  caseSensitive: false,
+);
+const _nonGroupTrailerTags = {
+  '3d',
+  'dc',
+  'sbs',
+  'ou',
+  'hsbs',
+  'hou',
+  'criterion',
+  'theatrical',
+};
 final _h26xRe = RegExp(
   r'(?<![A-Za-z0-9])h[. ]?26([45])(?![0-9])',
   caseSensitive: false,
@@ -334,17 +492,36 @@ final _audioChRe = RegExp(
   caseSensitive: false,
 );
 final _chDigitRe = RegExp(r'(?<![0-9.])([2567])\.([01])(?![0-9])');
+final _localeUnderscoreRe = RegExp(
+  r'(?<![A-Za-z0-9])(zh)_(cn|tw|hk|sg|hans|hant)(?![A-Za-z0-9])|(?<![A-Za-z0-9])(en)_(us|gb)(?![A-Za-z0-9])',
+  caseSensitive: false,
+);
+final _halfDotRe = RegExp(
+  r'(?<![A-Za-z0-9])((?:S\d{1,2} ?E|EP?|Episode[ .]?|第 ?)?)(?!19\d\d|20\d\d)(\d{1,4})\.5(?![0-9])',
+  caseSensitive: false,
+);
 final _dotsUnderscoresRe = RegExp(r'[._]');
 final _whitespaceRe = RegExp(r'[ \t]+');
 
 String _normalize(String s) {
   s = s.replaceAllMapped(_webdlRe, (m) => 'WEBDL');
   s = s.replaceAllMapped(_blurayRe, (m) => 'BluRay');
+  s = s.replaceAllMapped(
+    _half3dRe,
+    (m) =>
+        '${m[1]!.toLowerCase() == 'half' ? 'Half' : 'H'}${m[2]!.toUpperCase()}',
+  );
   s = s.replaceAllMapped(_h26xRe, (m) => 'H26${m[1]}');
   s = s.replaceAllMapped(_hdr10PlusRe, (m) => '${m[1]}plus');
   s = s.replaceAllMapped(_audioChRe, (m) => '${m[1]}${m[2]}${m[3]}');
   s = s.replaceAllMapped(_chDigitRe, (m) => 'ch${m[1]}${m[2]}');
+  s = s.replaceAllMapped(
+    _localeUnderscoreRe,
+    (m) => m[1] != null ? '${m[1]}\u0002${m[2]}' : '${m[3]}\u0002${m[4]}',
+  );
+  s = s.replaceAllMapped(_halfDotRe, (m) => '${m[1]}${m[2]}\u00035');
   s = s.replaceAll(_dotsUnderscoresRe, ' ');
+  s = s.replaceAll('\u0002', '_').replaceAll('\u0003', '.');
   return s.replaceAll(_whitespaceRe, ' ').trim();
 }
 
@@ -368,8 +545,14 @@ DateTime? _tryParseCalendarDate(String digits) {
   return dt;
 }
 
+(int, String) _cnPart(String ch) => switch (ch) {
+  '上' => (1, 'pt1'),
+  '中' => (2, 'pt2'),
+  _ => (2, 'pt2'),
+};
+
 final _dashDateRe = RegExp(r'[-._ ]');
-final _numWithVRe = RegExp(r'^\d{1,4}(?:v\d)?$');
+final _numWithVRe = RegExp(r'^\d{1,4}(?:\.5)?(?:v\d)?$');
 final _trailerGroupRe = RegExp(r'-([A-Za-z0-9]{2,16}) *(?:\[[^\]]*\] *)*$');
 final _eNumRe = RegExp(r'^E?\d+$', caseSensitive: false);
 final _multiSpaceRe = RegExp(r' {2,}');
@@ -405,6 +588,26 @@ Info analyze(String raw, {required bool file}) {
     }
   }
   s = s.replaceAll(_wwwRe, ' ').replaceFirst(_leadDomainRe, '');
+
+  // Explicit external catalog IDs ({tmdb-27205}, [tmdbid=27205],
+  // {imdb-tt1375666}, (tt1375666), {tvdb-81189}, etc.) — stripped early so
+  // they never become release groups or pollute the title.
+  String stripExtIds(String input, RegExp re) =>
+      input.replaceAllMapped(re, (m) {
+        final ExternalId id;
+        if (m[1] != null) {
+          id = ExternalId(m[1]!.toLowerCase(), m[2]!);
+        } else if (m[3] != null) {
+          id = ExternalId('imdb', m[4]!.toLowerCase());
+        } else {
+          id = ExternalId('imdb', m[5]!.toLowerCase());
+        }
+        a.externalId = _pickExtId(a.externalId, id);
+        return ' ';
+      });
+  s = stripExtIds(s, _extIdBracketedRe);
+  s = stripExtIds(s, _extIdBareRe);
+
   s = s.replaceAllMapped(_dateRe, (dm) {
     final dt = _tryParseCalendarDate(dm[0]!.replaceAll(_dashDateRe, ''));
     if (dt == null) return dm[0]!;
@@ -442,17 +645,24 @@ Info analyze(String raw, {required bool file}) {
   // Protect release tokens before the trailing "-GROUP" is looked for.
   s = s.replaceAllMapped(_webdlRe, (m) => 'WEBDL');
   s = s.replaceAllMapped(_blurayRe, (m) => 'BluRay');
+  s = s.replaceAllMapped(
+    _half3dRe,
+    (m) =>
+        '${m[1]!.toLowerCase() == 'half' ? 'Half' : 'H'}${m[2]!.toUpperCase()}',
+  );
   if (a.group == null) {
     final gm = _trailerGroupRe.firstMatch(s);
     if (gm != null) {
       final cand = gm[1]!;
       final before = _normalize(s.substring(0, gm.start));
-      // Do not swallow trailing subtitle language codes ("-CHS", "-ENG") as group.
-      final isSubLang = isSub && _langRe.hasMatch(cand);
+      // Do not swallow trailing subtitle language/flag codes ("-CHS", "-forced") as group.
+      final isSubMeta =
+          isSub && (_langRe.hasMatch(cand) || _subFlagTrailerRe.hasMatch(cand));
       if (_techRe.hasMatch(before) &&
           !_techRe.hasMatch(cand) &&
           !_eNumRe.hasMatch(cand) &&
-          !isSubLang) {
+          !_nonGroupTrailerTags.contains(cand.toLowerCase()) &&
+          !isSubMeta) {
         a.group = cand;
         s = s.substring(0, gm.start) + s.substring(gm.start + 1 + cand.length);
       }
@@ -470,10 +680,40 @@ Info analyze(String raw, {required bool file}) {
   });
   s = _normalize('$s ${tail.toString()}');
 
-  // "剧场版 名侦探柯南 ..." — the keyword is only a flag; the rest is the title.
-  if (_movieRe.hasMatch(s)) {
+  // "剧场版 名侦探柯南 ..." — anime movie prefix/mid-title is stripped as a flag.
+  // When "剧场版" sits at the trailing end (after title/year, with no title words
+  // after it), it is also a Theatrical edition tag.
+  final cjkMovieM = _cjkMovieRe.firstMatch(s);
+  if (cjkMovieM != null) {
     a.movieKw = true;
-    s = s.replaceFirst(_movieRe, ' ').replaceAll(_multiSpaceRe, ' ').trim();
+    final matched = cjkMovieM[0]!;
+    final after = s
+        .substring(cjkMovieM.end)
+        .replaceAll(_techRe, ' ')
+        .replaceAll(_cnNoise, ' ')
+        .replaceAll(_yearRe, ' ')
+        .replaceAll('\u0001', ' ')
+        .trim();
+    if (cjkMovieM.start > 0 &&
+        (matched == '剧场版' || matched == '劇場版') &&
+        !_afterTheatricalTitleRe.hasMatch(after)) {
+      a.edition ??= 'Theatrical';
+    }
+    s = s
+        .replaceRange(cjkMovieM.start, cjkMovieM.end, ' ')
+        .replaceAll(_multiSpaceRe, ' ')
+        .trim();
+  } else {
+    // Only strip "The Movie" when a title precedes it ("Pokemon The Movie 2019");
+    // keep a real title starting with "The Movie" ("The Movie 2019.mkv") intact.
+    final theMovieM = _theMovieRe.firstMatch(s);
+    if (theMovieM != null && theMovieM.start > 0) {
+      a.movieKw = true;
+      s = s
+          .replaceRange(theMovieM.start, theMovieM.end, ' ')
+          .replaceAll(_multiSpaceRe, ' ')
+          .trim();
+    }
   }
 
   var cut = s.length;
@@ -481,10 +721,28 @@ Info analyze(String raw, {required bool file}) {
     if (i >= 0 && i < cut) cut = i;
   }
 
-  // ---- season / episode
-  var m = _seRe.firstMatch(s);
+  // ---- season / episode (check .5 recap specials first so they don't collide)
+  var m = _seHalfRe.firstMatch(s);
   if (m != null) {
-    a.season = int.parse(m[1]!);
+    a.specialKw = true;
+    a.episodes = [int.parse(m[2]!)];
+    a.explicitEp = a.sxe = true;
+    mark(m.start);
+  }
+  if (a.episodes.isEmpty && (m = _cnEpHalfRe.firstMatch(s)) != null) {
+    a.specialKw = true;
+    a.episodes = [int.parse(m![1]!)];
+    a.explicitEp = true;
+    mark(m.start);
+  }
+  if (a.episodes.isEmpty && (m = _epHalfRe.firstMatch(s)) != null) {
+    a.specialKw = true;
+    a.episodes = [int.parse(m![1]!)];
+    a.explicitEp = true;
+    mark(m.start);
+  }
+  if (a.episodes.isEmpty && (m = _seRe.firstMatch(s)) != null) {
+    a.season = int.parse(m![1]!);
     final nums = <int>[int.parse(m[2]!)];
     for (final t in _multiEpRe.allMatches(m[3] ?? '')) {
       final n = int.parse(t[2]!);
@@ -509,6 +767,11 @@ Info analyze(String raw, {required bool file}) {
     if (n != null) {
       a.episodes = _range(n, m[2] == null ? null : chineseToInt(m[2]!));
       a.explicitEp = true;
+      if (m[3] != null) {
+        final (p, label) = _cnPart(m[3]!);
+        a.part = p;
+        a.partLabel = label;
+      }
       mark(m.start);
     }
   }
@@ -546,11 +809,25 @@ Info analyze(String raw, {required bool file}) {
     }
   }
 
-  // ---- year: last candidate that is not the very first token
+  // ---- year: last plausible release year (<= currentYear + 2) not at index 0
+  final maxYear = DateTime.now().year + 2;
   final yrs = _yearRe.allMatches(s).toList();
   RegExpMatch? ym;
   for (final y in yrs) {
-    if (y.start > 0) ym = y;
+    final val = int.parse(y[1]!);
+    if (y.start > 0 && val <= maxYear) ym = y;
+  }
+
+  // ---- volume marker ("vol.1" / "Volume 2"), unless inside a title before a year
+  final vm = _volRe.firstMatch(s);
+  if (vm != null && vm.start > 0 && (ym == null || vm.start > ym.start)) {
+    mark(vm.start);
+    if (a.episodes.isEmpty &&
+        !_dashRe.hasMatch(s) &&
+        !_dashHalfRe.hasMatch(s)) {
+      a.episodes = [int.parse(vm[1]!)];
+      a.explicitEp = true;
+    }
   }
 
   // ---- special / extra / movie keywords
@@ -599,50 +876,195 @@ Info analyze(String raw, {required bool file}) {
   final um = s.indexOf('\u0001');
   if (um >= 0) mark(um);
 
-  // ---- subtitle language
+  // ---- release editions (canonical priority; strips edition tags from title)
+  void applyEdition(
+    RegExp re,
+    String canonical, {
+    bool requireAfterCut = false,
+  }) {
+    final em2 = re.firstMatch(s);
+    if (em2 == null) return;
+    if (requireAfterCut) {
+      if (em2.start < cut) return;
+    } else if (em2.start == 0) {
+      return;
+    }
+    a.edition ??= canonical;
+    mark(em2.start);
+  }
+
+  applyEdition(_edDirectorsCutRe, "Director's Cut");
+  applyEdition(_edDcTagRe, "Director's Cut", requireAfterCut: true);
+  final fc = _edFinalCutRe.firstMatch(s);
+  if (fc != null &&
+      fc.start > 0 &&
+      (ym == null || fc.start > ym.start) &&
+      !_theTitlePrefixRe.hasMatch(s.substring(0, fc.start))) {
+    a.edition ??= 'Final Cut';
+    mark(fc.start);
+  }
+  applyEdition(_edExtendedRe, 'Extended');
+  applyEdition(_edUnratedRe, 'Unrated');
+  applyEdition(_edTheatricalRe, 'Theatrical');
+  applyEdition(_edCriterionRe, 'Criterion');
+  applyEdition(_edImaxRe, 'IMAX');
+  applyEdition(_ed3dExplicitRe, '3D');
+  final m3d = _ed3dRe.firstMatch(s);
+  if (m3d != null && m3d.start > 0 && (ym == null || m3d.start > ym.start)) {
+    a.edition ??= '3D';
+    mark(m3d.start);
+  }
+  final remuxM = _edRemuxRe.firstMatch(s);
+  if (remuxM != null) {
+    a.edition ??= 'Remux';
+    mark(remuxM.start);
+  }
+  applyEdition(_edCnDualDubRe, '国粤双语');
+  applyEdition(_edCnMandarinRe, '国语');
+  applyEdition(_edCnCantoneseRe, '粤语');
+
+  // ---- multi-part movie / split tags (CD1, Disc 1, Pt 1, Part 1, 上集/下集, (上)/(下))
+  if (a.part == null) {
+    final cdM = _partCdRe.firstMatch(s);
+    if (cdM != null && cdM.start > 0) {
+      final n = int.parse(cdM[1]!);
+      a.part = n;
+      a.partLabel = 'cd$n';
+      mark(cdM.start);
+    }
+  }
+  if (a.part == null) {
+    final discM = _partDiscRe.firstMatch(s);
+    if (discM != null && discM.start > 0) {
+      final n = int.parse(discM[1]!);
+      a.part = n;
+      a.partLabel = 'disc$n';
+      mark(discM.start);
+    }
+  }
+  if (a.part == null) {
+    final ptM = _partPtRe.firstMatch(s);
+    if (ptM != null && ptM.start > 0) {
+      final n = int.parse(ptM[1]!);
+      a.part = n;
+      a.partLabel = 'pt$n';
+      mark(ptM.start);
+    }
+  }
+  if (a.part == null && a.episodes.isEmpty && !a.explicitEp) {
+    for (final partM in _partWordRe.allMatches(s)) {
+      if (partM.start > 0 && (ym == null || partM.start > ym.start)) {
+        final n = int.parse(partM[1]!);
+        a.part = n;
+        a.partLabel = 'pt$n';
+        mark(partM.start);
+        break;
+      }
+    }
+  }
+  if (a.part == null && (a.episodes.isEmpty || _cnEpRe.hasMatch(s))) {
+    final cnPartM =
+        _partCnJiRe.firstMatch(s) ??
+        _partCnBracketedRe.firstMatch(s) ??
+        _partCnLooseRe.firstMatch(s);
+    if (cnPartM != null && cnPartM.start > 0) {
+      final (p, label) = _cnPart(cnPartM[1]!);
+      a.part = p;
+      a.partLabel = label;
+      mark(cnPartM.start);
+    }
+  }
+
+  // ---- subtitle language and trait flags
   if (isSub) {
     final lm = _langRe.firstMatch(s);
     if (lm != null) {
       a.lang = lm[1]!.replaceAll(' ', '-');
       mark(lm.start);
     }
+    if (cut == s.length) {
+      final fm = _trailingSubFlagRe.firstMatch(s);
+      if (fm != null) mark(fm.start);
+    }
+    if (cut < s.length) {
+      a.subFlags = subFlagsFromRemainder(s.substring(cut));
+    }
   }
 
-  // ---- bare numbers
+  // ---- bare numbers (including .5 anime recap episodes and lone 4-digit stems)
   final noMarker =
       a.episodes.isEmpty && !a.specialKw && !a.extraKw && !a.movieKw;
   if (noMarker && file) {
-    final dm = _dashRe.firstMatch(s);
-    if (dm != null) {
-      final n = int.parse(dm[1]!);
-      final isYear = dm[1]!.length == 4 && n >= 1900 && n <= 2099;
-      if (!isYear) {
-        a.bare = n;
-        a.bareFrom = 'dash';
-        mark(dm.start);
+    final dhm = _dashHalfRe.firstMatch(s);
+    if (dhm != null) {
+      a.specialKw = true;
+      a.bare = int.parse(dhm[1]!);
+      a.bareFrom = 'dash';
+      mark(dhm.start);
+    }
+    if (a.bare == null) {
+      final dm = _dashRe.firstMatch(s);
+      if (dm != null) {
+        final n = int.parse(dm[1]!);
+        final isYear = dm[1]!.length == 4 && n >= 1900 && n <= 2099;
+        if (!isYear) {
+          a.bare = n;
+          a.bareFrom = 'dash';
+          mark(dm.start);
+        }
       }
     }
     if (a.bare == null && a.year == null) {
       final region = s.substring(0, cut);
-      final nums = _bareRegionRe.allMatches(region).toList();
-      if (nums.isNotEmpty) {
-        final last = nums.last;
+      final halfNums = _bareHalfRe.allMatches(region).toList();
+      if (halfNums.isNotEmpty) {
+        final last = halfNums.last;
         final before = region.substring(0, last.start).trim();
         final after = region.substring(last.end).replaceAll(_spaceDashRe, '');
-        final n = int.parse(last[1]!);
-        if (before.isEmpty && after.isEmpty) {
-          a.bare = n;
-          a.bareFrom = 'lone';
+        if (after.isEmpty) {
+          a.specialKw = true;
+          a.bare = int.parse(last[1]!);
+          a.bareFrom = before.isEmpty ? 'lone' : 'trail';
           cut = last.start;
-        } else if (after.isEmpty && before.replaceAll('-', '').isNotEmpty) {
-          a.bare = n;
-          a.bareFrom = 'trail';
-          cut = last.start;
-        } else if (before.isEmpty) {
-          a.leadNum = n;
         }
       }
     }
+    if (a.bare == null && a.year == null) {
+      final region = s.substring(0, cut);
+      final trimmedRegion = region.trim();
+      final fourM = _loneFourDigitRe.firstMatch(trimmedRegion);
+      if (fourM != null) {
+        final n = int.parse(fourM[1]!);
+        if (n >= 1000 && n < 1900) {
+          a.loneFourDigit = n;
+        }
+      } else {
+        final nums = _bareRegionRe.allMatches(region).toList();
+        if (nums.isNotEmpty) {
+          final last = nums.last;
+          final before = region.substring(0, last.start).trim();
+          final after = region.substring(last.end).replaceAll(_spaceDashRe, '');
+          final n = int.parse(last[1]!);
+          if (before.isEmpty && after.isEmpty) {
+            a.bare = n;
+            a.bareFrom = 'lone';
+            cut = last.start;
+          } else if (after.isEmpty && before.replaceAll('-', '').isNotEmpty) {
+            a.bare = n;
+            a.bareFrom = 'trail';
+            cut = last.start;
+          } else if (before.isEmpty) {
+            a.leadNum = n;
+          }
+        }
+      }
+    }
+  }
+
+  // Re-evaluate subFlags if a bare number or recap moved `cut` earlier
+  // (e.g. "[Group] Title - 05.jpsc.ass" where `cut` moved before `- 05`).
+  if (isSub && cut < s.length && a.subFlags.isEmpty) {
+    a.subFlags = subFlagsFromRemainder(s.substring(cut));
   }
 
   // ---- title

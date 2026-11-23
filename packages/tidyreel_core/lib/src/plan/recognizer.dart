@@ -4,9 +4,13 @@ import 'dart:math';
 import '../model/ids.dart';
 import '../model/media.dart';
 import '../model/metadata.dart';
+import '../model/plan.dart';
+import '../model/probe.dart';
 import '../model/scan.dart';
 import '../model/title_rules.dart';
 import '../parser/parser.dart';
+import '../probe/media_probe.dart';
+import '../storage/storage_backend.dart';
 import '../tmdb/anilist.dart';
 import '../tmdb/metadata_provider.dart';
 import 'follow.dart';
@@ -17,12 +21,14 @@ import 'text.dart';
 abstract interface class Recognizer {
   /// [files] is the recursive listing of [roots] (files only). [read]
   /// fetches a file's content (already-scraped .nfo); without it nothing is
-  /// read.
+  /// read. [backend] is optional and enables on-demand container header probing
+  /// via [MediaProbe] when configured.
   Future<ScanResult> recognize(
     ConnectionId connection,
     List<String> roots,
     List<RemoteEntry> files, {
     Future<List<int>> Function(String path)? read,
+    StorageBackend? backend,
   });
 }
 
@@ -57,12 +63,21 @@ class AnchorRecognizer implements Recognizer {
   /// 片名规则, read once per scan like [hint].
   final TitleRules Function() titleRules;
 
+  /// Optional container header prober (MKV/MP4) for videos lacking tech tags
+  /// or having low parse confidence.
+  final MediaProbe? mediaProbe;
+
+  /// Read once per scan: whether on-demand container probing is enabled.
+  final bool Function()? probeMedia;
+
   AnchorRecognizer(
     this.parser,
     this.metadata, {
     this.altTitles,
     MediaHint Function()? hint,
     TitleRules Function()? titleRules,
+    this.mediaProbe,
+    this.probeMedia,
   }) : hint = hint ?? (() => MediaHint.mixed),
        titleRules = titleRules ?? (() => const TitleRules());
 
@@ -72,19 +87,84 @@ class AnchorRecognizer implements Recognizer {
     List<String> roots,
     List<RemoteEntry> files, {
     Future<List<int>> Function(String path)? read,
+    StorageBackend? backend,
   }) async {
     final rootDirs = [for (final r in roots) _trimSlash(r)];
     final nfos = {
       for (final e in files)
         if (!e.isDir && e.name.toLowerCase().endsWith('.nfo')) e.path,
     };
-    final entries = files.where((e) => !e.isDir).toList()
-      ..sort((a, b) => a.path.compareTo(b.path));
+
+    // Detect Blu-ray (BDMV) and DVD (VIDEO_TS) disc folders so their inner
+    // stream files are never touched and each disc is treated as one movie unit.
+    final discDirs = <String>{};
+    for (final e in files) {
+      final upper = e.name.toUpperCase();
+      if (e.isDir && (upper == 'BDMV' || upper == 'VIDEO_TS')) {
+        final parent = dirOf(e.path);
+        if (parent != '/') discDirs.add(parent);
+        continue;
+      }
+      var cur = dirOf(e.path);
+      while (cur != '/') {
+        final seg = baseOf(cur).toUpperCase();
+        if (seg == 'BDMV' || seg == 'VIDEO_TS') {
+          final parent = dirOf(cur);
+          if (parent != '/') discDirs.add(parent);
+          break;
+        }
+        cur = dirOf(cur);
+      }
+    }
+
+    final discSizes = <String, int>{for (final d in discDirs) d: 0};
+    bool insideDisc(String path) {
+      for (final d in discDirs) {
+        if (path.startsWith('$d/')) return true;
+      }
+      return false;
+    }
+
+    final entries = <RemoteEntry>[];
+    for (final e in files) {
+      if (e.isDir) continue;
+      var inDisc = false;
+      for (final d in discDirs) {
+        if (e.path.startsWith('$d/')) {
+          discSizes[d] = discSizes[d]! + e.size;
+          inDisc = true;
+          break;
+        }
+      }
+      if (!inDisc) entries.add(e);
+    }
+    entries.sort((a, b) => a.path.compareTo(b.path));
 
     final videos = <_Entry>[];
     final followers = <_Entry>[];
     final unassigned = <ScanFile>[];
+    for (final d in discDirs.toList()..sort()) {
+      final parentChain = _chain(d, rootDirs);
+      final parsed = parser
+          .parse(
+            baseOf(d),
+            parentDirs: [for (final pd in parentChain) baseOf(pd)],
+          )
+          .copyWith(isDisc: true, kind: MediaKind.movie);
+      final discFile = ScanFile(
+        path: d,
+        name: baseOf(d),
+        size: discSizes[d] ?? 0,
+        role: FileRole.video,
+        parsed: parsed,
+        isDiscDir: true,
+      );
+      final chain = rootDirs.contains(d) ? [d] : [d, ...parentChain];
+      videos.add(_Entry(discFile, chain));
+    }
+
     for (final e in entries) {
+      if (insideDisc(e.path)) continue;
       final role = parser.classify(e.name);
       final chain = _chain(e.path, rootDirs);
       final wantsParse =
@@ -113,6 +193,15 @@ class AnchorRecognizer implements Recognizer {
       }
     }
 
+    if (backend != null &&
+        mediaProbe != null &&
+        (probeMedia?.call() ?? false)) {
+      await _probeVideos(videos, backend);
+    }
+
+    final h = hint();
+    _inferDirectoryContext(videos, h);
+
     final drafts = _promoteToRoots(_draftGroups(videos, rootDirs), rootDirs);
     final draftsByDir = <String, List<_Draft>>{};
     final draftsByVideoDir = <String, List<_Draft>>{};
@@ -134,7 +223,6 @@ class AnchorRecognizer implements Recognizer {
     }
 
     final cache = <String, Future<List<Candidate>>>{};
-    final h = hint();
     final rules = titleRules();
     // A few folders at a time: each costs several TMDB round trips.
     final looked = List<_Lookup?>.filled(drafts.length, null);
@@ -164,19 +252,268 @@ class AnchorRecognizer implements Recognizer {
     );
   }
 
+  // ---- media probing & directory context inference ------------------------
+
+  Future<void> _probeVideos(List<_Entry> videos, StorageBackend backend) async {
+    final probe = mediaProbe;
+    if (probe == null) return;
+    final indices = <int>[];
+    for (var i = 0; i < videos.length; i++) {
+      final f = videos[i].file;
+      if (f.isDiscDir) continue;
+      final p = f.parsed;
+      final needsProbe =
+          p == null ||
+          p.resolution == null ||
+          p.resolution!.isEmpty ||
+          p.extraInfo == null ||
+          p.extraInfo!.isEmpty ||
+          p.confidence < 0.7;
+      if (needsProbe) indices.add(i);
+    }
+    if (indices.isEmpty) return;
+
+    var next = 0;
+    Future<void> worker() async {
+      while (next < indices.length) {
+        final idx = indices[next++];
+        final entry = videos[idx];
+        final file = entry.file;
+        MediaProbeInfo? info;
+        try {
+          info = await probe.probe(backend, file.path, fileSize: file.size);
+        } on Object {
+          continue;
+        }
+        if (info == null) continue;
+        final p = file.parsed ?? const ParsedName();
+        final resolution = (p.resolution != null && p.resolution!.isNotEmpty)
+            ? p.resolution
+            : info.resolution;
+        final extraInfo = (p.extraInfo != null && p.extraInfo!.isNotEmpty)
+            ? p.extraInfo
+            : info.extraInfoSummary;
+        var kind = p.kind;
+        var confidence = p.confidence;
+        final dur = info.duration;
+        if (dur != null && dur < const Duration(seconds: 60)) {
+          confidence = min(confidence, 0.35);
+        } else if (dur != null &&
+            dur >= const Duration(minutes: 65) &&
+            p.episodes.isEmpty &&
+            p.absolute == null &&
+            kind == MediaKind.unknown) {
+          kind = MediaKind.movie;
+          confidence = min(1.0, confidence + 0.2);
+        }
+        final updated = file.copyWith(
+          parsed: () => p.copyWith(
+            probe: () => info,
+            resolution: () => resolution,
+            extraInfo: () => extraInfo,
+            kind: kind,
+            confidence: double.parse(confidence.toStringAsFixed(2)),
+          ),
+        );
+        videos[idx] = _Entry(updated, entry.chain);
+      }
+    }
+
+    await Future.wait([
+      for (var i = 0; i < min(4, indices.length); i++) worker(),
+    ]);
+  }
+
+  static final _bare3to4DigitsRe = RegExp(r'^\d{3,4}$');
+  static final _digitsOnlyRe = RegExp(r'^\d{1,4}$');
+  static final _unitSuffixRe = RegExp(
+    r'^(?:[pi](?:$|[^A-Za-z])|[kK](?:$|[^A-Za-z])|fps\b|bit\b)',
+    caseSensitive: false,
+  );
+  static final _extraDirRe = RegExp(
+    r'^(?:specials?|sp|ova|oad|extras?|featurettes?|behind the scenes|bonus|特别篇|特典|花絮|番外)$',
+    caseSensitive: false,
+  );
+  static final _strictExtraStemRe = RegExp(
+    r'^(?:ncop|nced|pv|cm|trailer|teaser|making|featurette|bonus|花絮|特典|预告)',
+    caseSensitive: false,
+  );
+  static final _trimPrefixEdgeRe = RegExp(r'^[\s._\-]+|[\s._\-]+$');
+
+  void _inferDirectoryContext(List<_Entry> videos, MediaHint hint) {
+    if (hint == MediaHint.movie) return;
+    final allByDir = <String, List<int>>{};
+    final regularByDir = <String, List<int>>{};
+    for (var i = 0; i < videos.length; i++) {
+      final f = videos[i].file;
+      if (f.isDiscDir) continue;
+      final dir = dirOf(f.path);
+      if (_extraDirRe.hasMatch(baseOf(dir))) continue;
+      (allByDir[dir] ??= []).add(i);
+      final kind = f.parsed?.kind;
+      if (kind != MediaKind.extra && kind != MediaKind.special) {
+        (regularByDir[dir] ??= []).add(i);
+      }
+    }
+
+    for (final MapEntry(key: dir, value: allIndices) in allByDir.entries) {
+      final reg = regularByDir[dir] ?? const <int>[];
+      final List<int> indices;
+      if (reg.length >= 2) {
+        indices = reg;
+      } else if (reg.isEmpty &&
+          allIndices.length >= 2 &&
+          allIndices.every((i) {
+            final f = videos[i].file;
+            final p = f.parsed;
+            return (p == null || (p.episodes.isEmpty && p.absolute == null)) &&
+                !_strictExtraStemRe.hasMatch(stem(f.name));
+          })) {
+        indices = allIndices;
+      } else {
+        continue;
+      }
+
+      final needsCount = indices.where((i) {
+        final f = videos[i].file;
+        final p = f.parsed;
+        return p == null ||
+            (p.episodes.isEmpty && p.absolute == null) ||
+            p.confidence < 0.7 ||
+            _bare3to4DigitsRe.hasMatch(stem(f.name));
+      }).length;
+      if (needsCount < 2) continue;
+
+      final stems = [for (final i in indices) stem(videos[i].file.name)];
+      var prefix = _commonPrefix(stems);
+      while (prefix.isNotEmpty &&
+          _isAsciiDigit(prefix.codeUnitAt(prefix.length - 1))) {
+        prefix = prefix.substring(0, prefix.length - 1);
+      }
+      final tails = [for (final s in stems) s.substring(prefix.length)];
+      var suffix = _commonSuffix(tails);
+      while (suffix.isNotEmpty && _isAsciiDigit(suffix.codeUnitAt(0))) {
+        suffix = suffix.substring(1);
+      }
+      if (suffix.isNotEmpty && _unitSuffixRe.hasMatch(suffix)) continue;
+
+      final nums = <int>[];
+      var valid = true;
+      for (final s in stems) {
+        final mid = s.substring(prefix.length, s.length - suffix.length);
+        if (!_digitsOnlyRe.hasMatch(mid)) {
+          valid = false;
+          break;
+        }
+        final n = int.parse(mid);
+        if (n < 1 || n > 2500) {
+          valid = false;
+          break;
+        }
+        nums.add(n);
+      }
+      if (!valid) continue;
+      if (nums.toSet().length != nums.length) continue;
+
+      final pureNumeric = prefix.trim().isEmpty && suffix.trim().isEmpty;
+      if (!pureNumeric && nums.every((n) => n >= 1900 && n <= 2099)) continue;
+      if (!pureNumeric &&
+          indices.every((i) {
+            final p = videos[i].file.parsed;
+            return p != null &&
+                p.kind == MediaKind.movie &&
+                p.year != null &&
+                p.confidence >= 0.7;
+          })) {
+        continue;
+      }
+
+      final sorted = [...nums]..sort();
+      if (sorted.length == 2) {
+        if (sorted[1] - sorted[0] > 5) continue;
+      } else {
+        final avgStep = (sorted.last - sorted.first) / (sorted.length - 1);
+        var minGap = sorted[1] - sorted[0];
+        var maxGap = minGap;
+        for (var j = 2; j < sorted.length; j++) {
+          final g = sorted[j] - sorted[j - 1];
+          if (g < minGap) minGap = g;
+          if (g > maxGap) maxGap = g;
+        }
+        if (avgStep > 5 || minGap > 3 || maxGap > 25) continue;
+      }
+
+      final maxNum = sorted.last;
+      final sampleChain = videos[indices.first].chain;
+      final titleDir = sampleChain
+          .where((d) => d != '/' && !_structural.hasMatch(baseOf(d)))
+          .firstOrNull;
+      String? dirTitle;
+      if (titleDir != null) {
+        final parsedDir = parser.parse(
+          baseOf(titleDir),
+          parentDirs: [
+            for (var d = dirOf(titleDir); d != '/'; d = dirOf(d)) baseOf(d),
+          ],
+        );
+        if (parsedDir.title != null && parsedDir.title!.trim().isNotEmpty) {
+          dirTitle = parsedDir.title!.trim();
+        } else if (pureNumeric) {
+          dirTitle = baseOf(titleDir);
+        }
+      }
+      final prefixTitle = prefix.replaceAll(_trimPrefixEdgeRe, '');
+
+      for (var k = 0; k < indices.length; k++) {
+        final idx = indices[k];
+        final n = nums[k];
+        final entry = videos[idx];
+        final file = entry.file;
+        final p = file.parsed ?? const ParsedName();
+        final season = p.season;
+        final useAbsolute =
+            season == null && (maxNum > 30 || hint == MediaHint.anime);
+        final nextTitle = pureNumeric && dirTitle != null
+            ? dirTitle
+            : (p.title != null && p.title!.trim().isNotEmpty
+                  ? p.title
+                  : (dirTitle ??
+                        (prefixTitle.isNotEmpty ? prefixTitle : null)));
+        final nextConf = max(p.confidence, 0.8);
+        final updated = file.copyWith(
+          parsed: () => p.copyWith(
+            title: () => nextTitle,
+            kind: MediaKind.episode,
+            episodes: useAbsolute ? const [] : [n],
+            absolute: () => useAbsolute ? n : null,
+            confidence: double.parse(nextConf.toStringAsFixed(2)),
+          ),
+        );
+        videos[idx] = _Entry(updated, entry.chain);
+      }
+    }
+  }
+
   // ---- grouping -----------------------------------------------------------
 
   List<_Draft> _draftGroups(List<_Entry> videos, List<String> rootDirs) {
+    final drafts = <_Draft>[];
     final buckets = <String, List<_Entry>>{};
     final titled = <String, bool>{};
     for (final v in videos) {
+      if (v.file.isDiscDir) {
+        final dir = v.file.path;
+        drafts.add(
+          _Draft(dir, [v], v.file.parsed?.title, rootDirs.contains(dir)),
+        );
+        continue;
+      }
       final titleDir = v.chain.where((d) => !_structural.hasMatch(baseOf(d)));
       final dir = titleDir.isNotEmpty ? titleDir.first : v.chain.first;
       buckets.putIfAbsent(dir, () => []).add(v);
       titled[dir] = titleDir.isNotEmpty;
     }
 
-    final drafts = <_Draft>[];
     for (final MapEntry(key: dir, value: vs) in buckets.entries) {
       final folderTitle = titled[dir]!
           ? parser
@@ -241,6 +578,7 @@ class AnchorRecognizer implements Recognizer {
       if (inside.length != 1) continue;
       final d = inside.single;
       if (d.dir == root || dirOf(d.dir) != root) continue;
+      if (d.videos.any((v) => v.file.isDiscDir)) continue;
       out[out.indexOf(d)] = _Draft(
         root,
         d.videos,
@@ -356,15 +694,20 @@ class AnchorRecognizer implements Recognizer {
 
     /// Best acceptable candidate for [q]; [scoreAs] are the names compared
     /// with TMDB's titles (all AniList aliases, best one counts).
-    Future<bool> tryQuery(String q, {List<String>? scoreAs}) async {
+    Future<bool> tryQuery(
+      String q, {
+      List<String>? scoreAs,
+      MediaKind? searchKind,
+      double acceptScore = matchAcceptScore,
+      bool recordScore = true,
+    }) async {
+      final k = (searchKind ?? kind) == MediaKind.movie
+          ? MediaKind.movie
+          : MediaKind.episode;
       for (final y in [year, if (year != null) null]) {
-        final key = '${kind.name}|$q|$y';
+        final key = '${k.name}|$q|$y';
         final future = cache.putIfAbsent(key, () {
-          final f = metadata.search(
-            q,
-            kind: kind == MediaKind.movie ? MediaKind.movie : MediaKind.episode,
-            year: y,
-          );
+          final f = metadata.search(q, kind: k, year: y);
           f.then<void>(
             (_) {},
             onError: (Object _) {
@@ -383,8 +726,8 @@ class AnchorRecognizer implements Recognizer {
               (hint == MediaHint.anime && c.originCountry == 'JP' ? 0.05 : 0);
           if (s > bestScore) (best, bestScore) = (c, s);
         }
-        score = max(score, min(bestScore, 1.0));
-        if (best != null && bestScore >= matchAcceptScore) {
+        if (recordScore) score = max(score, min(bestScore, 1.0));
+        if (best != null && bestScore >= acceptScore) {
           match = best;
           score = min(bestScore, 1.0);
           return true;
@@ -406,12 +749,22 @@ class AnchorRecognizer implements Recognizer {
               names.any((n) => n.contains(p.keyword.trim().toLowerCase())),
         )
         .firstOrNull;
-    final scraped = pin == null && read != null
+    final extId = pin == null ? _externalIdOf(d, vids) : null;
+    Candidate? extMatch;
+    if (extId != null && metadata is ExternalIdLookup) {
+      extMatch = await _lookupExternalId(
+        metadata as ExternalIdLookup,
+        extId,
+        kind,
+        hint,
+      );
+    }
+    final scraped = pin == null && extMatch == null && read != null
         ? await _fromNfo(d, vids, nfos, read)
         : null;
-    if (pin != null || scraped != null) {
-      // 指定匹配, or the TMDB id an earlier scrape left in tvshow/movie.nfo.
-      match = pin?.match ?? scraped!.match;
+    if (pin != null || extMatch != null || scraped != null) {
+      // 指定匹配, explicit {tmdb-/imdb-/tvdb-} tag, or earlier scraped .nfo.
+      match = pin?.match ?? extMatch ?? scraped!.match;
       score = 1;
       kind = match!.kind == MediaKind.movie
           ? MediaKind.movie
@@ -459,7 +812,43 @@ class AnchorRecognizer implements Recognizer {
         }
       }
     }
-    anchor ??= vids.isNotEmpty ? stem(vids.first.name) : baseOf(d.dir);
+    // Cross-kind fallback in mixed mode (e.g. a lone movie with a stray number
+    // like "Blade Runner 2049", or a single-file show guessed as a movie).
+    if (match == null && hint == MediaHint.mixed) {
+      final MediaKind? fallbackKind = switch (kind) {
+        MediaKind.movie
+            when main.length <= 1 ||
+                main.any((v) => v.parsed?.kind == MediaKind.unknown) =>
+          MediaKind.episode,
+        MediaKind.episode
+            when main.length == 1 && !_hasExplicitSxe(main.single) =>
+          MediaKind.movie,
+        _ => null,
+      };
+      if (fallbackKind != null) {
+        final triedFallback = <String>{};
+        final fallbackQueries = [
+          ...queries,
+          for (final q in queries) ...relaxedQueries(q, baseOf(d.dir)),
+        ];
+        for (final q in fallbackQueries) {
+          if (!triedFallback.add(normTitle(q))) continue;
+          if (await tryQuery(
+            q,
+            searchKind: fallbackKind,
+            acceptScore: 0.72,
+            recordScore: false,
+          )) {
+            kind = fallbackKind;
+            anchor = q;
+            break;
+          }
+        }
+      }
+    }
+    anchor ??=
+        match?.title ??
+        (vids.isNotEmpty ? stem(vids.first.name) : baseOf(d.dir));
 
     final show =
         scraped?.show ??
@@ -478,7 +867,143 @@ class AnchorRecognizer implements Recognizer {
       }
       match = chineseNamed(m, detail);
     }
-    return _Lookup(d, vids, kind, anchor, year, match, score, show);
+    final (suggestedStrategy, suggestedStrategyReason) =
+        kind == MediaKind.episode ? _suggestStrategy(vids, show) : (null, null);
+    return _Lookup(
+      d,
+      vids,
+      kind,
+      anchor,
+      year,
+      match,
+      score,
+      show,
+      suggestedStrategy: suggestedStrategy,
+      suggestedStrategyReason: suggestedStrategyReason,
+    );
+  }
+
+  static final _externalIdRe = RegExp(
+    r'[\{\[]\s*(tmdb|imdb|tvdb)(?:id)?\s*[-=:]\s*(tt\d+|\d+)\s*[\}\]]',
+    caseSensitive: false,
+  );
+  static final _explicitSxeRe = RegExp(
+    r'S\d{1,2}\s*E\d{1,3}',
+    caseSensitive: false,
+  );
+
+  static ExternalId? _parseExternalId(String text) {
+    final m = _externalIdRe.firstMatch(text);
+    if (m == null) return null;
+    final source = m[1]!.toLowerCase();
+    final id = m[2]!.toLowerCase();
+    if (source == 'imdb' && !id.startsWith('tt')) return null;
+    if (source != 'imdb' && id.startsWith('tt')) return null;
+    return ExternalId(source, id);
+  }
+
+  static ExternalId? _externalIdOf(_Draft d, List<ScanFile> vids) {
+    for (final v in vids) {
+      if (v.parsed?.externalId != null) return v.parsed!.externalId;
+    }
+    for (final candidate in [
+      baseOf(d.dir),
+      if (d.originalDir != null) baseOf(d.originalDir!),
+      for (final v in vids) v.name,
+    ]) {
+      final parsed = _parseExternalId(candidate);
+      if (parsed != null) return parsed;
+    }
+    return null;
+  }
+
+  Future<Candidate?> _lookupExternalId(
+    ExternalIdLookup lookup,
+    ExternalId ext,
+    MediaKind preferredKind,
+    MediaHint hint,
+  ) async {
+    final preferred = preferredKind == MediaKind.movie
+        ? MediaKind.movie
+        : MediaKind.episode;
+    try {
+      final first = await lookup.findByExternalId(
+        ext.source,
+        ext.id,
+        kind: preferred,
+      );
+      if (first != null) return first;
+      if (hint == MediaHint.mixed) {
+        return await lookup.findByExternalId(
+          ext.source,
+          ext.id,
+          kind: preferred == MediaKind.movie
+              ? MediaKind.episode
+              : MediaKind.movie,
+        );
+      }
+    } on Object {
+      return null;
+    }
+    return null;
+  }
+
+  static bool _hasExplicitSxe(ScanFile v) {
+    final p = v.parsed;
+    if (p != null && p.season != null && p.episodes.isNotEmpty) return true;
+    return _explicitSxeRe.hasMatch(v.name);
+  }
+
+  static (SeasonStrategy?, String?) _suggestStrategy(
+    List<ScanFile> vids,
+    ShowDetail? show,
+  ) {
+    if (show == null) return (null, null);
+    final regular = [
+      for (final s in show.seasons)
+        if (s.number > 0 && s.episodeCount > 0) s,
+    ]..sort((a, b) => a.number.compareTo(b.number));
+    if (regular.length < 2) return (null, null);
+    final season1 =
+        regular.where((s) => s.number == 1).firstOrNull ?? regular.first;
+    if (season1.episodeCount <= 0) return (null, null);
+
+    var total = 0;
+    var unseasonedOrS1 = 0;
+    var multiSeason = 0;
+    var maxEp = 0;
+    for (final v in vids) {
+      final p = v.parsed;
+      if (p == null ||
+          p.kind == MediaKind.extra ||
+          p.kind == MediaKind.special ||
+          p.season == 0) {
+        continue;
+      }
+      final ep = p.episodes.firstOrNull ?? p.absolute;
+      if (ep == null) continue;
+      total++;
+      if (p.season == null || p.season == 1) {
+        unseasonedOrS1++;
+        if (ep > maxEp) maxEp = ep;
+      } else if (p.season! > 1) {
+        multiSeason++;
+      }
+    }
+    if (total == 0 || multiSeason > 0 || unseasonedOrS1 * 2 <= total) {
+      return (null, null);
+    }
+    final totalRegularEps = regular.fold<int>(
+      0,
+      (sum, s) => sum + s.episodeCount,
+    );
+    if (maxEp > season1.episodeCount && maxEp <= totalRegularEps + 5) {
+      return (
+        SeasonStrategy.splitSequential,
+        '本地为连续绝对集数（最大第 $maxEp 集），超出 TMDB 第 1 季（${season1.episodeCount} 集），建议按 TMDB 季结构顺序拆多季',
+      );
+    }
+    return (null, null);
   }
 
   static final _nfoRootRe = RegExp(r'<(tvshow|movie)\b', caseSensitive: false);
@@ -547,6 +1072,8 @@ class AnchorRecognizer implements Recognizer {
       match: l.match,
       matchScore: l.score,
       show: l.show,
+      suggestedStrategy: l.suggestedStrategy,
+      suggestedStrategyReason: l.suggestedStrategyReason,
     );
   }
 
@@ -587,6 +1114,8 @@ class _Lookup {
   final Candidate? match;
   final double score;
   final ShowDetail? show;
+  final SeasonStrategy? suggestedStrategy;
+  final String? suggestedStrategyReason;
 
   _Lookup(
     this.draft,
@@ -596,8 +1125,10 @@ class _Lookup {
     this.year,
     this.match,
     this.score,
-    this.show,
-  );
+    this.show, {
+    this.suggestedStrategy,
+    this.suggestedStrategyReason,
+  });
 }
 
 class _Entry {
@@ -667,4 +1198,37 @@ int? _mostCommonInt(List<int> xs) {
   }
   if (counts.isEmpty) return null;
   return counts.entries.reduce((a, b) => b.value > a.value ? b : a).key;
+}
+
+bool _isAsciiDigit(int codeUnit) => codeUnit >= 0x30 && codeUnit <= 0x39;
+
+String _commonPrefix(List<String> ss) {
+  if (ss.isEmpty) return '';
+  var p = ss.first;
+  for (final s in ss.skip(1)) {
+    var i = 0;
+    final len = min(p.length, s.length);
+    while (i < len && p.codeUnitAt(i) == s.codeUnitAt(i)) {
+      i++;
+    }
+    p = p.substring(0, i);
+    if (p.isEmpty) break;
+  }
+  return p;
+}
+
+String _commonSuffix(List<String> ss) {
+  if (ss.isEmpty) return '';
+  var suf = ss.first;
+  for (final s in ss.skip(1)) {
+    var i = 0;
+    final len = min(suf.length, s.length);
+    while (i < len &&
+        suf.codeUnitAt(suf.length - 1 - i) == s.codeUnitAt(s.length - 1 - i)) {
+      i++;
+    }
+    suf = suf.substring(suf.length - i);
+    if (suf.isEmpty) break;
+  }
+  return suf;
 }

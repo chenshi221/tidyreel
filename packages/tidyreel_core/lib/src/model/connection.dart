@@ -67,5 +67,27 @@ class Credentials {
   final String? password;
   final String? token;
 
-  const Credentials({this.password, this.token});
+  /// Optional per-directory access passwords (e.g. Alist/OpenList protected folders),
+  /// keyed by normalized absolute directory path like `"/私密"`.
+  final Map<String, String> dirPasswords;
+
+  const Credentials({this.password, this.token, this.dirPasswords = const {}});
+
+  /// Returns the password for the deepest protected ancestor of [path], or `''`.
+  String passwordForPath(String path) {
+    if (dirPasswords.isEmpty) return '';
+    final target = normalizeDir(path);
+    String? bestDir;
+    String bestPw = '';
+    for (final e in dirPasswords.entries) {
+      if (e.value.isEmpty) continue;
+      final dir = normalizeDir(e.key);
+      if (isWithinDir(target, dir) &&
+          (bestDir == null || dir.length > bestDir.length)) {
+        bestDir = dir;
+        bestPw = e.value;
+      }
+    }
+    return bestPw;
+  }
 }

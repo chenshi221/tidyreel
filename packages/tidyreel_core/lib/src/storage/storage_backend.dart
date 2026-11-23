@@ -41,6 +41,28 @@ abstract interface class StorageBackend {
   Future<void> close();
 }
 
+/// Optional capability for backends that can read a byte slice without
+/// downloading an entire multi-gigabyte video (HTTP Range, local seek, SMB pread).
+abstract interface class RangeReadableBackend {
+  /// Reads up to [length] bytes starting at byte offset [start] (0-based).
+  /// Returns fewer bytes at EOF, or empty if [start] is past EOF.
+  Future<List<int>> readRange(String path, int start, int length);
+}
+
+/// Reads a byte range from [backend] when it implements [RangeReadableBackend],
+/// otherwise returns null.
+Future<List<int>?> readRangeIfSupported(
+  StorageBackend backend,
+  String path,
+  int start,
+  int length,
+) async {
+  if (backend is RangeReadableBackend) {
+    return (backend as RangeReadableBackend).readRange(path, start, length);
+  }
+  return null;
+}
+
 /// Thrown by backends; [code] lets the executor decide whether to retry.
 class StorageException implements Exception {
   final StorageErrorCode code;

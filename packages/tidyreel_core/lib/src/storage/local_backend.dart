@@ -6,7 +6,7 @@ import '../model/scan.dart';
 import 'storage_backend.dart';
 
 /// Local folder backend; [root] is the connection endpoint.
-class LocalBackend implements StorageBackend {
+class LocalBackend implements StorageBackend, RangeReadableBackend {
   final String root;
 
   LocalBackend(this.root);
@@ -76,6 +76,24 @@ class LocalBackend implements StorageBackend {
   @override
   Future<List<int>> read(String path) async =>
       _io(path, () => File(_real(path)).readAsBytes());
+
+  @override
+  Future<List<int>> readRange(String path, int start, int length) async {
+    final real = _real(path);
+    if (start < 0 || length <= 0) return const [];
+    return _io(path, () async {
+      final raf = await File(real).open(mode: FileMode.read);
+      try {
+        final fileLen = await raf.length();
+        if (start >= fileLen) return const <int>[];
+        final toRead = length < fileLen - start ? length : fileLen - start;
+        await raf.setPosition(start);
+        return await raf.read(toRead);
+      } finally {
+        await raf.close();
+      }
+    });
+  }
 
   @override
   Future<void> write(String path, List<int> bytes) => _io(path, () async {

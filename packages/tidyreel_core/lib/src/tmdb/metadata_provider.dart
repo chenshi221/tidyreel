@@ -7,7 +7,12 @@ import 'scoring.dart';
 import 'tmdb_client.dart';
 
 export 'scoring.dart'
-    show scoreCandidate, normalizeQuery, sameTitle, sharesToken;
+    show
+        scoreCandidate,
+        scoreEpisodeFit,
+        normalizeQuery,
+        sameTitle,
+        sharesToken;
 export 'tmdb_client.dart' show TmdbException, TmdbResponseCache;
 
 /// Owner: Agent B. PLAN §4.6.
@@ -18,6 +23,16 @@ abstract interface class MetadataProvider {
   Future<List<Episode>> season(int tmdbId, int season);
   Future<List<EpisodeGroup>> episodeGroups(int tmdbId);
   Future<MovieDetail> movie(int tmdbId);
+}
+
+/// Optional direct lookup by external catalog ID (e.g. `{tmdb-27205}`,
+/// `{imdb-tt1375666}`, `{tvdb-81189}`).
+abstract interface class ExternalIdLookup {
+  Future<Candidate?> findByExternalId(
+    String source,
+    String id, {
+    MediaKind? kind,
+  });
 }
 
 class TmdbConfig {
@@ -37,7 +52,7 @@ class TmdbConfig {
   });
 }
 
-class TmdbProvider implements MetadataProvider {
+class TmdbProvider implements MetadataProvider, ExternalIdLookup {
   final TmdbConfig config;
   final TmdbClient _http;
 
@@ -59,6 +74,105 @@ class TmdbProvider implements MetadataProvider {
 
   void close() => _http.close();
 
+  String get _primaryLang => config.language.split('-').first.toLowerCase();
+
+  Future<Candidate?> _tryMovie(int tmdbId) async {
+    try {
+      return (await movie(tmdbId)).info;
+    } on TmdbException catch (e) {
+      if (e.statusCode == 404) return null;
+      rethrow;
+    }
+  }
+
+  Future<Candidate?> _tryShow(int tmdbId) async {
+    try {
+      return (await show(tmdbId)).info;
+    } on TmdbException catch (e) {
+      if (e.statusCode == 404) return null;
+      rethrow;
+    }
+  }
+
+  @override
+  Future<Candidate?> findByExternalId(
+    String source,
+    String id, {
+    MediaKind? kind,
+  }) async {
+    final src = source.trim().toLowerCase();
+    final cleanId = id.trim();
+    if (cleanId.isEmpty) return null;
+
+    if (src == 'tmdb') {
+      final tmdbId = int.tryParse(cleanId);
+      if (tmdbId == null || tmdbId <= 0) return null;
+      if (kind == MediaKind.movie) return _tryMovie(tmdbId);
+      if (kind == MediaKind.episode || kind == MediaKind.special) {
+        return _tryShow(tmdbId);
+      }
+      return await _tryMovie(tmdbId) ?? await _tryShow(tmdbId);
+    }
+
+    if (src == 'imdb' || src == 'tvdb') {
+      if (src == 'tvdb' && int.tryParse(cleanId) == null) return null;
+      final externalSource = src == 'imdb' ? 'imdb_id' : 'tvdb_id';
+      final Map<String, dynamic> res;
+      try {
+        res = await _http.get('/find/${Uri.encodeComponent(cleanId)}', {
+          'external_source': externalSource,
+          'language': config.language,
+        });
+      } on TmdbException catch (e) {
+        if (e.statusCode == 404 || e.statusCode == 400) return null;
+        rethrow;
+      }
+
+      final movies = _list(res['movie_results']);
+      final tv = _list(res['tv_results']);
+      Map<String, dynamic>? hit;
+      MediaKind? hitKind;
+      final wantTv = kind == MediaKind.episode || kind == MediaKind.special;
+      if (kind == MediaKind.movie) {
+        if (movies.isNotEmpty) {
+          hit = movies.first;
+          hitKind = MediaKind.movie;
+        } else if (tv.isNotEmpty) {
+          hit = tv.first;
+          hitKind = MediaKind.episode;
+        }
+      } else if (wantTv) {
+        if (tv.isNotEmpty) {
+          hit = tv.first;
+          hitKind = MediaKind.episode;
+        } else if (movies.isNotEmpty) {
+          hit = movies.first;
+          hitKind = MediaKind.movie;
+        }
+      } else {
+        if (movies.isNotEmpty) {
+          hit = movies.first;
+          hitKind = MediaKind.movie;
+        } else if (tv.isNotEmpty) {
+          hit = tv.first;
+          hitKind = MediaKind.episode;
+        }
+      }
+      if (hit == null || hitKind == null) return null;
+      final hitId = _int(hit['id']);
+      if (hitId == null) return null;
+      try {
+        return hitKind == MediaKind.movie
+            ? (await movie(hitId)).info
+            : (await show(hitId)).info;
+      } on TmdbException {
+        return _candidate(hit, hitKind, primaryLang: _primaryLang);
+      }
+    }
+
+    return null;
+  }
+
   /// Candidates sorted best first by [scoreCandidate]. Normalizes [query]
   /// (a year inside it is used when [year] is null).
   @override
@@ -74,14 +188,20 @@ class TmdbProvider implements MetadataProvider {
         ? [MediaKind.movie, MediaKind.episode]
         : [kind == MediaKind.movie ? MediaKind.movie : MediaKind.episode];
 
-    List<(int, double, Candidate)> rank(List<Candidate> hits) => [
-      for (var i = 0; i < hits.length; i++)
-        (
-          i,
-          scoreNormalized(hits[i], normalized: q, year: y, kind: kind),
-          hits[i],
-        ),
-    ]..sort((a, b) => b.$2 != a.$2 ? b.$2.compareTo(a.$2) : a.$1 - b.$1);
+    List<(int, double, double, Candidate)> rank(List<Candidate> hits) =>
+        [
+          for (var i = 0; i < hits.length; i++)
+            (
+              i,
+              scoreNormalized(hits[i], normalized: q, year: y, kind: kind),
+              popularityBonus(hits[i]),
+              hits[i],
+            ),
+        ]..sort((a, b) {
+          if (b.$2 != a.$2) return b.$2.compareTo(a.$2);
+          if (a.$2 >= 0.5 && b.$3 != a.$3) return b.$3.compareTo(a.$3);
+          return a.$1 - b.$1;
+        });
 
     Future<List<Candidate>> run(int? yy) async => [
       for (final list in await Future.wait(
@@ -93,26 +213,26 @@ class TmdbProvider implements MetadataProvider {
     if (y != null) {
       final withYear = rank(await run(y));
       if (withYear.isNotEmpty && withYear.first.$2 >= _minYearMatchScore) {
-        return [for (final s in withYear) s.$3];
+        return [for (final s in withYear) s.$4];
       }
       // Filenames are often a year off or match an unrelated work from that year:
       // fall back to a yearless search and merge results.
       final withoutYear = await run(null);
       if (withoutYear.isEmpty) {
-        return [for (final s in withYear) s.$3];
+        return [for (final s in withYear) s.$4];
       }
       final merged = <(MediaKind, int), Candidate>{};
       for (final s in withYear) {
-        merged[(s.$3.kind, s.$3.tmdbId)] = s.$3;
+        merged[(s.$4.kind, s.$4.tmdbId)] = s.$4;
       }
       for (final c in withoutYear) {
         merged.putIfAbsent((c.kind, c.tmdbId), () => c);
       }
-      return [for (final s in rank(merged.values.toList())) s.$3];
+      return [for (final s in rank(merged.values.toList())) s.$4];
     }
 
     final hits = await run(null);
-    return [for (final s in rank(hits)) s.$3];
+    return [for (final s in rank(hits)) s.$4];
   }
 
   Future<List<Candidate>> _searchKind(
@@ -301,12 +421,28 @@ class TmdbProvider implements MetadataProvider {
   }
 
   Future<(Map<String, dynamic>, Map<String, dynamic>)> _fetchDetail(
-    String path,
-  ) async {
+    String path, {
+    required bool movie,
+  }) async {
     final wantZh = config.language.startsWith('zh');
+    final append = [
+      'credits',
+      'external_ids',
+      'images',
+      movie ? 'release_dates' : 'content_ratings',
+      'keywords',
+      if (wantZh) ...['translations', 'alternative_titles'],
+    ].join(',');
+    final primaryLang = _primaryLang;
+    final imageLangs = [
+      if (primaryLang.isNotEmpty && primaryLang != 'en') primaryLang,
+      'en',
+      'null',
+    ].join(',');
     final primaryParams = {
       'language': config.language,
-      if (wantZh) 'append_to_response': 'translations,alternative_titles',
+      'append_to_response': append,
+      'include_image_language': imageLangs,
     };
     if (config.language == _en) {
       final r = await _http.get(path, primaryParams);
@@ -321,7 +457,7 @@ class TmdbProvider implements MetadataProvider {
 
   @override
   Future<ShowDetail> show(int tmdbId) async {
-    final (primary, en) = await _fetchDetail('/tv/$tmdbId');
+    final (primary, en) = await _fetchDetail('/tv/$tmdbId', movie: false);
     final alias = config.language.startsWith('zh')
         ? await _chineseAlias(
             tmdbId,
@@ -335,6 +471,7 @@ class TmdbProvider implements MetadataProvider {
         alias == null ? primary : {...primary, 'name': alias},
         MediaKind.episode,
         englishTitle: _title(en, false),
+        primaryLang: _primaryLang,
       ),
       seasons: [
         for (final s in _list(primary['seasons']))
@@ -404,7 +541,7 @@ class TmdbProvider implements MetadataProvider {
 
   @override
   Future<MovieDetail> movie(int tmdbId) async {
-    final (primary, en) = await _fetchDetail('/movie/$tmdbId');
+    final (primary, en) = await _fetchDetail('/movie/$tmdbId', movie: true);
     final alias = config.language.startsWith('zh')
         ? await _chineseAlias(
             tmdbId,
@@ -418,6 +555,7 @@ class TmdbProvider implements MetadataProvider {
         alias == null ? primary : {...primary, 'title': alias},
         MediaKind.movie,
         englishTitle: _title(en, true),
+        primaryLang: _primaryLang,
       ),
     );
   }
@@ -437,7 +575,16 @@ class TmdbProvider implements MetadataProvider {
 
   static int? _int(Object? v) => v is num ? v.toInt() : null;
 
+  static int? _intOrParsed(Object? v) =>
+      v is num ? v.toInt() : (v is String ? int.tryParse(v.trim()) : null);
+
   static String? _str(Object? v) => v is String && v.isNotEmpty ? v : null;
+
+  static String? _trimmed(Object? v) {
+    if (v is! String) return null;
+    final s = v.trim();
+    return s.isEmpty ? null : s;
+  }
 
   static DateTime? _date(Object? v) =>
       v is String ? DateTime.tryParse(v) : null;
@@ -445,11 +592,188 @@ class TmdbProvider implements MetadataProvider {
   static String _title(Map<String, dynamic> r, bool movie) =>
       _str(r[movie ? 'title' : 'name']) ?? '';
 
+  static List<String> _dedupe(Iterable<String> items, {int? limit}) {
+    final out = <String>[];
+    final seen = <String>{};
+    for (final raw in items) {
+      final s = raw.trim();
+      if (s.isEmpty) continue;
+      if (seen.add(s.toLowerCase())) {
+        out.add(s);
+        if (limit != null && out.length >= limit) break;
+      }
+    }
+    return out;
+  }
+
+  static String? _pickLogo(Map<String, dynamic> r, String primaryLang) {
+    final logos = _list(_map(r['images'])?['logos']);
+    if (logos.isEmpty) return null;
+    final lang = primaryLang.toLowerCase();
+    int langRank(String? iso) {
+      if (iso == null) return 1;
+      final l = iso.toLowerCase();
+      if (l == lang) return 3;
+      if (l == 'en') return 2;
+      return 0;
+    }
+
+    Map<String, dynamic>? best;
+    var bestTier = -1;
+    var bestAvg = -1.0;
+    var bestCount = -1;
+    for (final item in logos) {
+      if (_str(item['file_path']) == null) continue;
+      final tier = langRank(_str(item['iso_639_1']));
+      final avg = (item['vote_average'] as num?)?.toDouble() ?? 0.0;
+      final count = _int(item['vote_count']) ?? 0;
+      if (tier > bestTier ||
+          (tier == bestTier &&
+              (avg > bestAvg || (avg == bestAvg && count > bestCount)))) {
+        best = item;
+        bestTier = tier;
+        bestAvg = avg;
+        bestCount = count;
+      }
+    }
+    return best == null ? null : _str(best['file_path']);
+  }
+
+  static String? _pickLandscape(Map<String, dynamic> r, String primaryLang) {
+    final backdrops = _list(_map(r['images'])?['backdrops']);
+    if (backdrops.isEmpty) return null;
+    final lang = primaryLang.toLowerCase();
+    int langRank(String? iso) {
+      if (iso == null) return -1;
+      final l = iso.toLowerCase();
+      if (l == lang) return 2;
+      if (l == 'en') return 1;
+      return -1;
+    }
+
+    Map<String, dynamic>? best;
+    var bestTier = -1;
+    var bestAvg = -1.0;
+    var bestCount = -1;
+    for (final item in backdrops) {
+      if (_str(item['file_path']) == null) continue;
+      final aspect = (item['aspect_ratio'] as num?)?.toDouble();
+      if (aspect != null && aspect < 1.5) continue;
+      final tier = langRank(_str(item['iso_639_1']));
+      if (tier < 0) continue;
+      final avg = (item['vote_average'] as num?)?.toDouble() ?? 0.0;
+      final count = _int(item['vote_count']) ?? 0;
+      if (tier > bestTier ||
+          (tier == bestTier &&
+              (avg > bestAvg || (avg == bestAvg && count > bestCount)))) {
+        best = item;
+        bestTier = tier;
+        bestAvg = avg;
+        bestCount = count;
+      }
+    }
+    return best == null ? null : _str(best['file_path']);
+  }
+
+  static String? _certification(Map<String, dynamic> r, bool movie) {
+    if (movie) {
+      final byRegion = <String, String>{};
+      String? firstAny;
+      for (final entry in _list(_map(r['release_dates'])?['results'])) {
+        final region = _trimmed(entry['iso_3166_1'])?.toUpperCase();
+        String? cert;
+        for (final rd in _list(entry['release_dates'])) {
+          cert = _trimmed(rd['certification']);
+          if (cert != null) break;
+        }
+        if (cert == null) continue;
+        firstAny ??= cert;
+        if (region != null) byRegion.putIfAbsent(region, () => cert!);
+      }
+      for (final pref in const ['CN', 'HK', 'TW', 'US']) {
+        if (byRegion[pref] case final c?) return c;
+      }
+      return firstAny;
+    } else {
+      final byRegion = <String, String>{};
+      String? firstAny;
+      for (final entry in _list(_map(r['content_ratings'])?['results'])) {
+        final region = _trimmed(entry['iso_3166_1'])?.toUpperCase();
+        final rating = _trimmed(entry['rating']);
+        if (rating == null) continue;
+        firstAny ??= rating;
+        if (region != null) byRegion.putIfAbsent(region, () => rating);
+      }
+      for (final pref in const ['CN', 'US']) {
+        if (byRegion[pref] case final c?) return c;
+      }
+      return firstAny;
+    }
+  }
+
+  static List<String> _studios(Map<String, dynamic> r, bool movie) => _dedupe([
+    if (!movie)
+      for (final n in _list(r['networks'])) ?_trimmed(n['name']),
+    for (final c in _list(r['production_companies'])) ?_trimmed(c['name']),
+  ], limit: 5);
+
+  static List<PersonCredit> _actors(Map<String, dynamic> r) {
+    final cast = _list(_map(r['credits'])?['cast']);
+    if (cast.isEmpty) return const [];
+    final indexed =
+        [
+          for (var i = 0; i < cast.length; i++)
+            (i, _int(cast[i]['order']), cast[i]),
+        ]..sort((a, b) {
+          final oa = a.$2 ?? (1 << 30);
+          final ob = b.$2 ?? (1 << 30);
+          return oa != ob ? oa.compareTo(ob) : a.$1.compareTo(b.$1);
+        });
+    final out = <PersonCredit>[];
+    for (final entry in indexed) {
+      final name = _trimmed(entry.$3['name']);
+      if (name == null) continue;
+      out.add(
+        PersonCredit(
+          name: name,
+          role: _trimmed(entry.$3['character']),
+          profilePath: _str(entry.$3['profile_path']),
+        ),
+      );
+      if (out.length >= 12) break;
+    }
+    return out;
+  }
+
+  static List<String> _directors(Map<String, dynamic> r, bool movie) =>
+      _dedupe([
+        if (!movie)
+          for (final c in _list(r['created_by'])) ?_trimmed(c['name']),
+        for (final c in _list(_map(r['credits'])?['crew']))
+          if (_trimmed(c['job']) == 'Director') ?_trimmed(c['name']),
+      ]);
+
+  static List<String> _writers(Map<String, dynamic> r) => _dedupe([
+    for (final c in _list(_map(r['credits'])?['crew']))
+      if (_trimmed(c['department']) == 'Writing' ||
+          const {'Writer', 'Screenplay', 'Story'}.contains(_trimmed(c['job'])))
+        ?_trimmed(c['name']),
+  ], limit: 6);
+
+  static List<String> _tags(Map<String, dynamic> r, bool movie) {
+    final kw = _map(r['keywords']);
+    return _dedupe([
+      for (final k in _list(kw?[movie ? 'keywords' : 'results']))
+        ?_trimmed(k['name']),
+    ], limit: 10);
+  }
+
   static Candidate _candidate(
     Map<String, dynamic> r,
     MediaKind kind, {
     String? englishTitle,
     List<String> aliases = const [],
+    String primaryLang = 'zh',
   }) {
     final movie = kind == MediaKind.movie;
     final date = _date(r[movie ? 'release_date' : 'first_air_date']);
@@ -461,6 +785,8 @@ class TmdbProvider implements MetadataProvider {
         : pc is List && pc.isNotEmpty
         ? _str(_map(pc.first)?['iso_3166_1'])
         : null;
+    final extIds = _map(r['external_ids']);
+    final collection = _map(r['belongs_to_collection']);
     return Candidate(
       tmdbId: _int(r['id']) ?? 0,
       kind: kind,
@@ -471,10 +797,24 @@ class TmdbProvider implements MetadataProvider {
       posterPath: _str(r['poster_path']),
       originCountry: country,
       voteAverage: (r['vote_average'] as num?)?.toDouble(),
+      voteCount: _int(r['vote_count']),
+      popularity: (r['popularity'] as num?)?.toDouble(),
       overview: _str(r['overview']),
       backdropPath: _str(r['backdrop_path']),
       genres: [for (final g in _list(r['genres'])) ?_str(g['name'])],
       aliases: aliases,
+      imdbId: _trimmed(r['imdb_id']) ?? _trimmed(extIds?['imdb_id']),
+      tvdbId: _intOrParsed(extIds?['tvdb_id']),
+      collectionName: _trimmed(collection?['name']),
+      collectionId: _int(collection?['id']),
+      clearLogoPath: _pickLogo(r, primaryLang),
+      landscapePath: _pickLandscape(r, primaryLang),
+      certification: _certification(r, movie),
+      studios: _studios(r, movie),
+      actors: _actors(r),
+      directors: _directors(r, movie),
+      writers: _writers(r),
+      tags: _tags(r, movie),
     );
   }
 }

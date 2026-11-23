@@ -1,3 +1,7 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 import 'package:path/path.dart' as p;
 
@@ -7,20 +11,23 @@ import 'direct_lan.dart';
 import 'storage_backend.dart';
 
 /// Alist v3 / OpenList. Every endpoint answers HTTP 200 with `{code, message, data}`.
-class AlistBackend implements StorageBackend {
+class AlistBackend implements StorageBackend, RangeReadableBackend {
   final Uri _endpoint;
   final String? _username;
   final String? _password;
+  final Credentials _credentials;
   String? _token;
   final Dio _dio;
   Future<void>? _loggingIn;
 
   static const _perPage = 500;
+  static const _maxUnrangedSkip = 512 * 1024;
 
   AlistBackend(ConnectionConfig config, Credentials credentials)
     : _endpoint = Uri.parse(config.endpoint),
       _username = config.username,
       _password = credentials.password,
+      _credentials = credentials,
       _token = (credentials.token ?? '').isEmpty ? null : credentials.token,
       _dio = directForPrivateHosts(
         Dio(
@@ -176,10 +183,11 @@ class AlistBackend implements StorageBackend {
   @override
   Future<List<RemoteEntry>> list(String dir, {bool refresh = false}) async {
     final out = <RemoteEntry>[];
+    final dirPassword = _credentials.passwordForPath(dir);
     for (var page = 1; ; page++) {
       final raw = await _call('/api/fs/list', {
         'path': dir,
-        'password': '',
+        'password': dirPassword,
         'page': page,
         'per_page': _perPage,
         'refresh': refresh && page == 1,
@@ -209,12 +217,121 @@ class AlistBackend implements StorageBackend {
 
   Future<Map<String, dynamic>?> _get(String path) async {
     try {
-      final res = await _call('/api/fs/get', {'path': path, 'password': ''});
+      final res = await _call('/api/fs/get', {
+        'path': path,
+        'password': _credentials.passwordForPath(path),
+      });
       return res is Map<String, dynamic> ? res : null;
     } on StorageException catch (e) {
       if (e.code == StorageErrorCode.notFound) return null;
       rethrow;
     }
+  }
+
+  static Map<String, Object> _extractDownloadHeaders(Object? rawHeader) {
+    Object? decoded = rawHeader;
+    if (decoded is String && decoded.trim().isNotEmpty) {
+      try {
+        decoded = jsonDecode(decoded);
+      } on FormatException {
+        return const {};
+      }
+    }
+    if (decoded is! Map) return const {};
+    final out = <String, Object>{};
+    for (final e in decoded.entries) {
+      final k = e.key?.toString();
+      final v = e.value;
+      if (k == null || k.isEmpty || v == null) continue;
+      if (v is String) {
+        out[k] = v;
+      } else if (v is List && v.isNotEmpty) {
+        out[k] = v.map((x) => '$x').join(', ');
+      } else {
+        out[k] = '$v';
+      }
+    }
+    return out;
+  }
+
+  static StorageErrorCode _httpStatusToCode(int status) => switch (status) {
+    401 || 403 => StorageErrorCode.unauthorized,
+    404 => StorageErrorCode.notFound,
+    429 => StorageErrorCode.rateLimited,
+    >= 500 && < 600 => StorageErrorCode.network,
+    _ => StorageErrorCode.other,
+  };
+
+  static Future<void> _discardStream(ResponseBody? body) async {
+    if (body == null) return;
+    try {
+      await body.stream.listen((_) {}).cancel();
+    } on Object {
+      // Ignore cleanup errors on aborted streams.
+    }
+  }
+
+  static Future<List<int>> _readBoundedStream(
+    Stream<Uint8List> stream, {
+    required int skip,
+    required int take,
+  }) {
+    final builder = BytesBuilder(copy: false);
+    var remainingSkip = skip;
+    var remainingTake = take;
+    final done = Completer<List<int>>();
+    late StreamSubscription<Uint8List> sub;
+    var stopping = false;
+
+    sub = stream.listen(
+      (chunk) {
+        if (stopping || done.isCompleted) return;
+        var offset = 0;
+        if (remainingSkip > 0) {
+          if (chunk.length <= remainingSkip) {
+            remainingSkip -= chunk.length;
+            return;
+          }
+          offset = remainingSkip;
+          remainingSkip = 0;
+        }
+        final avail = chunk.length - offset;
+        if (avail <= 0) return;
+        if (avail >= remainingTake) {
+          builder.add(
+            offset == 0 && remainingTake == chunk.length
+                ? chunk
+                : Uint8List.sublistView(chunk, offset, offset + remainingTake),
+          );
+          remainingTake = 0;
+          stopping = true;
+          sub.cancel().then<void>(
+            (_) {
+              if (!done.isCompleted) done.complete(builder.takeBytes());
+            },
+            onError: (_) {
+              if (!done.isCompleted) done.complete(builder.takeBytes());
+            },
+          );
+        } else {
+          builder.add(
+            offset == 0 ? chunk : Uint8List.sublistView(chunk, offset),
+          );
+          remainingTake -= avail;
+        }
+      },
+      onError: (Object e, StackTrace st) {
+        if (!stopping && !done.isCompleted) {
+          done.completeError(e, st);
+        }
+      },
+      onDone: () {
+        if (!done.isCompleted) done.complete(builder.takeBytes());
+      },
+      cancelOnError: true,
+    );
+
+    return done.future;
   }
 
   @override
@@ -230,20 +347,20 @@ class AlistBackend implements StorageBackend {
     try {
       // raw_url may be relative or point at the drive's CDN (no Alist token).
       final uri = _endpoint.resolve(raw);
+      final extraHeaders = _extractDownloadHeaders(info['header']);
       final r = await _dio.getUri<List<int>>(
         uri,
-        options: Options(responseType: ResponseType.bytes),
+        options: Options(
+          responseType: ResponseType.bytes,
+          headers: extraHeaders.isEmpty ? null : extraHeaders,
+        ),
       );
       final status = r.statusCode ?? 0;
       if (status != 200) {
-        final code = switch (status) {
-          401 || 403 => StorageErrorCode.unauthorized,
-          404 => StorageErrorCode.notFound,
-          429 => StorageErrorCode.rateLimited,
-          >= 500 && < 600 => StorageErrorCode.network,
-          _ => StorageErrorCode.other,
-        };
-        throw StorageException(code, '读取文件失败（$path）：HTTP $status');
+        throw StorageException(
+          _httpStatusToCode(status),
+          '读取文件失败（$path）：HTTP $status',
+        );
       }
       return r.data ?? const [];
     } on DioException catch (e) {
@@ -251,6 +368,62 @@ class AlistBackend implements StorageBackend {
         StorageErrorCode.network,
         '读取文件失败（$path）：${_dioMsg(e)}',
       );
+    }
+  }
+
+  @override
+  Future<List<int>> readRange(String path, int start, int length) async {
+    if (start < 0 || length <= 0) return const [];
+    final info = await _get(path);
+    final raw = info?['raw_url'];
+    if (info == null || raw is! String || raw.isEmpty) {
+      throw StorageException(StorageErrorCode.notFound, '文件不存在：$path');
+    }
+    try {
+      final uri = _endpoint.resolve(raw);
+      final headers = <String, Object>{
+        ..._extractDownloadHeaders(info['header']),
+        'Range': 'bytes=$start-${start + length - 1}',
+      };
+      final r = await _dio.getUri<ResponseBody>(
+        uri,
+        options: Options(responseType: ResponseType.stream, headers: headers),
+      );
+      final status = r.statusCode ?? 0;
+      final body = r.data;
+      if (status == 416) {
+        await _discardStream(body);
+        return const [];
+      }
+      if (status == 206) {
+        if (body == null) return const [];
+        return await _readBoundedStream(body.stream, skip: 0, take: length);
+      }
+      if (status == 200) {
+        if (start > _maxUnrangedSkip) {
+          await _discardStream(body);
+          throw StorageException(
+            StorageErrorCode.other,
+            '服务器不支持分段读取（$path）：HTTP 200',
+          );
+        }
+        if (body == null) return const [];
+        return await _readBoundedStream(body.stream, skip: start, take: length);
+      }
+      await _discardStream(body);
+      throw StorageException(
+        _httpStatusToCode(status),
+        '分段读取文件失败（$path）：HTTP $status',
+      );
+    } on StorageException {
+      rethrow;
+    } on DioException catch (e) {
+      throw StorageException(
+        StorageErrorCode.network,
+        '分段读取文件失败（$path）：${_dioMsg(e)}',
+      );
+    } on Object catch (e) {
+      throw StorageException(StorageErrorCode.network, '分段读取文件失败（$path）：$e');
     }
   }
 
@@ -264,6 +437,7 @@ class AlistBackend implements StorageBackend {
     if (parent != '/') {
       await mkdirs(parent);
     }
+    final dirPassword = _credentials.passwordForPath(path);
     final res = await _withAuthRaw((token) async {
       final Response<dynamic> r;
       try {
@@ -275,6 +449,7 @@ class AlistBackend implements StorageBackend {
               'Authorization': ?token,
               'File-Path': Uri.encodeComponent(path),
               'As-Task': 'false',
+              if (dirPassword.isNotEmpty) 'Password': dirPassword,
               Headers.contentLengthHeader: bytes.length,
               Headers.contentTypeHeader: 'application/octet-stream',
             },
@@ -416,7 +591,10 @@ class AlistBackend implements StorageBackend {
   @override
   Future<void> ping() async {
     // Call /api/fs/get directly without swallowing notFound so HTTP 404 / wrong URL fails.
-    final res = await _call('/api/fs/get', {'path': '/', 'password': ''});
+    final res = await _call('/api/fs/get', {
+      'path': '/',
+      'password': _credentials.passwordForPath('/'),
+    });
     if (res is! Map<String, dynamic>) {
       throw const StorageException(
         StorageErrorCode.other,

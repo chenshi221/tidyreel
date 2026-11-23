@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../l10n/l10n.dart';
 import '../ui/tokens.dart';
 import '../ui/widgets.dart';
 
@@ -234,57 +235,62 @@ Future<bool> confirmDialog(
   BuildContext context, {
   required String title,
   required Widget content,
-  String confirmLabel = '确定',
+  String? confirmLabel,
   bool destructive = false,
-}) async =>
-    await showDialog<bool>(
-      context: context,
-      builder: (ctx) => MacSheet(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minWidth: 320, maxWidth: 460),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(22, 20, 22, 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(title, style: Theme.of(ctx).textTheme.titleMedium),
-                const SizedBox(height: 10),
-                DefaultTextStyle.merge(
-                  style: Theme.of(ctx).textTheme.bodyMedium,
-                  child: content,
-                ),
-                const SizedBox(height: 18),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(ctx, false),
-                      child: const Text('取消'),
-                    ),
-                    const SizedBox(width: 8),
-                    // Destructive: a red word, not a red slab.
-                    destructive
-                        ? OutlinedButton(
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: Theme.of(ctx).colorScheme.error,
+}) async {
+  final l10n = context.l10n;
+  final confirmText = confirmLabel ?? l10n.ok;
+  return await showDialog<bool>(
+        context: context,
+        builder: (ctx) => MacSheet(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minWidth: 320, maxWidth: 460),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(22, 20, 22, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(title, style: Theme.of(ctx).textTheme.titleMedium),
+                  const SizedBox(height: 10),
+                  DefaultTextStyle.merge(
+                    style: Theme.of(ctx).textTheme.bodyMedium,
+                    child: content,
+                  ),
+                  const SizedBox(height: 18),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx, false),
+                        child: Text(ctx.l10n.cancel),
+                      ),
+                      const SizedBox(width: 8),
+                      // Destructive: a red word, not a red slab.
+                      destructive
+                          ? OutlinedButton(
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: Theme.of(ctx)
+                                    .colorScheme
+                                    .error,
+                              ),
+                              onPressed: () => Navigator.pop(ctx, true),
+                              child: Text(confirmText),
+                            )
+                          : FilledButton(
+                              onPressed: () => Navigator.pop(ctx, true),
+                              child: Text(confirmText),
                             ),
-                            onPressed: () => Navigator.pop(ctx, true),
-                            child: Text(confirmLabel),
-                          )
-                        : FilledButton(
-                            onPressed: () => Navigator.pop(ctx, true),
-                            child: Text(confirmLabel),
-                          ),
-                  ],
-                ),
-              ],
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
         ),
-      ),
-    ) ??
-    false;
+      ) ??
+      false;
+}
 
 /// The one confirmation before running: deleting files can't be undone.
 Future<bool> confirmPermanentDelete(
@@ -292,20 +298,30 @@ Future<bool> confirmPermanentDelete(
   int count, {
   List<String> paths = const [],
 }) {
+  final l10n = context.l10n;
   const maxShown = 50;
   final shown = paths.take(maxShown).toList();
   final more = paths.length - shown.length;
   return confirmDialog(
     context,
-    title: '永久删除 $count 个文件？',
+    title: l10n.tr(
+      '永久删除 $count 个文件？',
+      'Permanently delete ${l10n.plural(count, 'file')}?',
+    ),
     content: Builder(
       builder: (ctx) {
         final p = Palette.of(ctx);
+        final t = ctx.l10n;
         return Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text('这些是广告和垃圾文件，删除后无法撤销。改名和移动仍可在任务页撤销。'),
+            Text(
+              t.tr(
+                '这些是广告和垃圾文件，删除后无法撤销。改名和移动仍可在任务页撤销。',
+                'These are ad or junk files and cannot be restored once deleted. Renames and moves can still be undone in Tasks.',
+              ),
+            ),
             if (shown.isNotEmpty) ...[
               const SizedBox(height: 10),
               ConstrainedBox(
@@ -342,7 +358,10 @@ Future<bool> confirmPermanentDelete(
                           Padding(
                             padding: const EdgeInsets.only(top: 4),
                             child: Text(
-                              '+$more 个更多文件',
+                              t.tr(
+                                '+$more 个更多文件',
+                                '+$more more ${more == 1 ? 'file' : 'files'}',
+                              ),
                               style: TextStyle(
                                 fontSize: TypeScale.small,
                                 color: p.textFaint,
@@ -359,7 +378,7 @@ Future<bool> confirmPermanentDelete(
         );
       },
     ),
-    confirmLabel: '删除并整理',
+    confirmLabel: l10n.tr('删除并整理', 'Delete & Organize'),
     destructive: true,
   );
 }

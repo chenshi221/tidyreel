@@ -184,6 +184,151 @@ void main() {
     );
     expect(p.ops.where((o) => o.kind == OpKind.write), isEmpty);
   });
+
+  group('enriched NFO generation', () {
+    test('movieNfo writes uniqueids, mpaa, set, studios, crew, actors, tags and escapes XML', () {
+      const movie = Candidate(
+        tmdbId: 27205,
+        kind: MediaKind.movie,
+        title: '盗梦空间 & 梦境',
+        originalTitle: 'Inception',
+        year: 2010,
+        overview: 'Dream <within> a "dream"',
+        genres: ['动作', '科幻'],
+        voteAverage: 8.4,
+        voteCount: 36000,
+        imdbId: 'tt1375666',
+        tvdbId: 12345,
+        collectionName: '梦境 & 幻想系列',
+        certification: 'PG-13',
+        studios: ['Legendary Pictures', 'Syncopy & Co'],
+        directors: ['Christopher Nolan'],
+        writers: ['Christopher Nolan', 'Jonathan <Nolan>'],
+        actors: [
+          PersonCredit(
+            name: 'Leonardo DiCaprio',
+            role: 'Dom "Cobb" & Thief',
+            profilePath: '/leo.jpg',
+          ),
+          PersonCredit(name: 'Ken Watanabe'),
+        ],
+        tags: ['dream', 'sci-fi & heist'],
+      );
+
+      final xml = movieNfo(movie);
+      expect(xml, contains('<movie>'));
+      expect(xml, contains('<title>盗梦空间 &amp; 梦境</title>'));
+      expect(
+        xml,
+        contains('<plot>Dream &lt;within&gt; a &quot;dream&quot;</plot>'),
+      );
+      expect(xml, contains('<mpaa>PG-13</mpaa>'));
+      expect(
+        xml,
+        contains('<uniqueid type="tmdb" default="true">27205</uniqueid>'),
+      );
+      expect(xml, contains('<uniqueid type="imdb">tt1375666</uniqueid>'));
+      expect(xml, contains('<uniqueid type="tvdb">12345</uniqueid>'));
+      expect(xml, contains('<tmdbid>27205</tmdbid>'));
+      expect(xml, contains('<imdbid>tt1375666</imdbid>'));
+      expect(xml, contains('<votes>36000</votes>'));
+      expect(xml, contains('<set><name>梦境 &amp; 幻想系列</name></set>'));
+      expect(xml, contains('<studio>Legendary Pictures</studio>'));
+      expect(xml, contains('<studio>Syncopy &amp; Co</studio>'));
+      expect(xml, contains('<director>Christopher Nolan</director>'));
+      expect(xml, contains('<credits>Christopher Nolan</credits>'));
+      expect(xml, contains('<credits>Jonathan &lt;Nolan&gt;</credits>'));
+      expect(xml, contains('<tag>dream</tag>'));
+      expect(xml, contains('<tag>sci-fi &amp; heist</tag>'));
+      expect(
+        xml,
+        contains(
+          '  <actor>\n'
+          '    <name>Leonardo DiCaprio</name>\n'
+          '    <role>Dom &quot;Cobb&quot; &amp; Thief</role>\n'
+          '    <thumb>https://image.tmdb.org/t/p/w185/leo.jpg</thumb>\n'
+          '  </actor>',
+        ),
+      );
+      expect(
+        xml,
+        contains(
+          '  <actor>\n'
+          '    <name>Ken Watanabe</name>\n'
+          '  </actor>',
+        ),
+      );
+    });
+
+    test('tvShowNfo writes enriched TV tags without <set>', () {
+      final show = ShowDetail(
+        info: const Candidate(
+          tmdbId: 1668,
+          kind: MediaKind.episode,
+          title: '老友记',
+          originalTitle: 'Friends',
+          year: 1994,
+          imdbId: 'tt0108778',
+          tvdbId: 79168,
+          certification: 'TV-14',
+          studios: ['NBC'],
+          directors: ['David Crane'],
+          writers: ['Marta Kauffman'],
+          actors: [
+            PersonCredit(
+              name: 'Jennifer Aniston',
+              role: 'Rachel Green',
+              profilePath: '/jen.jpg',
+            ),
+          ],
+          tags: ['sitcom'],
+        ),
+        seasons: [
+          SeasonInfo(
+            number: 1,
+            episodeCount: 24,
+            airDate: DateTime.utc(1994, 9, 22),
+          ),
+        ],
+      );
+
+      final xml = tvShowNfo(show);
+      expect(xml, contains('<tvshow>'));
+      expect(
+        xml,
+        contains('<uniqueid type="tmdb" default="true">1668</uniqueid>'),
+      );
+      expect(xml, contains('<uniqueid type="imdb">tt0108778</uniqueid>'));
+      expect(xml, contains('<uniqueid type="tvdb">79168</uniqueid>'));
+      expect(xml, contains('<mpaa>TV-14</mpaa>'));
+      expect(xml, contains('<studio>NBC</studio>'));
+      expect(xml, contains('<director>David Crane</director>'));
+      expect(xml, contains('<credits>Marta Kauffman</credits>'));
+      expect(xml, contains('<tag>sitcom</tag>'));
+      expect(xml, contains('<premiered>1994-09-22</premiered>'));
+      expect(xml, isNot(contains('<set>')));
+    });
+
+    test('episodeNfo includes runtime only when present', () {
+      const show = Candidate(tmdbId: 1, kind: MediaKind.episode, title: '异兽魔都');
+      final withRuntime = episodeNfo(
+        show: show,
+        season: 1,
+        episode: 1,
+        info: Episode(
+          season: 1,
+          number: 1,
+          title: '洞窟',
+          airDate: DateTime.utc(2020, 1, 12),
+          runtimeMinutes: 24,
+        ),
+      );
+      expect(withRuntime, contains('<runtime>24</runtime>'));
+
+      final withoutRuntime = episodeNfo(show: show, season: 1, episode: 2);
+      expect(withoutRuntime, isNot(contains('<runtime>')));
+    });
+  });
 }
 
 class _CountingMeta extends _Meta {

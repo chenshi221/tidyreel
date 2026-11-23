@@ -2,7 +2,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:tidyreel_core/tidyreel_core.dart';
 
-import '../../data/settings.dart' show mediaHintLabels;
+import '../../l10n/l10n.dart';
 import '../../ui/tokens.dart';
 import '../../ui/widgets.dart';
 import '../../widgets/common.dart';
@@ -99,13 +99,30 @@ List<String> previewWarnings(
   List<String> paths,
   ScanPreview r, {
   int organized = 0,
+  AppL10n l10n = AppL10n.zh,
 }) => [
   if (paths.any((p) => p.split('/').where((s) => s.isNotEmpty).length <= 1))
-    '选中的是根目录或一级目录，里面可能混着很多不相关的内容',
-  if (r.videos >= 300) '视频${r.truncated ? '至少' : ''}有 ${r.videos} 个，识别和确认会比较久',
-  if (r.topDirs.length > 30) '包含 ${r.topDirs.length} 个文件夹，可能是很多部作品',
-  if (organized > 0) '其中 $organized 个文件夹已经整理过',
-  if (r.videos == 0 && !r.truncated) '没有找到视频文件',
+    l10n.tr(
+      '选中的是根目录或一级目录，里面可能混着很多不相关的内容',
+      'Root or top-level folder selected; it may contain unrelated files',
+    ),
+  if (r.videos >= 300)
+    l10n.tr(
+      '视频${r.truncated ? '至少' : ''}有 ${r.videos} 个，识别和确认会比较久',
+      '${r.truncated ? 'At least ' : ''}${r.videos} videos found; matching and review may take a while',
+    ),
+  if (r.topDirs.length > 30)
+    l10n.tr(
+      '包含 ${r.topDirs.length} 个文件夹，可能是很多部作品',
+      'Contains ${r.topDirs.length} folders, which may span many titles',
+    ),
+  if (organized > 0)
+    l10n.tr(
+      '其中 $organized 个文件夹已经整理过',
+      '${l10n.plural(organized, 'folder')} already organized',
+    ),
+  if (r.videos == 0 && !r.truncated)
+    l10n.tr('没有找到视频文件', 'No video files found'),
 ];
 
 /// Scans [paths], shows the counts and warnings, and returns whether the
@@ -119,6 +136,7 @@ Future<bool> showScanPreview(
   Map<String, int> fileSizes = const {},
   OrganizeMode? mode,
   bool scrape = false,
+  bool scrapeOnly = false,
   MediaHint? mediaHint,
 }) async =>
     await showDialog<bool>(
@@ -130,6 +148,7 @@ Future<bool> showScanPreview(
         fileSizes: fileSizes,
         mode: mode,
         scrape: scrape,
+        scrapeOnly: scrapeOnly,
         mediaHint: mediaHint,
       ),
     ) ??
@@ -142,6 +161,7 @@ class _PreviewSheet extends StatefulWidget {
   final Map<String, int> fileSizes;
   final OrganizeMode? mode;
   final bool scrape;
+  final bool scrapeOnly;
   final MediaHint? mediaHint;
 
   const _PreviewSheet({
@@ -151,6 +171,7 @@ class _PreviewSheet extends StatefulWidget {
     this.fileSizes = const {},
     this.mode,
     this.scrape = false,
+    this.scrapeOnly = false,
     this.mediaHint,
   });
 
@@ -198,12 +219,13 @@ class _PreviewSheetState extends State<_PreviewSheet> {
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
+    final l10n = context.l10n;
     final theme = Theme.of(context);
     final r = _r;
     final atLeast = r?.truncated ?? false ? '≥ ' : '';
     final warnings = r == null
         ? const <String>[]
-        : previewWarnings(widget.paths, r, organized: _organized);
+        : previewWarnings(widget.paths, r, organized: _organized, l10n: l10n);
 
     Widget stat(IconData icon, String label, String value, Color color) =>
         Expanded(
@@ -248,46 +270,95 @@ class _PreviewSheetState extends State<_PreviewSheet> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text('识别前预览', style: theme.textTheme.titleLarge),
+              Text(
+                l10n.tr('识别前预览', 'Scan Preview'),
+                style: theme.textTheme.titleLarge,
+              ),
               const SizedBox(height: 4),
               Text(
                 widget.paths.length == 1
                     ? widget.paths.single
-                    : '${widget.paths.length} 项：${widget.paths.take(3).join('、')}'
-                          '${widget.paths.length > 3 ? ' …' : ''}',
+                    : l10n.tr(
+                        '${widget.paths.length} 项：${widget.paths.take(3).join('、')}'
+                            '${widget.paths.length > 3 ? ' …' : ''}',
+                        '${l10n.plural(widget.paths.length, 'item')}: '
+                            '${widget.paths.take(3).join(', ')}'
+                            '${widget.paths.length > 3 ? ' …' : ''}',
+                      ),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: theme.textTheme.bodySmall,
               ),
               if (widget.mode != null ||
                   widget.scrape ||
+                  widget.scrapeOnly ||
                   widget.mediaHint != null) ...[
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 6,
                   runSpacing: 6,
                   children: [
-                    if (widget.mode != null)
-                      Tag(
-                        widget.mode == OrganizeMode.inPlace ? '原地整理' : '移动到媒体库',
-                      ),
-                    if (widget.scrape) Tag('刮削', color: p.accent),
+                    if (widget.scrapeOnly)
+                      Tag(l10n.tr('仅刮削', 'Scrape Only'), color: p.accent)
+                    else ...[
+                      if (widget.mode != null)
+                        Tag(l10n.organizeModeLabel(widget.mode!)),
+                      if (widget.scrape)
+                        Tag(l10n.tr('刮削', 'Scrape'), color: p.accent),
+                    ],
                     if (widget.mediaHint != null)
-                      Tag('类型：${mediaHintLabels[widget.mediaHint]}'),
+                      Tag(
+                        l10n.tr(
+                          '类型：${l10n.mediaHintLabel(widget.mediaHint!)}',
+                          'Type: ${l10n.mediaHintLabel(widget.mediaHint!)}',
+                        ),
+                      ),
                   ],
+                ),
+              ],
+              if (widget.scrapeOnly) ...[
+                const SizedBox(height: 10),
+                Container(
+                  key: const ValueKey('scrape-only-note'),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: p.accentSoft,
+                    borderRadius: BorderRadius.circular(Radii.sm),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(CupertinoIcons.sparkles, size: 13, color: p.accent),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          l10n.tr(
+                            '仅刮削模式：不移动、不重命名文件，仅在原位补全 NFO 与海报',
+                            'Scrape-only mode: keeps existing files untouched and only writes NFO and artwork in place',
+                          ),
+                          style: TextStyle(
+                            fontSize: TypeScale.small,
+                            color: p.text,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ],
               const SizedBox(height: 16),
               if (r == null)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 28),
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 28),
                   child: Column(
                     children: [
-                      Spinner(size: 18),
-                      SizedBox(height: 10),
+                      const Spinner(size: 18),
+                      const SizedBox(height: 10),
                       Text(
-                        '正在快速扫描…',
-                        style: TextStyle(fontSize: TypeScale.small),
+                        l10n.tr('正在快速扫描…', 'Scanning…'),
+                        style: const TextStyle(fontSize: TypeScale.small),
                       ),
                     ],
                   ),
@@ -297,23 +368,28 @@ class _PreviewSheetState extends State<_PreviewSheet> {
                   children: [
                     stat(
                       CupertinoIcons.folder_fill,
-                      '文件夹',
+                      l10n.tr('文件夹', 'Folders'),
                       '${r.dirs}',
                       p.textMuted,
                     ),
                     const SizedBox(width: 8),
-                    stat(CupertinoIcons.film, '视频', '${r.videos}', p.textMuted),
+                    stat(
+                      CupertinoIcons.film,
+                      l10n.tr('视频', 'Videos'),
+                      '${r.videos}',
+                      p.textMuted,
+                    ),
                     const SizedBox(width: 8),
                     stat(
                       CupertinoIcons.captions_bubble,
-                      '字幕',
+                      l10n.tr('字幕', 'Subtitles'),
                       '${r.subtitles}',
                       p.textMuted,
                     ),
                     const SizedBox(width: 8),
                     stat(
                       CupertinoIcons.archivebox,
-                      '大小',
+                      l10n.tr('大小', 'Size'),
                       fmtSize(r.bytes).isEmpty ? '—' : fmtSize(r.bytes),
                       p.textMuted,
                     ),
@@ -322,8 +398,12 @@ class _PreviewSheetState extends State<_PreviewSheet> {
                 if (r.topDirs.isNotEmpty) ...[
                   const SizedBox(height: 14),
                   Text(
-                    '包含：${topNames.join('、')}'
-                    '${r.topDirs.length > 8 ? ' 等 ${r.topDirs.length} 个' : ''}',
+                    l10n.tr(
+                      '包含：${topNames.join('、')}'
+                          '${r.topDirs.length > 8 ? ' 等 ${r.topDirs.length} 个' : ''}',
+                      'Includes: ${topNames.join(', ')}'
+                          '${r.topDirs.length > 8 ? ' (${r.topDirs.length} total)' : ''}',
+                    ),
                     maxLines: 3,
                     overflow: TextOverflow.ellipsis,
                     style: theme.textTheme.bodySmall,
@@ -361,7 +441,15 @@ class _PreviewSheetState extends State<_PreviewSheet> {
                 ],
                 const SizedBox(height: 12),
                 Text(
-                  '这一步只识别，不改任何文件。确认结果后点「开始整理」才会改名，之后也能撤销。',
+                  widget.scrapeOnly
+                      ? l10n.tr(
+                          '这一步只识别，确认结果后才会写入 NFO 与海报，且不会修改任何现有文件名。',
+                          'This step only matches titles. NFO and artwork are written only after you review, and existing filenames stay untouched.',
+                        )
+                      : l10n.tr(
+                          '这一步只识别，不改任何文件。确认结果后点「开始整理」才会改名，之后也能撤销。',
+                          'This step only matches titles without changing files. Changes run only after you review and confirm, and can be undone later.',
+                        ),
                   style: theme.textTheme.bodySmall,
                 ),
               ],
@@ -371,7 +459,7 @@ class _PreviewSheetState extends State<_PreviewSheet> {
                 children: [
                   TextButton(
                     onPressed: () => Navigator.pop(context, false),
-                    child: const Text('取消'),
+                    child: Text(l10n.cancel),
                   ),
                   const SizedBox(width: 8),
                   FilledButton(
@@ -379,7 +467,11 @@ class _PreviewSheetState extends State<_PreviewSheet> {
                     onPressed: r == null
                         ? null
                         : () => Navigator.pop(context, true),
-                    child: Text(warnings.isEmpty ? '开始识别' : '仍然开始'),
+                    child: Text(
+                      warnings.isEmpty
+                          ? l10n.tr('开始识别', 'Start Matching')
+                          : l10n.tr('仍然开始', 'Continue Anyway'),
+                    ),
                   ),
                 ],
               ),

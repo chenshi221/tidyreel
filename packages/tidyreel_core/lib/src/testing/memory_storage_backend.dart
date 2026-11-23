@@ -7,7 +7,7 @@ import '../storage/storage_backend.dart';
 
 /// A real (in-memory) filesystem with the same semantics the remote backends must have.
 /// Also the reference for Agent C's shared backend test suite.
-class MemoryStorageBackend implements StorageBackend {
+class MemoryStorageBackend implements StorageBackend, RangeReadableBackend {
   /// path -> size; directories are stored with size -1.
   final Map<String, int> _nodes = {'/': -1};
 
@@ -129,6 +129,19 @@ class MemoryStorageBackend implements StorageBackend {
       throw StorageException(StorageErrorCode.notFound, path);
     }
     return _content[path] ?? const [];
+  }
+
+  @override
+  Future<List<int>> readRange(String path, int start, int length) async {
+    final size = _nodes[path];
+    if (size == null || size < 0) {
+      throw StorageException(StorageErrorCode.notFound, path);
+    }
+    if (start < 0 || length <= 0) return const [];
+    final bytes = _content[path] ?? const <int>[];
+    if (start >= bytes.length) return const [];
+    final end = start + length > bytes.length ? bytes.length : start + length;
+    return bytes.sublist(start, end);
   }
 
   @override

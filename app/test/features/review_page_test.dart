@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:tidyreel/data/providers.dart';
+import 'package:tidyreel/data/settings.dart';
 import 'package:tidyreel/features/review/review_page.dart';
 import 'package:tidyreel/ui/widgets.dart';
 import 'package:tidyreel_core/testing.dart';
@@ -16,10 +17,12 @@ import 'helpers.dart';
 const _g1 = GroupId('g1');
 const _file = '/下载/完成/异兽魔都 2020 1080p/[Sub] Dorohedoro S01E01 [1080p].mkv';
 
-/// Uses the real planner so checkbox/override changes must affect executable operations.
+/// Uses the real planner so checkbox/override/group/unassigned changes affect executable operations.
 class _PlanningTaskManager extends FakeTaskManager {
-  final ScanResult scan;
+  ScanResult scan;
   final PlanOptions planOptions;
+  final Map<String, bool> _unassignedDeletes = {};
+  final Map<GroupId, GroupDecision> _decisions = {};
   Completer<void>? updateGate;
   Completer<void>? reviewGate;
   var runCalls = 0;
@@ -27,17 +30,43 @@ class _PlanningTaskManager extends FakeTaskManager {
   _PlanningTaskManager(this.scan, {this.planOptions = const PlanOptions()})
     : super(step: Duration.zero);
 
+  PlanOptions get _effectiveOptions => _unassignedDeletes.isEmpty
+      ? planOptions
+      : PlanOptions(
+          mode: planOptions.mode,
+          libraryRoot: planOptions.libraryRoot,
+          naming: planOptions.naming,
+          deleteJunk: planOptions.deleteJunk,
+          confidenceThreshold: planOptions.confidenceThreshold,
+          scrape: planOptions.scrape,
+          scrapeOnly: planOptions.scrapeOnly,
+          overwriteNfo: planOptions.overwriteNfo,
+          probeMedia: planOptions.probeMedia,
+          unassignedDeletes: Map.unmodifiable(_unassignedDeletes),
+        );
+
+  Future<TaskReview> _buildReview(TaskId id) async {
+    return TaskReview(
+      id: id,
+      scan: scan,
+      decisions: Map.unmodifiable(_decisions),
+      preview: await DefaultPlanner(FakeMetadataProvider())
+          .build(scan, _decisions, _effectiveOptions),
+    );
+  }
+
   @override
   Future<TaskReview> review(TaskId id) async {
     await reviewGate?.future;
     final r = await super.review(id);
-    return TaskReview(
-      id: id,
-      scan: scan,
-      decisions: r.decisions,
-      preview: await DefaultPlanner(FakeMetadataProvider())
-          .build(scan, r.decisions, planOptions),
-    );
+    if (_decisions.isEmpty && r.decisions.isNotEmpty) {
+      for (final g in scan.groups) {
+        if (r.decisions.containsKey(g.id)) {
+          _decisions[g.id] = r.decisions[g.id]!;
+        }
+      }
+    }
+    return _buildReview(id);
   }
 
   @override
@@ -47,8 +76,138 @@ class _PlanningTaskManager extends FakeTaskManager {
     GroupDecision decision,
   ) async {
     await updateGate?.future;
+    _decisions[group] = decision;
     await super.updateDecision(id, group, decision);
-    return review(id);
+    return _buildReview(id);
+  }
+
+  @override
+  Future<TaskReview> setUnassignedDelete(
+    TaskId id,
+    String filePath,
+    bool delete,
+  ) async {
+    _unassignedDeletes[filePath] = delete;
+    return _buildReview(id);
+  }
+
+  @override
+  Future<TaskReview> assignUnassigned(
+    TaskId id,
+    String filePath,
+    GroupId targetGroup,
+  ) async {
+    final uIdx = scan.unassigned.indexWhere((f) => f.path == filePath);
+    if (uIdx < 0) throw ArgumentError('not found: $filePath');
+    final gIdx = scan.groups.indexWhere((g) => g.id == targetGroup);
+    if (gIdx < 0) throw ArgumentError('group not found: $targetGroup');
+    final file = scan.unassigned[uIdx];
+    final nextUnassigned = [...scan.unassigned]..removeAt(uIdx);
+    final g = scan.groups[gIdx];
+    final nextGroups = [...scan.groups]
+      ..[gIdx] = MediaGroup(
+        id: g.id,
+        kind: g.kind,
+        anchorTitle: g.anchorTitle,
+        anchorYear: g.anchorYear,
+        rootDir: g.rootDir,
+        files: [...g.files, file],
+        match: g.match,
+        matchScore: g.matchScore,
+        show: g.show,
+        suggestedStrategy: g.suggestedStrategy,
+        suggestedStrategyReason: g.suggestedStrategyReason,
+      );
+    scan = ScanResult(
+      connection: scan.connection,
+      roots: scan.roots,
+      groups: nextGroups,
+      unassigned: nextUnassigned,
+    );
+    _unassignedDeletes.remove(filePath);
+    return _buildReview(id);
+  }
+
+  @override
+  Future<TaskReview> mergeGroups(
+    TaskId id,
+    GroupId keep,
+    GroupId absorb,
+  ) async {
+    final kg = scan.groups.firstWhere((g) => g.id == keep);
+    final ag = scan.groups.firstWhere((g) => g.id == absorb);
+    final combined = [...kg.files, ...ag.files];
+    final nextGroups = [
+      for (final g in scan.groups)
+        if (g.id == keep)
+          MediaGroup(
+            id: g.id,
+            kind: g.kind,
+            anchorTitle: g.anchorTitle,
+            anchorYear: g.anchorYear,
+            rootDir: g.rootDir,
+            files: combined,
+            match: g.match,
+            matchScore: g.matchScore,
+            show: g.show,
+            suggestedStrategy: g.suggestedStrategy,
+            suggestedStrategyReason: g.suggestedStrategyReason,
+          )
+        else if (g.id != absorb)
+          g,
+    ];
+    _decisions.remove(absorb);
+    scan = ScanResult(
+      connection: scan.connection,
+      roots: scan.roots,
+      groups: nextGroups,
+      unassigned: scan.unassigned,
+    );
+    return _buildReview(id);
+  }
+
+  @override
+  Future<TaskReview> splitGroup(
+    TaskId id,
+    GroupId group,
+    Set<String> filePaths,
+  ) async {
+    final gIdx = scan.groups.indexWhere((g) => g.id == group);
+    final orig = scan.groups[gIdx];
+    final moved = orig.files.where((f) => filePaths.contains(f.path)).toList();
+    final kept = orig.files.where((f) => !filePaths.contains(f.path)).toList();
+    final newId = GroupId('g-split-${scan.groups.length + 1}');
+    final updatedOrig = MediaGroup(
+      id: orig.id,
+      kind: orig.kind,
+      anchorTitle: orig.anchorTitle,
+      anchorYear: orig.anchorYear,
+      rootDir: orig.rootDir,
+      files: kept,
+      match: orig.match,
+      matchScore: orig.matchScore,
+      show: orig.show,
+      suggestedStrategy: orig.suggestedStrategy,
+      suggestedStrategyReason: orig.suggestedStrategyReason,
+    );
+    final created = MediaGroup(
+      id: newId,
+      kind: orig.kind,
+      anchorTitle: moved.first.name,
+      rootDir: orig.rootDir,
+      files: moved,
+    );
+    final nextGroups = [...scan.groups]
+      ..[gIdx] = updatedOrig
+      ..insert(gIdx + 1, created);
+    _decisions[newId] = const GroupDecision();
+    scan = ScanResult(
+      connection: scan.connection,
+      roots: scan.roots,
+      groups: nextGroups,
+      unassigned: scan.unassigned,
+    );
+    return _buildReview(id);
   }
 
   @override
@@ -1355,5 +1514,536 @@ void main() {
         );
       },
     );
+  });
+
+  group('wave 2 review power tools', () {
+    testWidgets(
+      'resizable dividers update reviewLeftWidth and reviewRightWidth in settingsProvider',
+      (tester) async {
+        final (tm, _) = await pumpPage(tester, const SizedBox());
+        final id = await submitAndWait(tester, tm);
+        final (_, container) = await pumpPage(
+          tester,
+          ReviewPage(taskId: id.value),
+          tm: tm,
+        );
+
+        expect(container.read(settingsProvider).reviewLeftWidth, 312.0);
+        expect(container.read(settingsProvider).reviewRightWidth, 276.0);
+
+        await tester.drag(
+          find.byKey(const ValueKey('split-divider-left')),
+          const Offset(40, 0),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          container.read(settingsProvider).reviewLeftWidth,
+          closeTo(352.0, 2.0),
+        );
+
+        await tester.drag(
+          find.byKey(const ValueKey('split-divider-right')),
+          const Offset(-30, 0),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          container.read(settingsProvider).reviewRightWidth,
+          closeTo(306.0, 2.0),
+        );
+      },
+    );
+
+    testWidgets(
+      'left pane filter chips (冲突/缺集/低置信) and select-all/invert toggle visible works',
+      (tester) async {
+        const rootTv = '/d/异兽魔都 2020';
+        final tm = _PlanningTaskManager(
+          const ScanResult(
+            connection: ConnectionId('demo-alist'),
+            roots: ['/d'],
+            groups: [
+              MediaGroup(
+                id: GroupId('g-tv'),
+                kind: MediaKind.episode,
+                anchorTitle: '异兽魔都',
+                rootDir: rootTv,
+                match: Demo.dorohedoro,
+                matchScore: 0.95,
+                show: ShowDetail(
+                  info: Demo.dorohedoro,
+                  seasons: [SeasonInfo(number: 1, episodeCount: 12)],
+                ),
+                files: [
+                  ScanFile(
+                    path: '$rootTv/a.mkv',
+                    name: 'a.mkv',
+                    size: 1000,
+                    role: FileRole.video,
+                    parsed: ParsedName(
+                      season: 1,
+                      episodes: [1],
+                      confidence: 0.95,
+                    ),
+                  ),
+                  ScanFile(
+                    path: '$rootTv/b.mkv',
+                    name: 'b.mkv',
+                    size: 500,
+                    role: FileRole.video,
+                    parsed: ParsedName(
+                      season: 1,
+                      episodes: [1],
+                      confidence: 0.95,
+                    ),
+                  ),
+                ],
+              ),
+              MediaGroup(
+                id: GroupId('g-low'),
+                kind: MediaKind.movie,
+                anchorTitle: '盗梦空间',
+                rootDir: '/d/盗梦空间',
+                match: Demo.inception,
+                matchScore: 0.4,
+                files: [
+                  ScanFile(
+                    path: '/d/盗梦空间/m.mkv',
+                    name: 'm.mkv',
+                    size: 100,
+                    role: FileRole.video,
+                    parsed: ParsedName(kind: MediaKind.movie, confidence: 0.4),
+                  ),
+                ],
+              ),
+              MediaGroup(
+                id: GroupId('g-clean'),
+                kind: MediaKind.movie,
+                anchorTitle: '老友记电影',
+                rootDir: '/d/clean',
+                match: Candidate(
+                  tmdbId: 99999,
+                  kind: MediaKind.movie,
+                  title: '星际穿越',
+                  year: 2014,
+                ),
+                matchScore: 0.95,
+                files: [
+                  ScanFile(
+                    path: '/d/clean/interstellar.mkv',
+                    name: 'interstellar.mkv',
+                    size: 200,
+                    role: FileRole.video,
+                    parsed: ParsedName(kind: MediaKind.movie, confidence: 0.95),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+        await pumpPage(tester, const SizedBox(), tm: tm);
+        final id = await submitAndWait(tester, tm);
+        await pumpPage(tester, ReviewPage(taskId: id.value), tm: tm);
+
+        expect(find.byKey(const ValueKey('filter-conflict')), findsOneWidget);
+        expect(find.byKey(const ValueKey('filter-incomplete')), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('filter-lowConfidence')),
+          findsOneWidget,
+        );
+
+        await tapKey(tester, 'filter-conflict');
+        expect(find.byKey(const ValueKey('group-check-g-tv')), findsOneWidget);
+        expect(find.byKey(const ValueKey('group-check-g-low')), findsNothing);
+        expect(find.byKey(const ValueKey('group-check-g-clean')), findsNothing);
+
+        await tapKey(tester, 'filter-lowConfidence');
+        expect(find.byKey(const ValueKey('group-check-g-low')), findsOneWidget);
+        expect(find.byKey(const ValueKey('group-check-g-tv')), findsNothing);
+
+        await tapKey(tester, 'filter-incomplete');
+        expect(find.byKey(const ValueKey('group-check-g-tv')), findsOneWidget);
+        expect(find.byKey(const ValueKey('group-check-g-clean')), findsNothing);
+
+        await tapKey(tester, 'filter-all');
+        expect(find.byKey(const ValueKey('group-check-g-tv')), findsOneWidget);
+        expect(find.byKey(const ValueKey('group-check-g-low')), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('group-check-g-clean')),
+          findsOneWidget,
+        );
+
+        // Invert turns all 3 checked groups unchecked.
+        await tapKey(tester, 'invert-select-visible');
+        var rev = await tm.review(id);
+        expect(rev.decisions[const GroupId('g-tv')]?.selected, isFalse);
+        expect(rev.decisions[const GroupId('g-low')]?.selected, isFalse);
+        expect(rev.decisions[const GroupId('g-clean')]?.selected, isFalse);
+
+        // Select-all turns all 3 back to checked.
+        await tapKey(tester, 'select-all-visible');
+        rev = await tm.review(id);
+        expect(rev.decisions[const GroupId('g-tv')]?.selected, isTrue);
+        expect(rev.decisions[const GroupId('g-low')]?.selected, isTrue);
+        expect(rev.decisions[const GroupId('g-clean')]?.selected, isTrue);
+      },
+    );
+
+    testWidgets('suggested strategy banner applies strategy in one click', (
+      tester,
+    ) async {
+      const root = '/d/异兽魔都 2020';
+      final tm = _PlanningTaskManager(
+        const ScanResult(
+          connection: ConnectionId('demo-alist'),
+          roots: ['/d'],
+          groups: [
+            MediaGroup(
+              id: _g1,
+              kind: MediaKind.episode,
+              anchorTitle: '异兽魔都',
+              rootDir: root,
+              match: Demo.dorohedoro,
+              matchScore: 0.95,
+              suggestedStrategy: SeasonStrategy.splitSequential,
+              suggestedStrategyReason: '本地为连续绝对集数，建议按 TMDB 季结构顺序拆多季',
+              files: [
+                ScanFile(
+                  path: '$root/13.mkv',
+                  name: '13.mkv',
+                  size: 1000,
+                  role: FileRole.video,
+                  parsed: ParsedName(absolute: 13, confidence: 0.9),
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+      await pumpPage(tester, const SizedBox(), tm: tm);
+      final id = await submitAndWait(tester, tm);
+      await pumpPage(tester, ReviewPage(taskId: id.value), tm: tm);
+
+      expect(
+        find.byKey(const ValueKey('suggested-strategy-banner')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('连续绝对集数'), findsOneWidget);
+
+      await tapKey(tester, 'apply-suggested-strategy');
+      final rev = await tm.review(id);
+      expect(rev.decisions[_g1]?.strategy, SeasonStrategy.splitSequential);
+      expect(
+        find.byKey(const ValueKey('suggested-strategy-banner')),
+        findsNothing,
+      );
+    });
+
+    testWidgets(
+      'conflict quick-resolve 保留体积较大者 ignores smaller duplicate and displays tech badges',
+      (tester) async {
+        const root = '/d/异兽魔都 2020';
+        final tm = _PlanningTaskManager(
+          const ScanResult(
+            connection: ConnectionId('demo-alist'),
+            roots: ['/d'],
+            groups: [
+              MediaGroup(
+                id: _g1,
+                kind: MediaKind.episode,
+                anchorTitle: '异兽魔都',
+                rootDir: root,
+                match: Demo.dorohedoro,
+                matchScore: 0.95,
+                files: [
+                  ScanFile(
+                    path: '$root/small.mkv',
+                    name: 'small.mkv',
+                    size: 500 * 1000 * 1000,
+                    role: FileRole.video,
+                    parsed: ParsedName(
+                      season: 1,
+                      episodes: [1],
+                      confidence: 0.95,
+                      probe: MediaProbeInfo(
+                        width: 3840,
+                        height: 2160,
+                        hdr: 'DV',
+                        audioCodec: 'Atmos',
+                      ),
+                    ),
+                  ),
+                  ScanFile(
+                    path: '$root/large.mkv',
+                    name: 'large.mkv',
+                    size: 2000 * 1000 * 1000,
+                    role: FileRole.video,
+                    parsed: ParsedName(
+                      season: 1,
+                      episodes: [1],
+                      confidence: 0.95,
+                      probe: MediaProbeInfo(
+                        width: 3840,
+                        height: 2160,
+                        hdr: 'DV',
+                        audioCodec: 'Atmos',
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+        await pumpPage(tester, const SizedBox(), tm: tm);
+        final id = await submitAndWait(tester, tm);
+        await pumpPage(tester, ReviewPage(taskId: id.value), tm: tm);
+
+        expect(find.text('2160p · DV · Atmos'), findsNWidgets(2));
+        expect(
+          find.byKey(const ValueKey('group-conflict-banner')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('conflict-keep-largest')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('conflict-ignore-$root/small.mkv')),
+          findsOneWidget,
+        );
+
+        await tapKey(tester, 'conflict-keep-largest');
+        final rev = await tm.review(id);
+        expect(
+          rev.decisions[_g1]?.overrides['$root/small.mkv']?.ignore,
+          isTrue,
+        );
+        expect(
+          rev.decisions[_g1]?.overrides.containsKey('$root/large.mkv'),
+          isFalse,
+        );
+        expect(rev.preview.conflicts, isEmpty);
+        expect(
+          find.byKey(const ValueKey('group-conflict-banner')),
+          findsNothing,
+        );
+        expect(
+          tester
+              .widget<FilledButton>(
+                find.byKey(const ValueKey('execute-button')),
+              )
+              .onPressed,
+          isNotNull,
+        );
+      },
+    );
+
+    testWidgets(
+      'interactive UnassignedPane toggles delete and assigns file to existing work',
+      (tester) async {
+        const root = '/d/异兽魔都 2020';
+        const junkPath = '$root/ad.txt';
+        const extraPath = '/d/bonus.mkv';
+        final tm = _PlanningTaskManager(
+          const ScanResult(
+            connection: ConnectionId('demo-alist'),
+            roots: ['/d'],
+            groups: [
+              MediaGroup(
+                id: _g1,
+                kind: MediaKind.episode,
+                anchorTitle: '异兽魔都',
+                rootDir: root,
+                match: Demo.dorohedoro,
+                matchScore: 0.95,
+                files: [
+                  ScanFile(
+                    path: '$root/ep1.mkv',
+                    name: 'ep1.mkv',
+                    size: 1000,
+                    role: FileRole.video,
+                    parsed: ParsedName(
+                      season: 1,
+                      episodes: [1],
+                      confidence: 0.95,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+            unassigned: [
+              ScanFile(
+                path: junkPath,
+                name: 'ad.txt',
+                size: 120,
+                role: FileRole.junk,
+              ),
+              ScanFile(
+                path: extraPath,
+                name: 'bonus.mkv',
+                size: 5000,
+                role: FileRole.video,
+                parsed: ParsedName(season: 1, episodes: [2], confidence: 0.9),
+              ),
+            ],
+          ),
+        );
+        await pumpPage(tester, const SizedBox(), tm: tm);
+        final id = await submitAndWait(tester, tm);
+        await pumpPage(tester, ReviewPage(taskId: id.value), tm: tm);
+
+        await tapKey(tester, 'unassigned-link');
+        expect(find.text('将永久删除'), findsNothing);
+
+        // Toggle delete ON for ad.txt.
+        await tapKey(tester, 'unassigned-delete-$junkPath');
+        expect(find.text('将永久删除'), findsOneWidget);
+        expect(
+          (await tm.review(id)).preview.ops.any(
+            (o) =>
+                o.kind == OpKind.delete &&
+                o.id == OpId('d-${stableHash(junkPath)}') &&
+                o.selected,
+          ),
+          isTrue,
+        );
+
+        // Toggle delete OFF for ad.txt.
+        await tapKey(tester, 'unassigned-delete-$junkPath');
+        expect(find.text('将永久删除'), findsNothing);
+
+        // Assign bonus.mkv into g1.
+        await tapKey(tester, 'assign-unassigned-$extraPath');
+        await tapKey(tester, 'assign-target-g1');
+        final rev = await tm.review(id);
+        expect(rev.scan.unassigned.map((f) => f.path), [junkPath]);
+        expect(
+          rev.scan.groups.single.files.any((f) => f.path == extraPath),
+          isTrue,
+        );
+      },
+    );
+
+    testWidgets('mergeGroups and splitGroup UI flows work end to end', (
+      tester,
+    ) async {
+      const root1 = '/d/异兽魔都 2020';
+      const root2 = '/d/盗梦空间 2010';
+      final tm = _PlanningTaskManager(
+        const ScanResult(
+          connection: ConnectionId('demo-alist'),
+          roots: ['/d'],
+          groups: [
+            MediaGroup(
+              id: _g1,
+              kind: MediaKind.episode,
+              anchorTitle: '异兽魔都',
+              rootDir: root1,
+              match: Demo.dorohedoro,
+              matchScore: 0.95,
+              files: [
+                ScanFile(
+                  path: '$root1/ep1.mkv',
+                  name: 'ep1.mkv',
+                  size: 1000,
+                  role: FileRole.video,
+                  parsed: ParsedName(season: 1, episodes: [1], confidence: 0.9),
+                ),
+                ScanFile(
+                  path: '$root1/ep2.mkv',
+                  name: 'ep2.mkv',
+                  size: 1000,
+                  role: FileRole.video,
+                  parsed: ParsedName(season: 1, episodes: [2], confidence: 0.9),
+                ),
+              ],
+            ),
+            MediaGroup(
+              id: GroupId('g2'),
+              kind: MediaKind.movie,
+              anchorTitle: '盗梦空间',
+              rootDir: root2,
+              match: Demo.inception,
+              matchScore: 0.95,
+              files: [
+                ScanFile(
+                  path: '$root2/Inception.mkv',
+                  name: 'Inception.mkv',
+                  size: 2000,
+                  role: FileRole.video,
+                  parsed: ParsedName(kind: MediaKind.movie, confidence: 0.95),
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+      await pumpPage(tester, const SizedBox(), tm: tm);
+      final id = await submitAndWait(tester, tm);
+      await pumpPage(tester, ReviewPage(taskId: id.value), tm: tm);
+
+      // Scroll right ActionPane down to split-group-btn and split ep2.mkv out.
+      final actionScroll = find
+          .descendant(
+            of: find.byKey(const ValueKey(_g1)),
+            matching: find.byType(Scrollable),
+          )
+          .first;
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('split-group-btn')),
+        150,
+        scrollable: actionScroll,
+      );
+      await tester.pumpAndSettle();
+      await tapKey(tester, 'split-group-btn');
+      expect(find.text('拆分分组'), findsOneWidget);
+      await tapKey(tester, 'split-file-$root1/ep2.mkv');
+      await tapKey(tester, 'split-group-confirm');
+
+      var rev = await tm.review(id);
+      expect(rev.scan.groups, hasLength(3));
+      expect(
+        rev.scan.groups.firstWhere((g) => g.id == _g1).files.map((f) => f.name),
+        ['ep1.mkv'],
+      );
+
+      // Now merge g1 into g2 via merge-group-btn.
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('merge-group-btn')),
+        150,
+        scrollable: actionScroll,
+      );
+      await tester.pumpAndSettle();
+      await tapKey(tester, 'merge-group-btn');
+      await tapKey(tester, 'merge-target-g2');
+      await tapKey(tester, 'merge-group-confirm');
+
+      rev = await tm.review(id);
+      expect(rev.scan.groups.any((g) => g.id == _g1), isFalse);
+      expect(
+        rev.scan.groups
+            .firstWhere((g) => g.id == const GroupId('g2'))
+            .files
+            .map((f) => f.name),
+        containsAll(['Inception.mkv', 'ep1.mkv']),
+      );
+    });
+
+    testWidgets('scrapeOnly mode shows 仅刮削 tag and 开始刮削 CTA', (tester) async {
+      final (tm, _) = await pumpPage(tester, const SizedBox());
+      final id = await tm.submit(
+        const ConnectionId('demo-alist'),
+        ['/下载/完成'],
+        OrganizeMode.inPlace,
+        scrapeOnly: true,
+      );
+      await waitForStage(tester, tm, id, TaskStage.awaitingReview);
+      await pumpPage(tester, ReviewPage(taskId: id.value), tm: tm);
+
+      expect(find.byKey(const ValueKey('scrape-only-tag')), findsOneWidget);
+      expect(find.text('仅刮削'), findsOneWidget);
+      expect(find.text('开始刮削'), findsOneWidget);
+      expect(find.text('开始整理'), findsNothing);
+    });
   });
 }
