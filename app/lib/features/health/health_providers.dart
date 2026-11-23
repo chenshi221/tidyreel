@@ -8,8 +8,8 @@ import '../../data/settings.dart';
 import 'health_models.dart';
 import 'health_scanner.dart';
 
-/// Injectable scanner factory so widget tests can seed a custom clock/scanner
-/// while production uses the live backend, TMDB, FolderStatsStore and settings.
+/// Injectable scanner factory so widget tests can seed a custom scanner while
+/// production uses the live backend, FolderStatsStore and settings.
 typedef HealthScannerFactory = HealthScanner Function(
   ConnectionId connectionId,
 );
@@ -18,15 +18,13 @@ final healthScannerFactoryProvider = Provider<HealthScannerFactory>(
   (ref) =>
       (connectionId) => HealthScanner(
         backend: ref.read(connectionBackendProvider(connectionId)),
-        metadata: ref.read(metadataProvider),
         connectionId: connectionId,
         folderStatsStore: ref.read(folderStatsStoreProvider),
         probeMedia: ref.read(settingsProvider).probeMedia,
-        titleRules: ref.read(titleRulesProvider),
       ),
 );
 
-/// UI state for the Library Health & Audit Center.
+/// UI state for the lightweight Library Health page.
 @immutable
 class HealthState {
   final ConnectionId? selectedConnection;
@@ -47,7 +45,7 @@ class HealthState {
     this.progress,
     this.report,
     this.error,
-    this.category = HealthCategory.overview,
+    this.category = HealthCategory.duplicates,
     this.selectedMissingFolders = const {},
     this.selectedCleanupPaths = const {},
     this.busyAction = false,
@@ -158,7 +156,7 @@ class HealthController extends Notifier<HealthState> {
       progress: () => const HealthScanProgress(
         phase: HealthScanPhase.walking,
         message: '正在准备扫描…',
-        fraction: 0.02,
+        fraction: 0.05,
       ),
     );
 
@@ -176,8 +174,7 @@ class HealthController extends Notifier<HealthState> {
       if (gen != _scanGen) return;
 
       final defaultScrapeFolders = {
-        for (final m in report.missingAssets)
-          if (m.canScrapeFix) m.folderPath,
+        for (final m in report.missingAssets) m.folderPath,
       };
       final defaultCleanup = {for (final c in report.cleanupItems) c.path};
       state = state.copyWith(
@@ -185,6 +182,7 @@ class HealthController extends Notifier<HealthState> {
         progress: () => null,
         report: () => report,
         error: () => null,
+        category: report.firstNonEmptyCategory ?? HealthCategory.duplicates,
         selectedMissingFolders: defaultScrapeFolders,
         selectedCleanupPaths: defaultCleanup,
       );
@@ -216,13 +214,12 @@ class HealthController extends Notifier<HealthState> {
     state = state.copyWith(selectedMissingFolders: next);
   }
 
-  void selectAllMissingFolders({bool onlyScrapeable = true}) {
+  void selectAllMissingFolders() {
     final report = state.report;
     if (report == null) return;
     state = state.copyWith(
       selectedMissingFolders: {
-        for (final m in report.missingAssets)
-          if (!onlyScrapeable || m.canScrapeFix) m.folderPath,
+        for (final m in report.missingAssets) m.folderPath,
       },
     );
   }

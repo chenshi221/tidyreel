@@ -11,7 +11,6 @@ import 'drift_task_store.dart';
 import 'folder_stats_store.dart';
 import 'settings.dart';
 import 'settings_codec.dart';
-import 'watch_rules_store.dart';
 
 // Every engine dependency the UI uses goes through these providers.
 // main() overrides [bootstrapProvider] with the real stores; without an override
@@ -85,7 +84,6 @@ class ConnectionsNotifier extends Notifier<List<ConnectionConfig>> {
         .set({...ref.read(connectionPasswordsProvider)}..remove(id));
     ref.read(connectionDirPasswordsProvider.notifier).setFor(id, const {});
     unawaited(ref.read(folderStatsStoreProvider).clearFor(id));
-    unawaited(ref.read(watchRulesStoreProvider).deleteForConnection(id));
   }
 
   void toggleFavorite(ConnectionId id, String path) {
@@ -357,24 +355,6 @@ final historyProvider = Provider<HistoryStore>(
 
 final folderStatsStoreProvider = Provider<FolderStatsStore>(
   (ref) => FolderStatsStore(ref.watch(bootstrapProvider).db),
-);
-
-final watchRulesStoreProvider = Provider<WatchRulesStore>((ref) {
-  final store = WatchRulesStore(ref.watch(bootstrapProvider).db);
-  ref.onDispose(store.dispose);
-  return store;
-});
-
-final watchRulesProvider = StreamProvider<List<WatchRule>>(
-  (ref) => ref.watch(watchRulesStoreProvider).watchAll(),
-);
-
-final activeWatchCountProvider = Provider<int>(
-  (ref) => ref.watch(
-    watchRulesProvider.select(
-      (a) => a.value?.where((r) => r.enabled).length ?? 0,
-    ),
-  ),
 );
 
 final taskManagerProvider = Provider<TaskManager>((ref) {

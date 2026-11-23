@@ -15,7 +15,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('来源'), findsWidgets);
 
-    for (final label in ['任务', '体检', '追更', '命名规则', '设置', '来源']) {
+    for (final label in ['任务', '体检', '命名规则', '设置', '来源']) {
       await tester.tap(find.byKey(ValueKey('nav-$label')));
       await tester.pumpAndSettle();
       expect(

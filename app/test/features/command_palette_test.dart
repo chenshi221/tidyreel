@@ -54,7 +54,6 @@ Future<(FakeTaskManager, ProviderContainer, VoidCallback)> _pumpPaletteApp(
         '/sources',
         '/tasks',
         '/health',
-        '/watch',
         '/naming',
         '/settings',
       ])

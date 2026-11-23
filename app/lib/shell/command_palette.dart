@@ -193,17 +193,8 @@ class _CommandPaletteDialogState extends ConsumerState<_CommandPaletteDialog> {
         icon: CupertinoIcons.checkmark_shield,
         title: '体检',
         subtitle: '/health',
-        searchText: '体检 health 媒体库 缺失 诊断',
+        searchText: '体检 health 媒体库 重复 清理 元数据',
         onActivate: () => goRoute('/health'),
-      ),
-      _PaletteItem(
-        id: 'nav-watch',
-        group: '页面导航',
-        icon: CupertinoIcons.dot_radiowaves_left_right,
-        title: '追更',
-        subtitle: '/watch',
-        searchText: '追更 watch 自动监控 定时',
-        onActivate: () => goRoute('/watch'),
       ),
       _PaletteItem(
         id: 'nav-naming',

@@ -102,29 +102,7 @@ class FolderStatsCache extends Table {
   Set<Column> get primaryKey => {connectionId, dirPath};
 }
 
-/// Lightweight watch mode rules (local Directory.watch + remote polling; no webhook).
-@DataClassName('WatchRuleRow')
-@TableIndex(name: 'watch_rules_conn', columns: {#connectionId})
-class WatchRules extends Table {
-  TextColumn get id => text()();
-  TextColumn get connectionId => text()();
-  TextColumn get path => text()();
-  BoolColumn get enabled => boolean().withDefault(const Constant(true))();
-  IntColumn get intervalMinutes => integer().withDefault(const Constant(10))();
-  TextColumn get mode => text().withDefault(const Constant('inPlace'))();
-  BoolColumn get scrape => boolean().withDefault(const Constant(false))();
-  BoolColumn get autoRunHighConfidence =>
-      boolean().withDefault(const Constant(false))();
-  DateTimeColumn get lastScanAt => dateTime().nullable()();
-  TextColumn get lastStatus => text().withDefault(const Constant(''))();
-
-  @override
-  Set<Column> get primaryKey => {id};
-}
-
-@DriftDatabase(
-  tables: [Batches, HistoryRecords, Tasks, FolderStatsCache, WatchRules],
-)
+@DriftDatabase(tables: [Batches, HistoryRecords, Tasks, FolderStatsCache])
 class AppDatabase extends _$AppDatabase {
   AppDatabase(super.executor);
 
@@ -165,8 +143,6 @@ class AppDatabase extends _$AppDatabase {
         await m.addColumn(tasks, tasks.scrapeOnly);
         await m.createTable(folderStatsCache);
         await m.createIndex(folderStatsCacheConn);
-        await m.createTable(watchRules);
-        await m.createIndex(watchRulesConn);
       }
     },
   );

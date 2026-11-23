@@ -13,7 +13,7 @@ import '../sources/folder_picker.dart';
 import 'health_models.dart';
 import 'health_providers.dart';
 
-/// 媒体库体检中心：缺集雷达、同片重复画质对比、缺失 NFO/海报/中文字幕补全与垃圾清理。
+/// 轻量媒体库体检：重复片源画质对比、缺 NFO/海报一键刮削补全、垃圾与空目录清理。
 class HealthPage extends ConsumerWidget {
   const HealthPage({super.key});
 
@@ -102,13 +102,12 @@ class HealthPage extends ConsumerWidget {
             label: Text(state.report == null ? '开始体检' : '重新体检'),
           ),
       ],
-      child: _buildBody(context, ref, state, ctrl, pickFolder),
+      child: _buildBody(context, state, ctrl, pickFolder),
     );
   }
 
   Widget _buildBody(
     BuildContext context,
-    WidgetRef ref,
     HealthState state,
     HealthController ctrl,
     Future<void> Function() pickFolder,
@@ -143,8 +142,8 @@ class HealthPage extends ConsumerWidget {
     if (report == null) {
       return EmptyState(
         icon: CupertinoIcons.checkmark_shield,
-        title: '媒体库体检中心',
-        message: '只读检查缺集与追更进度、同片重复画质对比、缺失 NFO/海报/中文字幕以及垃圾文件与空目录，绝不擅自改动文件',
+        title: '媒体库体检',
+        message: '本地只读扫描重复片源、缺失 NFO/海报以及垃圾文件与空目录，绝不擅自改动文件',
         action: OutlinedButton.icon(
           onPressed: () => ctrl.startScan(),
           icon: const Icon(CupertinoIcons.play_fill, size: 12),
@@ -366,21 +365,21 @@ class _ScanningView extends StatelessWidget {
     final prog = progress;
     return Center(
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 440),
+        constraints: const BoxConstraints(maxWidth: 420),
         child: Panel(
           framed: true,
-          padding: const EdgeInsets.all(24),
+          padding: const EdgeInsets.all(22),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Row(
                 children: [
-                  Spinner(size: 18, color: p.accent),
-                  const SizedBox(width: 12),
+                  Spinner(size: 16, color: p.accent),
+                  const SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      prog?.phase.label ?? '正在体检媒体库',
+                      prog?.phase.label ?? '正在扫描媒体库',
                       style: theme.textTheme.titleMedium,
                     ),
                   ),
@@ -390,7 +389,7 @@ class _ScanningView extends StatelessWidget {
               GradientProgress(
                 value: prog?.fraction ?? 0.1,
                 color: p.accent,
-                height: 5,
+                height: 4,
               ),
               const SizedBox(height: 10),
               Text(
@@ -399,28 +398,12 @@ class _ScanningView extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 style: theme.textTheme.bodySmall,
               ),
-              if (prog != null &&
-                  (prog.dirsVisited > 0 || prog.totalWorks > 0)) ...[
-                const SizedBox(height: 8),
-                Text(
-                  [
-                    if (prog.dirsVisited > 0) '已扫描 ${prog.dirsVisited} 个目录',
-                    if (prog.filesFound > 0) '${prog.filesFound} 个文件',
-                    if (prog.totalWorks > 0)
-                      '作品 ${prog.worksChecked}/${prog.totalWorks}',
-                  ].join(' · '),
-                  style: TextStyle(
-                    fontSize: TypeScale.small,
-                    color: p.textFaint,
-                  ),
-                ),
-              ],
-              const SizedBox(height: 16),
+              const SizedBox(height: 14),
               Align(
                 alignment: Alignment.centerRight,
                 child: OutlinedButton(
                   onPressed: onCancel,
-                  child: const Text('停止体检'),
+                  child: const Text('停止'),
                 ),
               ),
             ],
@@ -433,7 +416,7 @@ class _ScanningView extends StatelessWidget {
 
 // ---- Report view ----------------------------------------------------------
 
-class _ReportView extends ConsumerWidget {
+class _ReportView extends StatelessWidget {
   final HealthState state;
   final HealthReport report;
   final HealthController ctrl;
@@ -445,178 +428,53 @@ class _ReportView extends ConsumerWidget {
   });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final p = Palette.of(context);
-    final scoreColor = report.score >= 85
-        ? p.success
-        : (report.score >= 60 ? p.warning : p.danger);
     final reclaimable = report.totalReclaimableBytes;
+
+    if (report.totalIssues == 0) {
+      return EmptyState(
+        icon: CupertinoIcons.checkmark_seal,
+        title: '媒体库很整洁',
+        message:
+            '已扫描 ${report.totalWorks} 部作品 · ${report.scannedFiles} 个文件，未发现重复片源、缺失元数据或垃圾文件',
+      );
+    }
+
+    final summary = [
+      '${report.totalWorks} 部作品',
+      '${report.scannedFiles} 个文件',
+      if (reclaimable > 0) '可释放 ${fmtSize(reclaimable)}',
+    ].join(' · ');
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(48, 4, 40, 32),
       children: [
-        // Hero summary panel
-        Panel(
-          framed: true,
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  DefaultTextStyle.merge(
-                    style: TextStyle(color: scoreColor),
-                    child: BigNumber(
-                      '${report.score}',
-                      unit: '分',
-                      captions: [
-                        StatusPill(
-                          label: report.score >= 85
-                              ? '媒体库健康'
-                              : (report.score >= 60 ? '有待整理项' : '建议尽快处理'),
-                          color: scoreColor,
-                        ),
-                        Text(
-                          [
-                            '共 ${report.totalWorks} 部作品',
-                            '${report.scannedFiles} 个文件',
-                            if (reclaimable > 0) '可释放 ${fmtSize(reclaimable)}',
-                          ].join(' · '),
-                          style: TextStyle(
-                            fontSize: TypeScale.small,
-                            color: p.textMuted,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 18),
-              Row(
-                children: [
-                  Expanded(
-                    child: _MetricCard(
-                      key: const ValueKey('health-metric-missing'),
-                      label: '缺集作品',
-                      value: '${report.missingEpisodes.length}',
-                      detail: report.missingEpisodes.isEmpty
-                          ? '全部齐集'
-                          : '共缺 ${report.missingEpisodes.fold<int>(0, (s, e) => s + e.totalMissing)} 集',
-                      color: report.missingEpisodes.isEmpty
-                          ? p.success
-                          : p.accent,
-                      selected:
-                          state.category == HealthCategory.missingEpisodes,
-                      onTap: () =>
-                          ctrl.setCategory(HealthCategory.missingEpisodes),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: _MetricCard(
-                      key: const ValueKey('health-metric-duplicates'),
-                      label: '重复片源',
-                      value: '${report.duplicates.length}',
-                      detail: report.duplicates.isEmpty
-                          ? '无重复'
-                          : '可释放 ${fmtSize(report.duplicateReclaimableBytes)}',
-                      color: report.duplicates.isEmpty ? p.success : p.warning,
-                      selected: state.category == HealthCategory.duplicates,
-                      onTap: () => ctrl.setCategory(HealthCategory.duplicates),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: _MetricCard(
-                      key: const ValueKey('health-metric-assets'),
-                      label: '缺元数据 / 字幕',
-                      value: '${report.missingAssets.length}',
-                      detail: report.missingAssets.isEmpty
-                          ? 'NFO 与海报齐全'
-                          : '${report.missingAssets.where((m) => m.canScrapeFix).length} 项可一键刮削',
-                      color: report.missingAssets.isEmpty
-                          ? p.success
-                          : p.textMuted,
-                      selected: state.category == HealthCategory.missingAssets,
-                      onTap: () =>
-                          ctrl.setCategory(HealthCategory.missingAssets),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: _MetricCard(
-                      key: const ValueKey('health-metric-cleanup'),
-                      label: '垃圾与空目录',
-                      value: '${report.cleanupItems.length}',
-                      detail: report.cleanupItems.isEmpty
-                          ? '目录整洁'
-                          : '${report.junkCount} 垃圾 · ${report.emptyDirCount} 空目录',
-                      color: report.cleanupItems.isEmpty ? p.success : p.danger,
-                      selected: state.category == HealthCategory.cleanup,
-                      onTap: () => ctrl.setCategory(HealthCategory.cleanup),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-        if (report.warnings.isNotEmpty) ...[
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            decoration: BoxDecoration(
-              color: p.warning.withValues(alpha: 0.10),
-              borderRadius: BorderRadius.circular(Radii.lg),
-              border: Border.all(
-                color: p.warning.withValues(alpha: 0.30),
-                width: hairline,
-              ),
+        Wrap(
+          spacing: 16,
+          runSpacing: 10,
+          alignment: WrapAlignment.spaceBetween,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            Segmented<HealthCategory>(
+              key: const ValueKey('health-category-tabs'),
+              options: {
+                HealthCategory.duplicates: '重复 ${report.duplicates.length}',
+                HealthCategory.missingAssets:
+                    '缺元数据 ${report.missingAssets.length}',
+                HealthCategory.cleanup: '待清理 ${report.cleanupItems.length}',
+              },
+              value: state.category,
+              onChanged: ctrl.setCategory,
             ),
-            child: Row(
-              children: [
-                Icon(CupertinoIcons.info_circle, size: 15, color: p.warning),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    report.warnings.join('；'),
-                    style: TextStyle(fontSize: TypeScale.small, color: p.text),
-                  ),
-                ),
-              ],
+            Text(
+              summary,
+              style: TextStyle(fontSize: TypeScale.small, color: p.textFaint),
             ),
-          ),
-        ],
-        const SizedBox(height: 18),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: Segmented<HealthCategory>(
-            key: const ValueKey('health-category-tabs'),
-            options: {
-              HealthCategory.overview: '全部概览',
-              HealthCategory.missingEpisodes:
-                  '缺集 ${report.missingEpisodes.length}',
-              HealthCategory.duplicates: '重复 ${report.duplicates.length}',
-              HealthCategory.missingAssets:
-                  '缺元数据 ${report.missingAssets.length}',
-              HealthCategory.cleanup: '待清理 ${report.cleanupItems.length}',
-            },
-            value: state.category,
-            onChanged: ctrl.setCategory,
-          ),
+          ],
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: 16),
         switch (state.category) {
-          HealthCategory.overview => _OverviewSection(
-            report: report,
-            state: state,
-            ctrl: ctrl,
-          ),
-          HealthCategory.missingEpisodes => _MissingEpisodesSection(
-            items: report.missingEpisodes,
-          ),
           HealthCategory.duplicates => _DuplicatesSection(
             items: report.duplicates,
             busy: state.busyAction,
@@ -640,315 +498,7 @@ class _ReportView extends ConsumerWidget {
   }
 }
 
-class _MetricCard extends StatelessWidget {
-  final String label;
-  final String value;
-  final String detail;
-  final Color color;
-  final bool selected;
-  final VoidCallback onTap;
-
-  const _MetricCard({
-    super.key,
-    required this.label,
-    required this.value,
-    required this.detail,
-    required this.color,
-    required this.selected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final p = Palette.of(context);
-    return Hoverable(
-      onTap: onTap,
-      builder: (context, hover) => AnimatedContainer(
-        duration: const Duration(milliseconds: 120),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        decoration: BoxDecoration(
-          color: selected
-              ? p.selected
-              : (hover ? p.hover : p.canvas.withValues(alpha: 0.65)),
-          borderRadius: BorderRadius.circular(Radii.lg),
-          border: Border.all(
-            color: selected ? p.lineStrong : p.line,
-            width: hairline,
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              label,
-              style: TextStyle(fontSize: TypeScale.small, color: p.textMuted),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              value,
-              style: TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.w600,
-                color: color,
-                fontFeatures: const [FontFeature.tabularFigures()],
-              ),
-            ),
-            const SizedBox(height: 3),
-            Text(
-              detail,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: TypeScale.small, color: p.textFaint),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ---- Overview tab ---------------------------------------------------------
-
-class _OverviewSection extends StatelessWidget {
-  final HealthReport report;
-  final HealthState state;
-  final HealthController ctrl;
-
-  const _OverviewSection({
-    required this.report,
-    required this.state,
-    required this.ctrl,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    if (report.totalIssues == 0) {
-      return const Padding(
-        padding: EdgeInsets.only(top: 24),
-        child: EmptyState(
-          icon: CupertinoIcons.checkmark_seal,
-          title: '媒体库状态极佳',
-          message: '未发现缺集、重复片源、缺失元数据或垃圾文件',
-        ),
-      );
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (report.missingEpisodes.isNotEmpty) ...[
-          SectionLabel(
-            '缺集雷达',
-            trailing: LinkText(
-              '查看全部 ${report.missingEpisodes.length} 部',
-              onTap: () => ctrl.setCategory(HealthCategory.missingEpisodes),
-            ),
-          ),
-          _MissingEpisodesSection(
-            items: report.missingEpisodes.take(3).toList(),
-          ),
-        ],
-        if (report.duplicates.isNotEmpty) ...[
-          SectionLabel(
-            '同片重复对比',
-            trailing: LinkText(
-              '查看全部 ${report.duplicates.length} 组',
-              onTap: () => ctrl.setCategory(HealthCategory.duplicates),
-            ),
-          ),
-          _DuplicatesSection(
-            items: report.duplicates.take(2).toList(),
-            busy: state.busyAction,
-            ctrl: ctrl,
-          ),
-        ],
-        if (report.missingAssets.isNotEmpty) ...[
-          SectionLabel(
-            '缺失元数据 / 字幕',
-            trailing: LinkText(
-              '查看全部 ${report.missingAssets.length} 项',
-              onTap: () => ctrl.setCategory(HealthCategory.missingAssets),
-            ),
-          ),
-          _MissingAssetsSection(
-            items: report.missingAssets.take(4).toList(),
-            selectedFolders: state.selectedMissingFolders,
-            busy: state.busyAction,
-            ctrl: ctrl,
-            compact: true,
-          ),
-        ],
-        if (report.cleanupItems.isNotEmpty) ...[
-          SectionLabel(
-            '待清理',
-            trailing: LinkText(
-              '查看全部 ${report.cleanupItems.length} 项',
-              onTap: () => ctrl.setCategory(HealthCategory.cleanup),
-            ),
-          ),
-          _CleanupSection(
-            items: report.cleanupItems.take(5).toList(),
-            selectedPaths: state.selectedCleanupPaths,
-            busy: state.busyAction,
-            ctrl: ctrl,
-            compact: true,
-          ),
-        ],
-      ],
-    );
-  }
-}
-
-// ---- Audit 1: Missing Episodes section ------------------------------------
-
-class _MissingEpisodesSection extends StatelessWidget {
-  final List<MissingEpisodesIssue> items;
-
-  const _MissingEpisodesSection({required this.items});
-
-  @override
-  Widget build(BuildContext context) {
-    if (items.isEmpty) {
-      return const EmptyState(
-        icon: CupertinoIcons.checkmark_circle,
-        title: '没有发现缺集',
-        message: '所有匹配到 TMDB 的剧集都已完整收录',
-      );
-    }
-
-    final p = Palette.of(context);
-    final theme = Theme.of(context);
-    return Panel(
-      framed: true,
-      child: Rows(
-        indent: 72,
-        children: [
-          for (final item in items)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Poster(
-                    posterPath: item.posterPath,
-                    icon: CupertinoIcons.tv,
-                    width: 46,
-                    height: 69,
-                    radius: Radii.sm,
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 4,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          children: [
-                            Text(
-                              item.year != null
-                                  ? '${item.workTitle} (${item.year})'
-                                  : item.workTitle,
-                              style: theme.textTheme.titleMedium,
-                            ),
-                            if (item.newlyAired.isNotEmpty &&
-                                item.latestAiredCode != null &&
-                                item.latestLocalCode != null)
-                              Tag(
-                                '已更新至 ${item.latestAiredCode}，本地到 ${item.latestLocalCode}',
-                                color: p.accent,
-                              ),
-                            Tag(
-                              '本地 ${item.localEpisodeCount} / 已播 ${item.airedEpisodeCount} 集',
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          item.rootDir,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: TypeScale.small,
-                            color: p.textFaint,
-                            fontFamily: monoFamily,
-                            fontFamilyFallback: [
-                              ...monoFallback,
-                              ...sansFallback,
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        if (item.internalMissing.isNotEmpty)
-                          _EpisodePillRow(
-                            prefix: '缺失',
-                            episodes: item.internalMissing,
-                            color: p.danger,
-                          ),
-                        if (item.internalMissing.isNotEmpty &&
-                            item.newlyAired.isNotEmpty)
-                          const SizedBox(height: 6),
-                        if (item.newlyAired.isNotEmpty)
-                          _EpisodePillRow(
-                            prefix: '新更',
-                            episodes: item.newlyAired,
-                            color: p.warning,
-                          ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-class _EpisodePillRow extends StatelessWidget {
-  final String prefix;
-  final List<MissingEpisodeRef> episodes;
-  final Color color;
-
-  const _EpisodePillRow({
-    required this.prefix,
-    required this.episodes,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final p = Palette.of(context);
-    const limit = 14;
-    final shown = episodes.take(limit).toList();
-    final extra = episodes.length - shown.length;
-    return Wrap(
-      spacing: 6,
-      runSpacing: 5,
-      crossAxisAlignment: WrapCrossAlignment.center,
-      children: [
-        Text(
-          '$prefix：',
-          style: TextStyle(fontSize: TypeScale.small, color: p.textMuted),
-        ),
-        for (final ep in shown)
-          Tooltip(
-            message: [
-              ep.code,
-              if (ep.title != null && ep.title!.isNotEmpty) ep.title!,
-              if (ep.airDate != null) '播出 ${fmtDate(ep.airDate)}',
-            ].join(' · '),
-            child: Tag(ep.code, color: color),
-          ),
-        if (extra > 0) Tag('+$extra 集', color: p.textFaint),
-      ],
-    );
-  }
-}
-
-// ---- Audit 2: Duplicates section ------------------------------------------
+// ---- Audit 1: Duplicates section ------------------------------------------
 
 class _DuplicatesSection extends StatelessWidget {
   final List<DuplicateMediaIssue> items;
@@ -964,10 +514,13 @@ class _DuplicatesSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (items.isEmpty) {
-      return const EmptyState(
-        icon: CupertinoIcons.checkmark_circle,
-        title: '没有发现重复片源',
-        message: '每部电影与每集剧集都只保存了一份副本',
+      return const Padding(
+        padding: EdgeInsets.only(top: 24),
+        child: EmptyState(
+          icon: CupertinoIcons.checkmark_circle,
+          title: '没有发现重复片源',
+          message: '每部电影与每集剧集都只保存了一份副本',
+        ),
       );
     }
 
@@ -1147,30 +700,31 @@ class _DuplicateCopyRow extends StatelessWidget {
   }
 }
 
-// ---- Audit 3: Missing Assets section --------------------------------------
+// ---- Audit 2: Missing Assets section --------------------------------------
 
-class _MissingAssetsSection extends ConsumerWidget {
+class _MissingAssetsSection extends StatelessWidget {
   final List<MissingAssetIssue> items;
   final Set<String> selectedFolders;
   final bool busy;
   final HealthController ctrl;
-  final bool compact;
 
   const _MissingAssetsSection({
     required this.items,
     required this.selectedFolders,
     required this.busy,
     required this.ctrl,
-    this.compact = false,
   });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     if (items.isEmpty) {
-      return const EmptyState(
-        icon: CupertinoIcons.checkmark_circle,
-        title: '元数据与字幕齐全',
-        message: '未发现缺失 NFO、海报或外挂中文字幕的作品',
+      return const Padding(
+        padding: EdgeInsets.only(top: 24),
+        child: EmptyState(
+          icon: CupertinoIcons.checkmark_circle,
+          title: 'NFO 与海报齐全',
+          message: '所有扫描到的作品都已有 NFO 与海报文件',
+        ),
       );
     }
 
@@ -1194,66 +748,58 @@ class _MissingAssetsSection extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (!compact) ...[
-          Row(
-            children: [
-              Text(
-                '已选 ${selectedFolders.length} 项（仅生成缺失的 NFO 与海报，不重命名或移动视频文件）',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-              const Spacer(),
-              TextButton(
-                onPressed: () => ctrl.selectAllMissingFolders(),
-                child: const Text('全选可刮削'),
-              ),
-              TextButton(
-                onPressed: selectedFolders.isEmpty
-                    ? null
-                    : ctrl.clearMissingFolders,
-                child: const Text('取消全选'),
-              ),
-              const SizedBox(width: 8),
-              FilledButton.icon(
-                key: const ValueKey('health-scrape-missing'),
-                onPressed: busy || selectedFolders.isEmpty
-                    ? null
-                    : triggerScrapeOnly,
-                icon: const Icon(CupertinoIcons.sparkles, size: 14),
-                label: const Text('一键仅刮削补全'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-        ],
+        Row(
+          children: [
+            Text(
+              '已选 ${selectedFolders.length} 项（仅生成缺失的 NFO 与海报，不改动视频文件）',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const Spacer(),
+            TextButton(
+              onPressed: ctrl.selectAllMissingFolders,
+              child: const Text('全选'),
+            ),
+            TextButton(
+              onPressed: selectedFolders.isEmpty
+                  ? null
+                  : ctrl.clearMissingFolders,
+              child: const Text('取消全选'),
+            ),
+            const SizedBox(width: 8),
+            FilledButton.icon(
+              key: const ValueKey('health-scrape-missing'),
+              onPressed: busy || selectedFolders.isEmpty
+                  ? null
+                  : triggerScrapeOnly,
+              icon: const Icon(CupertinoIcons.sparkles, size: 14),
+              label: const Text('一键仅刮削补全'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
         Panel(
           framed: true,
           child: Rows(
-            indent: compact ? 64 : 96,
+            indent: 84,
             children: [
               for (final item in items)
                 HoverRow(
-                  onTap: compact
-                      ? () => ctrl.setCategory(HealthCategory.missingAssets)
-                      : () => ctrl.toggleMissingFolder(item.folderPath),
+                  onTap: () => ctrl.toggleMissingFolder(item.folderPath),
                   leading: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      if (!compact) ...[
-                        Checkbox(
-                          value: selectedFolders.contains(item.folderPath),
-                          onChanged: (_) =>
-                              ctrl.toggleMissingFolder(item.folderPath),
-                        ),
-                        const SizedBox(width: 8),
-                      ],
-                      Poster(
-                        posterPath: item.posterPath,
-                        icon: item.kind == MediaKind.movie
+                      Checkbox(
+                        value: selectedFolders.contains(item.folderPath),
+                        onChanged: (_) =>
+                            ctrl.toggleMissingFolder(item.folderPath),
+                      ),
+                      const SizedBox(width: 8),
+                      IconTile(
+                        item.kind == MediaKind.movie
                             ? CupertinoIcons.film
                             : CupertinoIcons.tv,
-                        width: 34,
-                        height: 50,
-                        radius: 4,
+                        size: 30,
+                        outlined: true,
                       ),
                     ],
                   ),
@@ -1275,8 +821,6 @@ class _MissingAssetsSection extends ConsumerWidget {
                     children: [
                       if (item.missingNfo) Tag('缺 NFO', color: p.danger),
                       if (item.missingPoster) Tag('缺海报', color: p.warning),
-                      if (item.missingChineseSubtitle)
-                        Tag('无外挂中文字幕', color: p.textMuted),
                     ],
                   ),
                 ),
@@ -1288,30 +832,31 @@ class _MissingAssetsSection extends ConsumerWidget {
   }
 }
 
-// ---- Audit 4: Cleanup section ---------------------------------------------
+// ---- Audit 3: Cleanup section ---------------------------------------------
 
 class _CleanupSection extends StatelessWidget {
   final List<CleanupIssue> items;
   final Set<String> selectedPaths;
   final bool busy;
   final HealthController ctrl;
-  final bool compact;
 
   const _CleanupSection({
     required this.items,
     required this.selectedPaths,
     required this.busy,
     required this.ctrl,
-    this.compact = false,
   });
 
   @override
   Widget build(BuildContext context) {
     if (items.isEmpty) {
-      return const EmptyState(
-        icon: CupertinoIcons.checkmark_circle,
-        title: '没有待清理项目',
-        message: '未发现广告垃圾文件或空目录',
+      return const Padding(
+        padding: EdgeInsets.only(top: 24),
+        child: EmptyState(
+          icon: CupertinoIcons.checkmark_circle,
+          title: '没有待清理项目',
+          message: '未发现广告垃圾文件或空目录',
+        ),
       );
     }
 
@@ -1373,58 +918,52 @@ class _CleanupSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (!compact) ...[
-          Row(
-            children: [
-              Text(
-                '已选 ${selectedPaths.length} 项',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-              const Spacer(),
-              TextButton(
-                onPressed: ctrl.selectAllCleanup,
-                child: const Text('全选'),
-              ),
-              TextButton(
-                onPressed: selectedPaths.isEmpty
-                    ? null
-                    : ctrl.clearCleanupSelection,
-                child: const Text('取消全选'),
-              ),
-              const SizedBox(width: 8),
-              OutlinedButton.icon(
-                key: const ValueKey('health-cleanup-selected'),
-                style: OutlinedButton.styleFrom(foregroundColor: p.danger),
-                onPressed: busy || selectedPaths.isEmpty
-                    ? null
-                    : confirmAndCleanup,
-                icon: const Icon(CupertinoIcons.trash, size: 13),
-                label: const Text('清理所选'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-        ],
+        Row(
+          children: [
+            Text(
+              '已选 ${selectedPaths.length} 项',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const Spacer(),
+            TextButton(
+              onPressed: ctrl.selectAllCleanup,
+              child: const Text('全选'),
+            ),
+            TextButton(
+              onPressed: selectedPaths.isEmpty
+                  ? null
+                  : ctrl.clearCleanupSelection,
+              child: const Text('取消全选'),
+            ),
+            const SizedBox(width: 8),
+            OutlinedButton.icon(
+              key: const ValueKey('health-cleanup-selected'),
+              style: OutlinedButton.styleFrom(foregroundColor: p.danger),
+              onPressed: busy || selectedPaths.isEmpty
+                  ? null
+                  : confirmAndCleanup,
+              icon: const Icon(CupertinoIcons.trash, size: 13),
+              label: const Text('清理所选'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
         Panel(
           framed: true,
           child: Rows(
-            indent: compact ? 52 : 84,
+            indent: 84,
             children: [
               for (final item in items)
                 HoverRow(
-                  onTap: compact
-                      ? () => ctrl.setCategory(HealthCategory.cleanup)
-                      : () => ctrl.toggleCleanupPath(item.path),
+                  onTap: () => ctrl.toggleCleanupPath(item.path),
                   leading: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      if (!compact) ...[
-                        Checkbox(
-                          value: selectedPaths.contains(item.path),
-                          onChanged: (_) => ctrl.toggleCleanupPath(item.path),
-                        ),
-                        const SizedBox(width: 8),
-                      ],
+                      Checkbox(
+                        value: selectedPaths.contains(item.path),
+                        onChanged: (_) => ctrl.toggleCleanupPath(item.path),
+                      ),
+                      const SizedBox(width: 8),
                       IconTile(
                         item.kind == CleanupKind.emptyDir
                             ? CupertinoIcons.folder
