@@ -1,11 +1,18 @@
 #!/bin/sh
-# Run all checks. Homebrew git first: /usr/bin/git fails until the Xcode license is accepted.
+# Run all Swift checks: version sync, zero-warning build across all targets, and parallel unit tests.
 set -e
 export PATH=/opt/homebrew/opt/git/bin:$PATH
 cd "$(dirname "$0")/.."
-# app/lib/version.dart must match app/pubspec.yaml (tool/release.sh writes both).
-pub=$(sed -n 's/^version: //p' app/pubspec.yaml)
-dart=$(sed -n "s/^const appVersion = '\(.*\)';$/\1/p" app/lib/version.dart)+$(sed -n 's/^const appBuild = \(.*\);$/\1/p' app/lib/version.dart)
-[ "$pub" = "$dart" ] || { echo "版本不一致：pubspec $pub，version.dart $dart" >&2; exit 1; }
-(cd packages/tidyreel_core && dart format --set-exit-if-changed lib test && dart analyze && dart test)
-(cd app && dart format --set-exit-if-changed lib test && flutter analyze && flutter test)
+
+plist_ver=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Resources/Info.plist)
+plist_build=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" Resources/Info.plist)
+swift_ver=$(sed -n 's/^    public static let appVersion = "\(.*\)"$/\1/p' Sources/TidyreelServices/AppStore.swift)
+swift_build=$(sed -n 's/^    public static let appBuild = \(.*\)$/\1/p' Sources/TidyreelServices/AppStore.swift)
+
+[ "$plist_ver+$plist_build" = "$swift_ver+$swift_build" ] || {
+  echo "版本不一致：Info.plist $plist_ver+$plist_build，AppStore.swift $swift_ver+$swift_build" >&2
+  exit 1
+}
+
+swift build --product tidyreel -Xswiftc -warnings-as-errors --explicit-target-dependency-import-check error
+swift test --parallel -Xswiftc -warnings-as-errors --explicit-target-dependency-import-check error

@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Draws the app icon and writes it for macOS and Windows.
+"""Draws the macOS app icon (Resources/AppIcon.icns) from tool/icon.svg.
 
 The mark is the size map's pebble: contour rings around one solid stone.
-Needs rsvg-convert and magick (brew install librsvg imagemagick).
+Needs rsvg-convert (brew install librsvg) and macOS iconutil.
 Usage: tool/make_icon.py
 """
-import json
 import math
 import pathlib
 import subprocess
@@ -34,7 +33,6 @@ def pebble(cx, cy, r):
 
 
 def svg():
-    # macOS icon grid: an 824 tile centred on a 1024 canvas.
     rings = "".join(
         f'<path d="{pebble(512, 512, r)}" fill="none" stroke="{INK}" '
         f'stroke-width="{w}"/>'
@@ -55,37 +53,29 @@ def svg():
 def main():
     source = ROOT / "tool" / "icon.svg"
     source.write_text(svg())
-    mac = ROOT / "app/macos/Runner/Assets.xcassets/AppIcon.appiconset"
-    sizes = sorted(
-        {
-            int(i["filename"].rsplit("_", 1)[1].split(".")[0])
-            for i in json.loads((mac / "Contents.json").read_text())["images"]
-        }
-    )
-    for s in sizes:
-        subprocess.run(
-            ["rsvg-convert", "-w", str(s), "-h", str(s), str(source),
-             "-o", str(mac / f"app_icon_{s}.png")],
-            check=True,
-        )
-    # In-app logo (sidebar, 关于).
-    subprocess.run(
-        ["rsvg-convert", "-w", "256", "-h", "256", str(source),
-         "-o", str(ROOT / "app/assets/app_icon.png")],
-        check=True,
-    )
-    ico = ROOT / "app/windows/runner/resources/app_icon.ico"
+    out_icns = ROOT / "Resources" / "AppIcon.icns"
+    out_icns.parent.mkdir(parents=True, exist_ok=True)
+    pairs = [
+        (16, "icon_16x16.png"),
+        (32, "icon_16x16@2x.png"),
+        (32, "icon_32x32.png"),
+        (64, "icon_32x32@2x.png"),
+        (128, "icon_128x128.png"),
+        (256, "icon_128x128@2x.png"),
+        (256, "icon_256x256.png"),
+        (512, "icon_256x256@2x.png"),
+        (512, "icon_512x512.png"),
+        (1024, "icon_512x512@2x.png"),
+    ]
     with tempfile.TemporaryDirectory() as tmp:
-        big = pathlib.Path(tmp) / "icon.png"
-        subprocess.run(
-            ["rsvg-convert", "-w", "256", "-h", "256", str(source), "-o", str(big)],
-            check=True,
-        )
-        subprocess.run(
-            ["magick", str(big), "-define",
-             "icon:auto-resize=256,128,64,48,32,16", str(ico)],
-            check=True,
-        )
+        iconset = pathlib.Path(tmp) / "AppIcon.iconset"
+        iconset.mkdir()
+        for px, filename in pairs:
+            subprocess.run(
+                ["rsvg-convert", "-w", str(px), "-h", str(px), str(source), "-o", str(iconset / filename)],
+                check=True,
+            )
+        subprocess.run(["iconutil", "-c", "icns", str(iconset), "-o", str(out_icns)], check=True)
 
 
 if __name__ == "__main__":

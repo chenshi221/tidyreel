@@ -1,10 +1,14 @@
 .DS_Store
-.dart_tool/
+.build/
+.swiftpm/
 build/
+DerivedData/
+*.xcuserdata/
 .idea/
 .vscode/
 *.iml
 .claude/worktrees/
 
 # Local secrets compiled into release builds (see tool/build_macos.sh)
+tmdb.local.json
 app/tmdb.local.json
