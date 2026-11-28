@@ -20,14 +20,13 @@ jobs:
         run: tool/lint_commit.sh "$TITLE"
 
   check:
+    # Keep a skipped metadata-only edit from shadowing the required check on this SHA.
+    name: ${{ github.event.action == 'edited' && !github.event.changes.base && 'Metadata edit' || 'check' }}
+    if: github.event.action != 'edited' || github.event.changes.base
+    concurrency:
+      group: checks-code-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          flutter-version: 3.47.4
-          cache: true
-      # dart analyze doesn't fetch packages by itself (flutter's commands do).
-      - run: cd packages/tidyreel_core && dart pub get
       - run: tool/check.sh

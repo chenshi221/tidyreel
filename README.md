@@ -1,52 +1,33 @@
 # 理片 Tidyreel
 
-A desktop app (macOS first, Windows next) that renames and reorganizes downloaded movies
-and TV shows on Alist / OpenList, WebDAV or local folders, so media players such as
-VidHub can identify and scrape them correctly.
+原生 macOS 影视整理软件（100% 纯 Swift / SwiftUI + AppKit，零第三方依赖），把 Alist / OpenList、WebDAV、SMB 或本地文件夹里命名混乱的影视资源，整理成 VidHub、Infuse、Plex、Jellyfin 能精准识别与刮削的目录和命名结构。
 
-把网盘（Alist / OpenList、WebDAV）或本地文件夹里命名混乱的影视资源，整理成 VidHub 等播放器能正确刮削的命名和目录结构。
+## 核心能力
 
-## What it does
+- **多来源直连**：支持 Alist / OpenList（含目录访问密码）、WebDAV、macOS 原生 SMB 共享与本地文件夹，内置仓库有机地图（Voronoi 容量与整理度可视化）。
+- **本地规则 + 多源识别**：支持欧美 PT/BT、中文数词、番剧绝对集号、蓝光/DVD 原盘目录识别，结合 TMDB、Bangumi 与 AniList 自动补全中英文标题与剧集结构。
+- **按需容器头探测**：纯 Swift 分段读取 MKV/MP4 文件头（≤512 KB），免外部依赖识别分辨率、杜比视界（Dolby Vision）、HDR10+、Atmos 等规格。
+- **三栏可视化核对与安全执行**：支持季集拆分/合并策略、字幕与音轨跟随、NFO 与海报刮削、WAL 预写日志防丢数据，以及整批或单文件一键撤销。
+- **媒体库体检**：零 TMDB 请求快速排查重复片源（画质排序对比）、缺失 NFO/海报（一键仅刮削补全）及垃圾文件与空目录。
 
-- Scans selected folders, parses messy file names (Western scene names, Chinese names,
-  anime absolute numbering), and groups files by title.
-- Matches each title against TMDB to get the canonical title, year and season layout.
-- Shows a preview of every rename (`原名 → 新名`) for review; nothing is changed until you
-  confirm.
-- Season strategies for anime: split one long season into TMDB seasons, or merge seasons.
-- Subtitles follow their video; specials go to `Season 00`; extras to `Extras/`.
-- Every executed batch is recorded and can be undone.
+## 构建与检查
 
-## Status
-
-Early development, personal use. See [PLAN.md](PLAN.md) for the full design.
-
-## Build
-
-Requires Flutter (stable) and Xcode on macOS.
+环境要求：macOS 14+ 与 Xcode（Apple Silicon `arm64`）。
 
 ```bash
-cd app
-flutter run -d macos
+# 日常 Debug 构建，与检查和 Debug 打包共用编译参数
+./tool/swift_debug.sh build --product tidyreel
+
+# 运行零警告编译检查与全部单元测试
+./tool/check.sh
+
+# 打包原生 Release 应用（输出至 build/Release/tidyreel.app）
+./tool/build_macos.sh release
+open build/Release/tidyreel.app
 ```
 
-Checks for both packages: `tool/check.sh`.
+如需在打包时内置默认只读 TMDB Token，可将 `tmdb.local.json.example` 复制为仓库根目录 `tmdb.local.json`（已配置 `.gitignore`），构建脚本会自动注入应用包；用户在「设置」中填写的 API Key 始终优先。
 
-Packaged build: `tool/build_macos.sh`. To ship a default TMDB key, copy
-`app/tmdb.local.json.example` to `app/tmdb.local.json` (gitignored) and put your TMDB
-API Read Access Token in it; the script compiles it in. Without it, users enter their own
-key in Settings. A key entered in Settings always takes precedence.
+## 致谢与声明
 
-## TMDB
-
-Release builds include a default read-only TMDB key; users can enter their own in
-Settings instead. Requests go directly from the app to TMDB
-(or to a proxy URL the user configures); no data is sent anywhere else.
-
-This product uses the TMDB API but is not endorsed or certified by TMDB.
-
-## Credits
-
-The renaming approach is inspired by [mnamer](https://github.com/jkwill87/mnamer)
-(MIT, see [LICENSES/mnamer-MIT.txt](LICENSES/mnamer-MIT.txt)). Tidyreel is a separate
-implementation in Dart.
+重命名思路参考了 [mnamer](https://github.com/jkwill87/mnamer)（MIT 协议，见 [LICENSES/mnamer-MIT.txt](LICENSES/mnamer-MIT.txt)）。本软件使用 TMDB API，但未获得 TMDB 官方认证或背书。

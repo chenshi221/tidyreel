@@ -1,7 +1,7 @@
 #!/bin/sh
-# Cut a release locally: bump the version, write CHANGELOG.md from the commits
-# since the last tag, commit "chore(release): vX.Y.Z" and tag it. Never pushes.
-# Usage: tool/release.sh 0.2.0
+# Cut a release locally: bump the version in Info.plist & AppStore.swift, write CHANGELOG.md
+# from commits since the last tag, commit "chore(release): vX.Y.Z" and tag it. Never pushes.
+# Usage: tool/release.sh 1.1.0
 set -e
 export PATH=/opt/homebrew/opt/git/bin:$PATH
 cd "$(dirname "$0")/.."
@@ -20,12 +20,11 @@ git rev-parse -q --verify "refs/tags/v$new" >/dev/null && {
   exit 1
 }
 
-old_build=$(sed -n 's/^version: [0-9.]*+\([0-9]*\)$/\1/p' app/pubspec.yaml)
+old_build=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" Resources/Info.plist)
 build=$(( ${old_build:-0} + 1 ))
 prev=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
 range="${prev:+$prev..}HEAD"
 
-# "type(scope)!: summary" -> "- **scope**: summary", grouped by type.
 section() {
   lines=$(git log --no-merges --reverse --format='%s' "$range" |
     grep -E "^($2)(\([a-z0-9-]+\))?!?: " |
@@ -56,10 +55,11 @@ old=""
 [ -f CHANGELOG.md ] && old=$(sed '1,/^## \[/{/^## \[/!d;}' CHANGELOG.md)
 printf '%s\n%s\n%s\n' "$header" "$entry" "$old" > CHANGELOG.md
 
-sed -i.bak -E "s/^version: .*/version: $new+$build/" app/pubspec.yaml && rm app/pubspec.yaml.bak
-printf "// Written by tool/release.sh from app/pubspec.yaml; tool/check.sh keeps them in sync.\nconst appVersion = '%s';\nconst appBuild = %s;\n" "$new" "$build" > app/lib/version.dart
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $new" Resources/Info.plist
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $build" Resources/Info.plist
+sed -i.bak -E "s/^    public static let appVersion = \".*\"/    public static let appVersion = \"$new\"/; s/^    public static let appBuild = [0-9]+/    public static let appBuild = $build/" Sources/TidyreelServices/AppStore.swift && rm Sources/TidyreelServices/AppStore.swift.bak
 
-git add CHANGELOG.md app/pubspec.yaml app/lib/version.dart
+git add CHANGELOG.md Resources/Info.plist Sources/TidyreelServices/AppStore.swift
 git commit -q -m "chore(release): v$new"
 git tag -a "v$new" -m "理片 Tidyreel v$new"
 echo "已提交并打标签 v$new（构建号 $build）。检查 CHANGELOG.md 后再推送："
