@@ -46,6 +46,27 @@ public final class SQLiteFolderStatsStore: FolderStatsCacheStore, Sendable {
         }
     }
 
+    /// Reads only completion metadata for ancestors when opening a cached subtree.
+    public func completeAncestors(connection: ConnectionId, root: String) async throws -> [String: Date] {
+        let ancestors = Self.ancestorDirs(of: normalizeDir(root))
+        guard !ancestors.isEmpty else { return [:] }
+        return try await db.withConnection { conn in
+            let stmt = try conn.prepareCached("""
+                SELECT scanned_at FROM folder_stats_cache
+                WHERE connection_id = ? AND dir_path = ? AND complete = 1
+                """)
+            var result: [String: Date] = [:]
+            for path in ancestors {
+                stmt.reset()
+                try stmt.bindText(1, connection.value)
+                try stmt.bindText(2, path)
+                if try stmt.step() { result[path] = stmt.columnDateSeconds(0) }
+            }
+            stmt.reset()
+            return result
+        }
+    }
+
     public func saveBatch(connection: ConnectionId, records: [CachedFolderRecord]) async throws {
         if records.isEmpty { return }
         try await db.withConnection { conn in

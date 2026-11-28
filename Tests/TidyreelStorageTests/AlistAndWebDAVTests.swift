@@ -371,6 +371,18 @@ struct AlistAndWebDAVTests {
         #expect(authBox.auth == nil)
     }
 
+    @Test("Malformed WebDAV listings fail without yielding an empty or partial snapshot")
+    func incompleteWebDAVListings() async throws {
+        for body in ["", "<html/>", "<multistatus><response><href>/dav/movie.mkv</href></response>"] {
+            let transport = ClosureHTTPTransport { req, _ in
+                (Data(body.utf8), makeHTTPResponse(url: req.url!, status: 207))
+            }
+            let backend = WebDAVBackend(config: webdavCfg(), credentials: Credentials(), transport: transport)
+            await expectStorageError(.other) { try await backend.list("/") }
+            #expect(try await !backend.removeDirectoryIfEmpty("/folder", removingSystemFiles: true))
+        }
+    }
+
     @Test("WebDAVBackend Foundation.XMLParser handles custom prefixes, 404 propstats, relative hrefs, %, #, and invalid entities")
     func webdavXMLParserEdgeCases() async throws {
         let xml = """

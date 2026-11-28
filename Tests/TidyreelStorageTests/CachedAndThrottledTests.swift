@@ -382,6 +382,16 @@ struct CachedAndThrottledTests {
         #expect(mockAlist.calls.filter { $0 == "api/fs/remove" }.count == 1)
     }
 
+    @Test("A single oversized listing bypasses the cache and preserves smaller listings")
+    func oversizedListingBypassesCache() async throws {
+        let inner = CountingStorageBackend(["/small/a": 1, "/big/a": 1, "/big/b": 1, "/big/c": 1])
+        let cache = CachedBackend(inner, maxEntries: 1, maxTotalEntries: 2)
+        _ = try await cache.list("/small")
+        #expect(try await cache.list("/big").count == 3)
+        #expect(await cache.isCached("/small"))
+        #expect(await !cache.isCached("/big"))
+    }
+
     @Test("CachedBackend enforces maxTotalEntries, normalizes // and NFC, serves exists from cache, and clears on close")
     func cachedTotalBudgetNormalizationExistsAndClose() async throws {
         let clock = MutableClock()

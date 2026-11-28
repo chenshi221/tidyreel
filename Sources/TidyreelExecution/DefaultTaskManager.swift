@@ -15,9 +15,12 @@ private let discMetaDirs: Set<String> = [
 private let undoSkipPrefixes: [String] = [
     "删除无法撤销",
     "文件夹非空，已保留",
+    "已保留文件夹",
     "原位置已被占用",
     "目标已不存在",
     "覆盖写入无法撤销",
+    "文件内容已变更，已保留",
+    "无法验证任务写入的内容，已保留",
 ]
 
 // MARK: - Thread-safe Generation Tracker & Walk Helpers
@@ -1245,16 +1248,7 @@ public actor DefaultTaskManager: TaskManager {
 
     private static func tryRemoveEmptyDir(_ dir: String, backend be: any StorageBackend) async throws -> Bool {
         do {
-            let entries = try await be.list(dir, refresh: true)
-            let hasReal = entries.contains { e in
-                e.isDir || !ignorableEmptyDirFiles.contains(e.name.lowercased())
-            }
-            if hasReal { return false }
-            if !entries.isEmpty {
-                try await be.remove(dir: dir, names: entries.map(\.name))
-            }
-            try await be.remove(dir: dirOf(dir), names: [baseOf(dir)])
-            return true
+            return try await be.removeDirectoryIfEmpty(dir, removingSystemFiles: true)
         } catch is StorageError {
             return false
         }
@@ -1485,9 +1479,6 @@ public actor DefaultTaskManager: TaskManager {
             t.execTask = nil
             execTask.cancel()
             await execTask.value
-            if let defExec = executor as? DefaultExecutor {
-                await defExec.waitForSettled()
-            }
         }
 
         if t.busy {
@@ -2416,12 +2407,12 @@ public actor DefaultTaskManager: TaskManager {
             } catch {
                 self.recordExecFailure(t, error: error)
             }
+            if let defExec = self.executor as? DefaultExecutor {
+                await defExec.waitForSettled(owner: batch.map(ExecutionOwner.batch) ?? .task(t.summary.id))
+            }
         }
         t.execTask = streamTask
         await streamTask.value
-        if let defExec = executor as? DefaultExecutor {
-            await defExec.waitForSettled()
-        }
         t.execTask = nil
 
         if t.cancelled || tasks[t.summary.id] !== t {

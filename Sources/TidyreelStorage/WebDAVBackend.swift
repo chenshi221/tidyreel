@@ -109,8 +109,8 @@ public actor WebDAVBackend: RangeReadableBackend {
         reqURL: URL,
         selfPath: String,
         baseSegments: [String]
-    ) async -> [RemoteEntry] {
-        let parsed = WebDAVMultistatusParser.parse(data)
+    ) async throws -> [RemoteEntry] {
+        let parsed = try WebDAVMultistatusParser.parse(data)
 
         var out: [RemoteEntry] = []
         out.reserveCapacity(parsed.count)
@@ -222,7 +222,7 @@ public actor WebDAVBackend: RangeReadableBackend {
         }
         let reqURL = try buildURL(dir, dir: true)
         let selfPath = toRelativePath(reqURL)
-        return await Self.parseMultistatusEntries(
+        return try await Self.parseMultistatusEntries(
             data: data,
             reqURL: reqURL,
             selfPath: selfPath,
@@ -916,9 +916,10 @@ private final class WebDAVMultistatusParser: NSObject, XMLParserDelegate {
             || (cp >= 0x10000 && cp <= 0x10FFFF)
     }
 
-    static func parse(_ data: Data) -> [WebDAVParsedResponse] {
-        guard !data.isEmpty else { return [] }
-        return autoreleasepool {
+    private var rootElement: String?
+
+    static func parse(_ data: Data) throws -> [WebDAVParsedResponse] {
+        try autoreleasepool {
             let xmlData: Data
             if containsNumericEntityMarker(data) {
                 let xmlString = String(decoding: data, as: UTF8.self)
@@ -931,7 +932,9 @@ private final class WebDAVMultistatusParser: NSObject, XMLParserDelegate {
             parser.shouldProcessNamespaces = false
             parser.shouldResolveExternalEntities = false
             parser.delegate = delegate
-            _ = parser.parse()
+            guard parser.parse(), parser.parserError == nil, delegate.rootElement == "multistatus" else {
+                throw StorageError(.other, "WebDAV 返回了无效的目录列表")
+            }
             return delegate.results
         }
     }
@@ -987,6 +990,7 @@ private final class WebDAVMultistatusParser: NSObject, XMLParserDelegate {
         attributes attributeDict: [String: String] = [:]
     ) {
         let local = Self.localTagName(elementName)
+        if rootElement == nil { rootElement = local }
         switch local {
         case "response":
             inResponse = true

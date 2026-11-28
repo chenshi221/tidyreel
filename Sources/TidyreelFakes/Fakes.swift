@@ -138,6 +138,19 @@ public actor MemoryStorageBackend: RangeReadableBackend {
         }
     }
 
+    public func removeDirectoryIfEmpty(_ dir: String, removingSystemFiles: Bool) async throws -> Bool {
+        let norm = normalizeDir(dir)
+        guard norm != "/", dirs.contains(norm) else { return false }
+        guard !dirs.contains(where: { dirOf($0) == norm && $0 != norm }) else { return false }
+        let children = files.keys.filter { dirOf($0) == norm }
+        guard children.allSatisfy({ removingSystemFiles && ignorableEmptyDirFiles.contains(baseOf($0).lowercased()) }) else {
+            return false
+        }
+        for path in children { files.removeValue(forKey: path) }
+        dirs.remove(norm)
+        return true
+    }
+
     public func remove(dir: String, names: [String]) async throws {
         let norm = normalizeDir(dir)
         for name in names {
@@ -251,6 +264,11 @@ public actor MemoryHistoryStore: HistoryStore {
     private var seq = 0
 
     public init() {}
+
+    public func saveWrittenDigest(_ digest: String, batch: BatchId, op: OpId) async throws {
+        guard let i = store[batch]?.records.firstIndex(where: { $0.op.id == op }) else { return }
+        store[batch]?.records[i].writtenDigest = digest
+    }
 
     public func beginBatch(task: TaskId, connection: ConnectionId, ops: [RenameOp]) async throws -> BatchId {
         seq += 1

@@ -142,6 +142,12 @@ final class HookBackend: StorageBackend, @unchecked Sendable {
         }
     }
 
+    func removeDirectoryIfEmpty(_ dir: String, removingSystemFiles: Bool) async throws -> Bool {
+        try await record("removeDirectoryIfEmpty", [dir]) {
+            try await inner.removeDirectoryIfEmpty(dir, removingSystemFiles: removingSystemFiles)
+        }
+    }
+
     func remove(dir: String, names: [String]) async throws {
         try await record("remove", [dir] + names) { try await inner.remove(dir: dir, names: names) }
     }
@@ -172,6 +178,9 @@ final class AlistBackend: StorageBackend, @unchecked Sendable {
     func rename(_ path: String, newName: String) async throws { try await hook.rename(path, newName: newName) }
     func renameMany(_ dir: String, names: [String: String]) async throws { try await hook.renameMany(dir, names: names) }
     func move(srcDir: String, dstDir: String, names: [String]) async throws { try await hook.move(srcDir: srcDir, dstDir: dstDir, names: names) }
+    func removeDirectoryIfEmpty(_ dir: String, removingSystemFiles: Bool) async throws -> Bool {
+        try await hook.removeDirectoryIfEmpty(dir, removingSystemFiles: removingSystemFiles)
+    }
     func remove(dir: String, names: [String]) async throws { try await hook.remove(dir: dir, names: names) }
     func exists(_ path: String) async throws -> Bool { try await hook.exists(path) }
     func read(_ path: String) async throws -> Data { try await hook.read(path) }

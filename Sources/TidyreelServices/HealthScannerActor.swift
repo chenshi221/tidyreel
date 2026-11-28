@@ -160,23 +160,22 @@ public actor HealthScannerActor {
         var pendingPersist: [CachedFolderRecord] = []
         var lastPersistFlush = ContinuousClock.now
 
-        // Sequential/bounded BFS via TaskGroup using actor-hop safe collection
-        var queue: [String] = [normRoot]
-        var visited: Set<String> = [normRoot]
         do {
-            while !queue.isEmpty {
-                if cancelledFlag || Task.isCancelled { throw HealthScanCancelledError() }
-                let batch = Array(queue.prefix(4))
-                queue.removeFirst(min(4, queue.count))
-
-                let results = try await withThrowingTaskGroup(of: (String, [RemoteEntry]?, String?).self) { group in
-                    for dir in batch {
-                        let preCached = !fresh ? cachedByDir[dir] : nil
+            try await withThrowingTaskGroup(of: (String, [RemoteEntry]?, String?).self) { group in
+                var queue = [normRoot]
+                var head = 0
+                var active = 0
+                while head < queue.count || active > 0 {
+                    if cancelledFlag || Task.isCancelled { throw HealthScanCancelledError() }
+                    while active < 4 && head < queue.count {
+                        let dir = queue[head]
+                        head += 1
+                        active += 1
+                        let preCached = cachedByDir[dir]
                         group.addTask { [backend] in
                             if let preCached { return (dir, preCached, nil) }
                             do {
-                                let list = try await backend.list(dir, refresh: fresh)
-                                return (dir, list, nil)
+                                return (dir, try await backend.list(dir, refresh: fresh), nil)
                             } catch let e as StorageError {
                                 if dir == normRoot || e.code == .unauthorized || e.code == .network || e.code == .rateLimited {
                                     throw e
@@ -185,12 +184,15 @@ public actor HealthScannerActor {
                             }
                         }
                     }
-                    var out: [(String, [RemoteEntry]?, String?)] = []
-                    for try await r in group { out.append(r) }
-                    return out
-                }
-
-                for (dir, entriesOpt, skipMsg) in results {
+                    if head == queue.count {
+                        queue.removeAll(keepingCapacity: true)
+                        head = 0
+                    } else if head >= 1024 && head >= queue.count / 2 {
+                        queue.removeFirst(head)
+                        head = 0
+                    }
+                    guard let (dir, entriesOpt, skipMsg) = try await group.next() else { break }
+                    active -= 1
                     if let skipMsg {
                         skippedDirs[dir] = skipMsg
                         continue
@@ -213,38 +215,37 @@ public actor HealthScannerActor {
                     if hasDiscChild && dir != "/" {
                         discDirs.insert(dir)
                         allFiles.append(contentsOf: entries.filter { !$0.isDir })
-                        continue
-                    }
-                    for e in entries {
-                        if e.isDir {
-                            let up = e.name.uppercased()
-                            if up == "BDMV" || up == "VIDEO_TS" { continue }
-                            let child = normalizeDir(e.path)
-                            allDirs.insert(child)
-                            if visited.insert(child).inserted {
-                                queue.append(child)
+                    } else {
+                        for e in entries {
+                            if e.isDir {
+                                let up = e.name.uppercased()
+                                if up == "BDMV" || up == "VIDEO_TS" { continue }
+                                let child = normalizeDir(e.path)
+                                if allDirs.insert(child).inserted {
+                                    queue.append(child)
+                                }
+                            } else {
+                                allFiles.append(e)
                             }
-                        } else {
-                            allFiles.append(e)
                         }
                     }
-                }
 
-                let batchToSave = drainPendingPersist(&pendingPersist, lastFlush: &lastPersistFlush, force: false)
-                if !batchToSave.isEmpty, let folderStatsStore {
-                    try? await folderStatsStore.saveBatch(connection: connectionId, records: batchToSave)
-                }
+                    let batchToSave = drainPendingPersist(&pendingPersist, lastFlush: &lastPersistFlush, force: false)
+                    if !batchToSave.isEmpty, let folderStatsStore {
+                        try? await folderStatsStore.saveBatch(connection: connectionId, records: batchToSave)
+                    }
 
-                let now = ContinuousClock.now
-                if now - lastProgressEmit >= Self.walkingProgressInterval {
-                    lastProgressEmit = now
-                    await onProgress?(HealthScanProgress(
-                        phase: .walking,
-                        message: "已扫描 \(dirsVisited) 个目录 · \(allFiles.count) 个文件",
-                        dirsVisited: dirsVisited,
-                        filesFound: allFiles.count,
-                        fraction: 0.40
-                    ))
+                    let now = ContinuousClock.now
+                    if now - lastProgressEmit >= Self.walkingProgressInterval {
+                        lastProgressEmit = now
+                        await onProgress?(HealthScanProgress(
+                            phase: .walking,
+                            message: "已扫描 \(dirsVisited) 个目录 · \(allFiles.count) 个文件",
+                            dirsVisited: dirsVisited,
+                            filesFound: allFiles.count,
+                            fraction: 0.40
+                        ))
+                    }
                 }
             }
         } catch {
@@ -262,8 +263,6 @@ public actor HealthScannerActor {
 
         // Staged memory release: walk cache and traversal queues are no longer needed.
         cachedByDir.removeAll(keepingCapacity: false)
-        queue.removeAll(keepingCapacity: false)
-        visited.removeAll(keepingCapacity: false)
 
         if cancelledFlag || Task.isCancelled { throw HealthScanCancelledError() }
 

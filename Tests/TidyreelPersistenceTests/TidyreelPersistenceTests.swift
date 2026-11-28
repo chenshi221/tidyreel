@@ -88,7 +88,7 @@ private actor CountingMediaProbe: MediaProbe {
 
 @Suite("SQLiteDatabase & Drift Schema Migrations")
 struct SQLiteDatabaseMigrationTests {
-    @Test("Fresh file database enables WAL, foreign_keys, tuning PRAGMAs, and creates v7 schema + indexes")
+    @Test("Fresh file database enables WAL, foreign_keys, tuning PRAGMAs, and creates v8 schema + indexes")
     func freshDatabasePragmasAndSchema() async throws {
         let dir = try makeTempDir("fresh-db")
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -96,7 +96,7 @@ struct SQLiteDatabaseMigrationTests {
         let dbURL = dir.appendingPathComponent("tidyreel.sqlite")
         let db = try SQLiteDatabase(url: dbURL)
 
-        #expect(try await db.schemaVersion() == 7)
+        #expect(try await db.schemaVersion() == 8)
 
         let fkRows = try await db.query("PRAGMA foreign_keys")
         #expect(fkRows.first?.first == .integer(1))
@@ -143,7 +143,7 @@ struct SQLiteDatabaseMigrationTests {
         await db.close()
     }
 
-    @Test("Simulated Drift v5 tidyreel.sqlite upgrades cleanly to v7 moving scan_json to task_reviews")
+    @Test("Simulated Drift v5 tidyreel.sqlite upgrades cleanly to v8 moving scan_json to task_reviews")
     func upgradeFromSimulatedDriftV5Database() async throws {
         let dir = try makeTempDir("drift-v5-upgrade")
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -294,7 +294,7 @@ struct SQLiteDatabaseMigrationTests {
             """)
 
         let db = try SQLiteDatabase(path: dbPath)
-        #expect(try await db.schemaVersion() == 7)
+        #expect(try await db.schemaVersion() == 8)
 
         // Verify redundant index was dropped and v7 indexes exist
         let indexNames = Set(
@@ -333,6 +333,7 @@ struct SQLiteDatabaseMigrationTests {
         #expect(recs.count == 1)
         #expect(recs[0].op.overwrite == true)
         #expect(recs[0].op.selected == true)
+        #expect(recs[0].writtenDigest == nil)
         #expect(recs[0].op.warning == "注意季号")
         #expect(recs[0].updatedAt == Date(timeIntervalSince1970: 1_700_000_120))
         #expect(try await historyStore.isOrganized(
@@ -372,7 +373,7 @@ struct SQLiteDatabaseMigrationTests {
         let statsStore = SQLiteFolderStatsStore(db: db)
         let folderStats = try await statsStore.loadFor(ConnectionId("conn-nas"))
         let rootRecord = try #require(folderStats["/影视库"])
-        #expect(rootRecord.complete == true)
+        #expect(rootRecord.complete == false)
         #expect(rootRecord.scannedAt == Date(timeIntervalSince1970: 1_700_000_200))
         #expect(rootRecord.entries.count == 1)
         #expect(rootRecord.entries[0].name == "异兽魔都 (2020)")
@@ -390,7 +391,7 @@ struct SQLiteDatabaseMigrationTests {
         await db.close()
     }
 
-    @Test("Simulated v6 database upgrades cleanly to v7 and migrates task reviews")
+    @Test("Simulated v6 database upgrades cleanly to v8 and migrates task reviews")
     func upgradeFromV6DatabaseToV7() async throws {
         let dir = try makeTempDir("v6-upgrade")
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -453,7 +454,7 @@ struct SQLiteDatabaseMigrationTests {
             """)
 
         let db = try SQLiteDatabase(path: dbPath)
-        #expect(try await db.schemaVersion() == 7)
+        #expect(try await db.schemaVersion() == 8)
 
         let store = SQLiteTaskStore(db: db)
         let loaded = try #require(try await store.loadReview(id: TaskId("T-v6")))
@@ -471,7 +472,7 @@ struct SQLiteDatabaseMigrationTests {
         await db.close()
     }
 
-    @Test("Simulated Drift v1 database upgrades sequentially through v2..v7 with defaults")
+    @Test("Simulated Drift v1 database upgrades sequentially through v2..v8 with defaults")
     func upgradeFromSimulatedDriftV1Database() async throws {
         let dir = try makeTempDir("drift-v1-upgrade")
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -531,7 +532,7 @@ struct SQLiteDatabaseMigrationTests {
             """)
 
         let db = try SQLiteDatabase(path: dbPath)
-        #expect(try await db.schemaVersion() == 7)
+        #expect(try await db.schemaVersion() == 8)
 
         let history = SQLiteHistoryStore(db: db)
         let recs = try await history.records(batch: BatchId("B-v1"))
@@ -604,6 +605,8 @@ struct SQLiteHistoryStoreTests {
         ]
 
         let b1 = try await history.beginBatch(task: task1, connection: conn, ops: ops)
+        try await history.saveWrittenDigest("persisted-digest", batch: b1, op: ops[0].id)
+        #expect(try await history.records(batch: b1).first?.writtenDigest == "persisted-digest")
         let b2 = try await history.beginBatch(task: task2, connection: conn, ops: [ops[1]])
 
         // Newest batch first even when created in the same second (rowid DESC tie-breaker)

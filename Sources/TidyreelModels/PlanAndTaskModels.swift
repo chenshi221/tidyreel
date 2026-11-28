@@ -546,6 +546,7 @@ public struct HistoryRecord: Equatable, Sendable, Identifiable {
     public var batch: BatchId
     public var op: RenameOp
     public var status: OpStatus
+    public var writtenDigest: String? = nil
     public var error: String?
     public var updatedAt: Date
 
@@ -553,12 +554,14 @@ public struct HistoryRecord: Equatable, Sendable, Identifiable {
         batch: BatchId,
         op: RenameOp,
         status: OpStatus,
+        writtenDigest: String? = nil,
         error: String? = nil,
         updatedAt: Date
     ) {
         self.batch = batch
         self.op = op
         self.status = status
+        self.writtenDigest = writtenDigest
         self.error = error
         self.updatedAt = updatedAt
     }

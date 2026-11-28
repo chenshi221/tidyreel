@@ -128,7 +128,7 @@ public actor SizeScannerActor {
     private var skipped: [String: String] = [:]
     private var pendingPersist: [CachedFolderRecord] = []
     private var lastPersistFlushTime: ContinuousClock.Instant = .now
-    private var hydrated = false
+    private var hydratedRoots: Set<String> = []
     private var generation = 0
     private var releaseGeneration: UInt64 = 0
     private var stopRequested = false
@@ -176,7 +176,7 @@ public actor SizeScannerActor {
         memo.removeAll(keepingCapacity: false)
         memoNaming = nil
         pendingPersist.removeAll(keepingCapacity: false)
-        hydrated = false
+        hydratedRoots.removeAll()
     }
 
     /// Targeted invalidation for mutated directories (e.g. after organize, undo, or empty-dir cleanup):
@@ -229,16 +229,22 @@ public actor SizeScannerActor {
         stopRequested = true
     }
 
-    public func hydrateIfNeeded() async {
-        guard !hydrated else { return }
-        hydrated = true
+    public func hydrateIfNeeded(for dir: String = "/") async {
+        let root = normalizeDir(dir)
+        guard !hydratedRoots.contains(where: { isWithinDir(root, root: $0) }), let cacheStore else { return }
         let startReleaseGen = releaseGeneration
-        guard let cacheStore else { return }
-        guard let rows = try? await cacheStore.loadFor(connectionId) else { return }
-        guard releaseGeneration == startReleaseGen else { return }
+        guard let rows = try? await cacheStore.loadBelow(connection: connectionId, root: root),
+              let ancestors = try? await cacheStore.completeAncestors(connection: connectionId, root: root),
+              releaseGeneration == startReleaseGen else { return }
 
         let now = Date()
         var toCheck: [String] = []
+        var path = root
+        while true {
+            if !checkedOrganized.contains(path) { toCheck.append(path) }
+            if path == "/" { break }
+            path = dirOf(path)
+        }
         for (dir, rec) in rows {
             let norm = normalizeDir(dir)
             if invalidatedDirs.contains(norm) { continue }
@@ -259,11 +265,21 @@ public actor SizeScannerActor {
         }
         await checkOrganizedBatches(toCheck)
         guard releaseGeneration == startReleaseGen else { return }
+        if rows[root] != nil, !invalidatedDirs.contains(root), !invalidatedAncestors.contains(root),
+           !staleDirs.contains(where: { isWithinDir($0, root: root) }),
+           ancestors.contains(where: { dir, scannedAt in
+               !invalidatedAncestors.contains(dir) && !invalidatedDirs.contains(dir)
+                   && (cacheTTL <= 0 || now.timeIntervalSince(scannedAt) <= cacheTTL)
+           }) {
+            completeDirs.insert(root)
+        }
+        hydratedRoots = hydratedRoots.filter { !isWithinDir($0, root: root) }
+        hydratedRoots.insert(root)
         memo.removeAll()
     }
 
     public func snapshot(for dir: String, naming: NamingProfile) async -> SizeScanSnapshot {
-        await hydrateIfNeeded()
+        await hydrateIfNeeded(for: dir)
         let norm = normalizeDir(dir)
         return buildSnapshot(for: norm, naming: naming, errorMessage: nil)
     }
@@ -292,7 +308,7 @@ public actor SizeScannerActor {
                 try? await cacheStore.deleteBelow(connection: connectionId, root: normRoot)
             }
         } else {
-            await hydrateIfNeeded()
+            await hydrateIfNeeded(for: normRoot)
             if isComplete(normRoot) {
                 await onUpdate(buildSnapshot(for: normRoot, naming: naming, errorMessage: nil))
                 return
@@ -350,7 +366,7 @@ public actor SizeScannerActor {
 
             await flushPendingPersist(force: true)
 
-            if !stopRequested && !Task.isCancelled && myGen == generation {
+            if skipped.isEmpty && !stopRequested && !Task.isCancelled && myGen == generation {
                 completeDirs.insert(normRoot)
                 invalidatedAncestors.remove(normRoot)
                 if let cacheStore {
@@ -386,6 +402,7 @@ public actor SizeScannerActor {
 
     private func recordSkipped(dir: String, message: String) {
         skipped[dir] = message
+        staleDirs.insert(normalizeDir(dirOf(dir)))
     }
 
     private func ingestFetched(

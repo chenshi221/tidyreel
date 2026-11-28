@@ -15,6 +15,9 @@
 环境要求：macOS 14+ 与 Xcode（Apple Silicon `arm64`）。
 
 ```bash
+# 日常 Debug 构建，与检查和 Debug 打包共用编译参数
+./tool/swift_debug.sh build --product tidyreel
+
 # 运行零警告编译检查与全部单元测试
 ./tool/check.sh
 

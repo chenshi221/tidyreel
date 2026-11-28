@@ -20,6 +20,12 @@ jobs:
         run: tool/lint_commit.sh "$TITLE"
 
   check:
+    # Keep a skipped metadata-only edit from shadowing the required check on this SHA.
+    name: ${{ github.event.action == 'edited' && !github.event.changes.base && 'Metadata edit' || 'check' }}
+    if: github.event.action != 'edited' || github.event.changes.base
+    concurrency:
+      group: checks-code-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4

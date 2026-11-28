@@ -34,15 +34,20 @@ internal final class WorkQueue<Element: Sendable>: @unchecked Sendable {
     }
 }
 
+internal enum ExecutionOwner: Equatable {
+    case task(TaskId)
+    case batch(BatchId)
+}
+
 internal final class ActiveJobTracker: @unchecked Sendable {
     private let lock = NSLock()
-    private var tasks: [UUID: Task<Void, Never>] = [:]
+    private var tasks: [UUID: (owner: ExecutionOwner, task: Task<Void, Never>)] = [:]
     private var finishedEarly: Set<UUID> = []
 
-    func register(_ id: UUID, task: Task<Void, Never>) {
+    func register(_ id: UUID, owner: ExecutionOwner, task: Task<Void, Never>) {
         lock.withLock {
             if finishedEarly.remove(id) == nil {
-                tasks[id] = task
+                tasks[id] = (owner, task)
             }
         }
     }
@@ -55,8 +60,12 @@ internal final class ActiveJobTracker: @unchecked Sendable {
         }
     }
 
-    func snapshot() -> [Task<Void, Never>] {
-        lock.withLock { Array(tasks.values) }
+    func snapshot(owner: ExecutionOwner?) -> [Task<Void, Never>] {
+        lock.withLock {
+            tasks.values.compactMap { job in
+                owner == nil || owner == job.owner ? job.task : nil
+            }
+        }
     }
 }
 
@@ -193,6 +202,10 @@ internal final class ExecutionThrottledBackend: StorageBackend, RangeReadableBac
         for name in names {
             try await call { try await inner.move(srcDir: srcDir, dstDir: dstDir, names: [name]) }
         }
+    }
+
+    func removeDirectoryIfEmpty(_ dir: String, removingSystemFiles: Bool) async throws -> Bool {
+        try await call { try await inner.removeDirectoryIfEmpty(dir, removingSystemFiles: removingSystemFiles) }
     }
 
     func remove(dir: String, names: [String]) async throws {

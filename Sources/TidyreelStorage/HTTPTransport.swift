@@ -128,8 +128,7 @@ private final class SingleHopTaskHandler: NSObject, URLSessionDataDelegate, @unc
         completionHandler: @escaping (URLRequest?) -> Void
     ) {
         // Never let URLSession silently follow redirects; URLSessionStorageTransport
-        // handles redirects explicitly so proxy selection and Authorization/Range
-        // preservation follow direct_lan rules on every hop.
+        // handles origin checks and proxy selection on every hop.
         completionHandler(nil)
     }
 
@@ -330,9 +329,6 @@ public final class URLSessionStorageTransport: StorageHTTPTransport, @unchecked 
         }
 
         var currentRequest = request
-        let initialAuth = request.value(forHTTPHeaderField: "Authorization")
-        let initialRange = request.value(forHTTPHeaderField: "Range")
-
         for hop in 0...Self.maxRedirects {
             let (data, response) = try await performSingleHop(currentRequest)
             guard hop < Self.maxRedirects,
@@ -346,31 +342,39 @@ public final class URLSessionStorageTransport: StorageHTTPTransport, @unchecked 
                 throw URLError(.badURL)
             }
 
-            var nextRequest = currentRequest
-            nextRequest.url = nextURL
-
-            let status = response.statusCode
-            let method = (currentRequest.httpMethod ?? "GET").uppercased()
-            if status == 303 || ((status == 301 || status == 302) && method != "GET" && method != "HEAD") {
-                nextRequest.httpMethod = "GET"
-                nextRequest.httpBody = nil
-                nextRequest.setValue(nil, forHTTPHeaderField: "Content-Length")
-                nextRequest.setValue(nil, forHTTPHeaderField: "Content-Type")
+            guard let nextRequest = Self.redirectRequest(currentRequest, to: nextURL, status: response.statusCode) else {
+                return (data, response)
             }
-
-            if let initialRange {
-                nextRequest.setValue(initialRange, forHTTPHeaderField: "Range")
-            }
-
-            if let initialAuth {
-                let keepAuth = isSameOrigin(currentURL, nextURL) || isPrivateHost(nextURL.host ?? "")
-                nextRequest.setValue(keepAuth ? initialAuth : nil, forHTTPHeaderField: "Authorization")
-            }
-
             currentRequest = nextRequest
         }
 
         throw URLError(.httpTooManyRedirects)
+    }
+
+    static func redirectRequest(_ current: URLRequest, to nextURL: URL, status: Int) -> URLRequest? {
+        guard let currentURL = current.url else { return nil }
+        let method = (current.httpMethod ?? "GET").uppercased()
+        let isRead = method == "GET" || method == "HEAD"
+        var next = current
+        next.url = nextURL
+        if (status == 303 && method != "HEAD") || ((status == 301 || status == 302) && !isRead) {
+            next.httpMethod = "GET"
+            next.httpBodyStream = nil
+            next.httpBody = nil
+            next.setValue(nil, forHTTPHeaderField: "Content-Length")
+            next.setValue(nil, forHTTPHeaderField: "Content-Type")
+        }
+        if !isSameOrigin(currentURL, nextURL) {
+            // A 307/308 may replay a login body or file upload. Only follow
+            // cross-origin downloads and carry forward the byte range they need.
+            guard next.httpMethod == "GET" || next.httpMethod == "HEAD",
+                  next.httpBody == nil, next.httpBodyStream == nil else { return nil }
+            var download = URLRequest(url: nextURL, cachePolicy: current.cachePolicy, timeoutInterval: current.timeoutInterval)
+            download.httpMethod = next.httpMethod
+            download.setValue(current.value(forHTTPHeaderField: "Range"), forHTTPHeaderField: "Range")
+            return download
+        }
+        return next
     }
 }
 

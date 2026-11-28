@@ -630,19 +630,8 @@ public final class HealthSessionController {
                 let normDir = normalizeDir(dirItem.path)
                 if protectedRoots.contains(normDir) { continue }
                 do {
-                    let entries = try await backend.list(normDir, refresh: true)
-                    let hasRealContent = entries.contains { entry in
-                        entry.isDir || !ignorableEmptyDirFiles.contains(entry.name.lowercased())
-                    }
-                    if hasRealContent { continue }
-                    if !entries.isEmpty {
-                        try await backend.remove(dir: normDir, names: entries.map(\.name))
-                        mutatedDirs.insert(normDir)
-                    }
                     let parentDir = normalizeDir(dirOf(normDir))
-                    let dirName = baseOf(normDir)
-                    guard !dirName.isEmpty else { continue }
-                    try await backend.remove(dir: parentDir, names: [dirName])
+                    guard try await backend.removeDirectoryIfEmpty(normDir, removingSystemFiles: true) else { continue }
                     mutatedDirs.insert(normDir)
                     mutatedDirs.insert(parentDir)
                     deletedDirs.insert(dirItem.path)

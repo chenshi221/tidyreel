@@ -177,6 +177,65 @@ struct AppIntegrationTests {
         #expect(staleSnap.isComplete == false)
     }
 
+    @Test("Storage location edits retire the identity used by historical tasks")
+    @MainActor
+    func connectionLocationIdentity() throws {
+        let store = AppStore(db: try .inMemory(), prefs: .memory(), secrets: .memory(), tmdbCache: nil, isDemoMode: false)
+        let original = ConnectionConfig(id: "old", name: "Original", type: .local, endpoint: "/tmp/a")
+        store.upsertConnection(original)
+        var edited = original
+        edited.name = "Renamed"
+        #expect(store.upsertConnection(edited).id == original.id)
+        edited.endpoint = "/tmp/b"
+        let replacement = store.upsertConnection(edited)
+        #expect(replacement.id != original.id)
+        #expect(throws: StorageError.self) { try store.backend(for: original.id) }
+        #expect(store.connections == [replacement])
+    }
+
+    @Test("A cold map restores only the requested subtree and inherits its parent's completion")
+    func scopedSizeMapHydration() async throws {
+        let db = try SQLiteDatabase.inMemory()
+        let folders = SQLiteFolderStatsStore(db: db)
+        let scanner = SizeScannerActor(
+            connectionId: "scope", backend: MemoryStorageBackend(), historyStore: SQLiteHistoryStore(db: db),
+            cacheStore: folders
+        )
+        let video = RemoteEntry(path: "/library/chosen/title.mkv", name: "title.mkv", isDir: false, size: 120)
+        try await folders.saveDir(connection: "scope", dirPath: "/library", entries: [], complete: true)
+        try await folders.saveDir(connection: "scope", dirPath: "/library/chosen", entries: [video])
+        let sibling = RemoteEntry(path: "/other/b.mkv", name: "b.mkv", isDir: false, size: 80)
+        try await folders.saveDir(connection: "scope", dirPath: "/other", entries: [sibling])
+        let chosen = await scanner.snapshot(for: "/library/chosen", naming: .vidhub)
+        #expect(chosen.isComplete)
+        #expect(chosen.rootStats.total == 120)
+        #expect(await scanner.childrenEntries(of: "/other").isEmpty)
+        let other = await scanner.snapshot(for: "/other", naming: .vidhub)
+        #expect(other.rootStats.total == 80)
+    }
+
+    @Test("Skipped children keep the map incomplete until a successful retry")
+    func partialSizeMapCanRetry() async throws {
+        let db = try SQLiteDatabase.inMemory()
+        let folders = SQLiteFolderStatsStore(db: db)
+        let backend = MemoryStorageBackend()
+        let scanner = SizeScannerActor(
+            connectionId: "retry", backend: backend, historyStore: SQLiteHistoryStore(db: db), cacheStore: folders
+        )
+        let child = RemoteEntry(path: "/child", name: "child", isDir: true, size: 0)
+        try await folders.saveDir(connection: "retry", dirPath: "/", entries: [child])
+        await scanner.scan(root: "/", naming: .vidhub) { _ in }
+        let partial = await scanner.snapshot(for: "/", naming: .vidhub)
+        #expect(!partial.isComplete)
+        #expect(partial.skipped["/child"] != nil)
+        #expect(try await folders.loadFor("retry")["/"]?.complete == false)
+        try await backend.mkdirs("/child")
+        await scanner.scan(root: "/", naming: .vidhub) { _ in }
+        let final = await scanner.snapshot(for: "/", naming: .vidhub)
+        #expect(final.isComplete)
+        #expect(final.skipped.isEmpty)
+    }
+
     @Test("AppStore.clearCaches clears SQLite/probe/folder caches, bumps cacheClearEpoch, and shutdownSync finishes cleanly")
     @MainActor
     func appStoreClearCachesAndShutdown() async throws {
@@ -235,4 +294,43 @@ struct AppIntegrationTests {
 
         store.shutdownSync()
     }
+}
+
+private actor HealthWindowBackend: StorageBackend {
+    private var fifthStarted = false
+    private(set) var refilledBeforeSlowRequestEnded = false
+
+    func list(_ dir: String, refresh: Bool) async throws -> [RemoteEntry] {
+        if dir == "/" {
+            return (1...5).map { RemoteEntry(path: "/d\($0)", name: "d\($0)", isDir: true, size: 0) }
+        }
+        if dir == "/d5" { fifthStarted = true }
+        if dir == "/d1" {
+            let deadline = ContinuousClock.now + .seconds(2)
+            while !fifthStarted && ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            refilledBeforeSlowRequestEnded = fifthStarted
+        }
+        return []
+    }
+
+    func mkdirs(_ dir: String) async throws {}
+    func rename(_ path: String, newName: String) async throws {}
+    func renameMany(_ dir: String, names: [String: String]) async throws {}
+    func move(srcDir: String, dstDir: String, names: [String]) async throws {}
+    func remove(dir: String, names: [String]) async throws {}
+    func exists(_ path: String) async throws -> Bool { true }
+    func read(_ path: String) async throws -> Data { Data() }
+    func write(_ path: String, bytes: Data) async throws {}
+    func ping() async throws {}
+    func close() async {}
+}
+
+@Test("Health scanning schedules the next directory while a slow listing is still active")
+func healthScanRefillsWindow() async throws {
+    let backend = HealthWindowBackend()
+    let scanner = HealthScannerActor(backend: backend, connectionId: "window", folderStatsStore: nil, probeMedia: false)
+    _ = try await scanner.scan(rootDir: "/")
+    #expect(await backend.refilledBeforeSlowRequestEnded)
 }

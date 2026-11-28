@@ -176,11 +176,14 @@ public final class EngineRuntimeConfigBox: @unchecked Sendable {
     }
 
     func backend(for id: ConnectionId, demoBackend: (any StorageBackend)?) throws -> any StorageBackend {
-        if let demoBackend { return demoBackend }
         lock.lock()
         guard let config = _connections.first(where: { $0.id == id }) else {
             lock.unlock()
             throw StorageError(.notFound, "连接不存在：\(id.value)")
+        }
+        if let demoBackend {
+            lock.unlock()
+            return demoBackend
         }
         let creds = _secrets.readCredentials(for: id)
         let key = Self.poolKey(config: config, creds: creds)
@@ -350,24 +353,7 @@ private enum ExecutorArtworkFetcher {
            !cached.isEmpty {
             return cached
         }
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await downloadSession.data(from: url)
-        } catch {
-            throw StorageError(.network, "下载 \(url.absoluteString)：\(error.localizedDescription)")
-        }
-        if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-            let code: StorageErrorCode
-            switch http.statusCode {
-            case 404: code = .notFound
-            case 429: code = .rateLimited
-            case 401, 403: code = .unauthorized
-            default: code = .network
-            }
-            throw StorageError(code, "下载 \(url.absoluteString)：HTTP \(http.statusCode)")
-        }
-        return data
+        return try await ArtworkDownload.fetchBytes(url, session: downloadSession)
     }
 }
 
@@ -809,11 +795,20 @@ public final class AppStore {
         }
     }
 
+    @discardableResult
     public func upsertConnection(
-        _ config: ConnectionConfig,
+        _ draft: ConnectionConfig,
         password: String? = nil,
         dirPasswords: [String: String]? = nil
-    ) {
+    ) -> ConnectionConfig {
+        var config = draft
+        if let old = connections.first(where: { $0.id == draft.id }),
+           old.type != draft.type || old.endpoint != draft.endpoint || old.username != draft.username {
+            // Task and batch records reference this ID for their entire lifetime.
+            // Retire it when paths would resolve against a different storage namespace.
+            config.id = ConnectionId(UUID().uuidString)
+            removeConnection(old.id)
+        }
         var next = connections
         if let idx = next.firstIndex(where: { $0.id == config.id }) {
             next[idx] = config
@@ -836,7 +831,8 @@ public final class AppStore {
             }
         }
         prefsStore.saveConnections(next)
-        Task { await pingConnection(config.id) }
+        Task { [id = config.id] in await pingConnection(id) }
+        return config
     }
 
     public func removeConnection(_ id: ConnectionId) {

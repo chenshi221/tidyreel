@@ -9,7 +9,7 @@ extension DefaultExecutor {
         backend: any StorageBackend,
         only: Set<OpId>? = nil
     ) -> AsyncThrowingStream<ExecProgress, any Error> {
-        makeStream { cancelFlag, continuation in
+        makeStream(owner: .batch(batch)) { cancelFlag, continuation in
             try await self.performUndo(
                 batch: batch,
                 be: self.wrap(backend),
@@ -30,6 +30,9 @@ extension DefaultExecutor {
         continuation: AsyncThrowingStream<ExecProgress, any Error>.Continuation
     ) async throws {
         let records = try await history.records(batch: batch)
+        let writtenDigests = Dictionary(uniqueKeysWithValues: records.compactMap { record in
+            record.writtenDigest.map { (record.op.id, $0) }
+        })
         let todo = records.reversed()
             .filter { $0.status == .done && (only == nil || only!.contains($0.op.id)) }
             .map(\.op)
@@ -58,7 +61,7 @@ extension DefaultExecutor {
             var note: String?
             var failure: String?
             do {
-                note = try await self.undoSingleOp(be: be, op: op, ensuredDirs: ensuredDirs)
+                note = try await self.undoSingleOp(be: be, op: op, batch: batch, writtenDigest: writtenDigests[op.id], ensuredDirs: ensuredDirs)
             } catch {
                 failure = executionErrorMessage(error)
             }
@@ -338,9 +341,64 @@ extension DefaultExecutor {
         }
     }
 
+    /// Isolate the file before comparing it so a replacement at the public path survives undo.
+    /// A stable staging name also lets a retried undo finish after interruption.
+    private func undoWrittenFile(
+        be: any StorageBackend, op: RenameOp, batch: BatchId, digest: String
+    ) async throws -> String? {
+        let parent = dirOf(op.dst)
+        let name = baseOf(op.dst)
+        let key = Data("\(batch.value)\u{0}\(op.id.value)".utf8)
+        let token = Self.writtenDigest(key).replacingOccurrences(of: "/", with: "_")
+        let stagedName = ".tidyreel-undo-\(token)"
+        let staged = joinPath(parent, stagedName)
+        let entries: [RemoteEntry]
+        do {
+            entries = try await be.list(parent, refresh: true)
+        } catch let e as StorageError where e.code == .notFound {
+            return nil
+        }
+
+        if let parked = entries.first(where: { $0.name == stagedName }) {
+            guard !parked.isDir, parked.size <= ArtworkDownload.maximumBytes else {
+                throw StorageError(.other, "请检查撤销暂存文件：\(staged)")
+            }
+        } else {
+            guard let original = entries.first(where: { $0.name == name }) else { return nil }
+            guard !original.isDir, original.size <= ArtworkDownload.maximumBytes else {
+                return "无法验证任务写入的内容，已保留"
+            }
+            try await be.rename(op.dst, newName: stagedName)
+        }
+
+        let matches: Bool
+        do {
+            matches = Self.writtenDigest(try await be.read(staged)) == digest
+        } catch {
+            try await restoreStagedWrite(be: be, staged: staged, original: op.dst)
+            throw error
+        }
+        if matches {
+            try await be.remove(dir: parent, names: [stagedName])
+            return nil
+        }
+        try await restoreStagedWrite(be: be, staged: staged, original: op.dst)
+        return "文件内容已变更，已保留"
+    }
+
+    private func restoreStagedWrite(be: any StorageBackend, staged: String, original: String) async throws {
+        do {
+            try await be.rename(staged, newName: baseOf(original))
+        } catch {
+            throw StorageError(.other, "无法还原到 \(original)，已保留暂存项 \(staged)：\(error.localizedDescription)")
+        }
+    }
+
     private func undoSingleOp(
         be: any StorageBackend,
         op: RenameOp,
+        batch: BatchId,
+        writtenDigest: String?,
         ensuredDirs: EnsuredDirsBox? = nil
     ) async throws -> String? {
         switch op.kind {
@@ -348,17 +406,15 @@ extension DefaultExecutor {
             return "删除无法撤销"
         case .mkdir:
             if !(try await be.exists(op.dst)) { return nil }
-            if !(try await be.list(op.dst, refresh: true)).isEmpty {
-                return "文件夹非空，已保留"
+            guard try await be.removeDirectoryIfEmpty(op.dst, removingSystemFiles: false) else {
+                return "已保留文件夹：目录非空或存储端不支持安全删除"
             }
-            try await be.remove(dir: dirOf(op.dst), names: [baseOf(op.dst)])
             ensuredDirs?.invalidate(prefix: op.dst)
             return nil
         case .write:
             if op.overwrite { return "覆盖写入无法撤销" }
-            if !(try await be.exists(op.dst)) { return nil }
-            try await be.remove(dir: dirOf(op.dst), names: [baseOf(op.dst)])
-            return nil
+            guard let writtenDigest else { return "无法验证任务写入的内容，已保留" }
+            return try await undoWrittenFile(be: be, op: op, batch: batch, digest: writtenDigest)
         case .relocate:
             if op.src == op.dst { return nil }
             if try await be.exists(op.src) {

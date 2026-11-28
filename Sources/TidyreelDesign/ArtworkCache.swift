@@ -3,6 +3,7 @@ import CryptoKit
 import Foundation
 import ImageIO
 import SwiftUI
+import TidyreelModels
 
 private actor ConcurrencyGate {
     private enum AcquireAttempt: Sendable {
@@ -191,9 +192,6 @@ public actor ArtworkCache {
                 let result: Data?
                 if Task.isCancelled {
                     result = nil
-                } else if let diskData = try? Data(contentsOf: diskURL), !diskData.isEmpty {
-                    Self.touchDiskAccessDateIfNeeded(at: diskURL)
-                    result = diskData
                 } else if await downloadGate.acquire() {
                     result = await Self.performNetworkDownload(
                         url: url,
@@ -263,15 +261,12 @@ public actor ArtworkCache {
                 guard let self else { return nil }
                 var decodedImage: NSImage?
                 if !Task.isCancelled,
-                   let data = await self.fetchRawBytes(url: url),
-                   !data.isEmpty,
-                   !Task.isCancelled,
                    await decodeGate.acquire() {
                     let decoded: (NSImage, Int)?
-                    if Task.isCancelled {
-                        decoded = nil
-                    } else {
+                    if let data = await self.fetchRawBytes(url: url), !data.isEmpty, !Task.isCancelled {
                         decoded = Self.downsample(data: data, maxPixelSize: bucketPx)
+                    } else {
+                        decoded = nil
                     }
                     await decodeGate.release()
                     if let (image, cost) = decoded,
@@ -453,11 +448,11 @@ public actor ArtworkCache {
         generation: UInt64
     ) async -> Data? {
         if Task.isCancelled { return nil }
-        if let diskData = try? Data(contentsOf: diskURL), !diskData.isEmpty {
+        if let diskData = try? ArtworkDownload.readFile(diskURL), !diskData.isEmpty {
             touchDiskAccessDateIfNeeded(at: diskURL)
             return diskData
         }
-        guard let (fetched, resp) = try? await session.data(from: url),
+        guard let (fetched, resp) = try? await ArtworkDownload.fetch(url, session: session),
               let http = resp as? HTTPURLResponse else {
             return nil
         }

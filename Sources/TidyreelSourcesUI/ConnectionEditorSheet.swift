@@ -1136,9 +1136,9 @@ struct ConnectionEditorSheet: View {
         let draft = buildDraftConfig()
         let pw = type == .local ? "" : password
         let dirPws = buildDirPasswordsMap()
-        store.upsertConnection(draft, password: pw, dirPasswords: dirPws)
+        let saved = store.upsertConnection(draft, password: pw, dirPasswords: dirPws)
         if isNew {
-            onSavedNewConnection?(draft)
+            onSavedNewConnection?(saved)
         }
         dismiss()
     }

@@ -32,6 +32,16 @@ public final class SQLiteHistoryStore: HistoryStore, @unchecked Sendable {
         self.db = db
     }
 
+    public func saveWrittenDigest(_ digest: String, batch: BatchId, op: OpId) async throws {
+        try await db.withConnection { conn in
+            let stmt = try conn.prepareCached("UPDATE history_records SET written_digest = ? WHERE batch_id = ? AND op_id = ?")
+            try stmt.bindText(1, digest)
+            try stmt.bindText(2, batch.value)
+            try stmt.bindText(3, op.value)
+            try stmt.step()
+        }
+    }
+
     public func beginBatch(
         task: TaskId,
         connection: ConnectionId,
@@ -220,7 +230,7 @@ public final class SQLiteHistoryStore: HistoryStore, @unchecked Sendable {
         try await db.withConnection { conn in
             let stmt = try conn.prepareCached("""
                 SELECT batch_id, op_id, kind, phase, src, dst, group_id,
-                       selected, warning, overwrite, status, error, updated_at
+                       selected, warning, overwrite, status, error, updated_at, written_digest
                 FROM history_records
                 WHERE batch_id = ?
                 ORDER BY seq ASC
@@ -258,6 +268,7 @@ public final class SQLiteHistoryStore: HistoryStore, @unchecked Sendable {
                             overwrite: overwrite
                         ),
                         status: status,
+                        writtenDigest: stmt.columnOptionalText(13),
                         error: error,
                         updatedAt: updatedAt
                     )

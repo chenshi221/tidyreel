@@ -31,6 +31,7 @@ public actor CachedBackend: RangeReadableBackend {
     private var lruHead: LRUNode?
     private var lruTail: LRUNode?
     private var totalCachedEntries: Int = 0
+    private var resolvedDirectoryCount = 0
 
     public init(
         _ inner: any StorageBackend,
@@ -102,7 +103,8 @@ public actor CachedBackend: RangeReadableBackend {
     private func removeNode(_ node: LRUNode, cancelTask: Bool = false) {
         cache.removeValue(forKey: node.key)
         unlink(node)
-        totalCachedEntries = max(0, totalCachedEntries - node.entryCount)
+        if node.resolvedNames != nil { resolvedDirectoryCount -= 1 }
+        totalCachedEntries -= node.entryCount
         if cancelTask {
             node.task.cancel()
         }
@@ -126,36 +128,25 @@ public actor CachedBackend: RangeReadableBackend {
         }
     }
 
-    private func pruneForInsert() {
+    private func enforceEntryBudget() {
+        func overBudget() -> Bool {
+            resolvedDirectoryCount > maxEntries || (maxTotalEntries > 0 && totalCachedEntries > maxTotalEntries)
+        }
+        guard overBudget() else { return }
         pruneExpired()
-        while cache.count >= maxEntries, let oldest = lruHead {
-            removeNode(oldest)
-        }
-    }
-
-    private func enforceEntryBudget(preservingKey: String?) {
-        guard maxTotalEntries > 0 else { return }
-        if totalCachedEntries <= maxTotalEntries && cache.count <= maxEntries {
-            return
-        }
-        pruneExpired()
-        var cur = lruHead
-        while (totalCachedEntries > maxTotalEntries || cache.count > maxEntries), let node = cur {
-            let next = node.next
-            if let preservingKey, node.key == preservingKey {
-                cur = next
-                continue
-            }
-            removeNode(node)
-            cur = next
-        }
-        if totalCachedEntries > maxTotalEntries, let preservingKey, let node = cache[preservingKey] {
-            removeNode(node)
+        var current = lruHead
+        while overBudget(), let node = current {
+            current = node.next
+            if node.resolvedNames != nil { removeNode(node) }
         }
     }
 
     private func recordResolved(key: String, id: UUID, entries: [RemoteEntry]) {
         guard let node = cache[key], node.id == id, node.resolvedNames == nil else {
+            return
+        }
+        if maxTotalEntries > 0, entries.count > maxTotalEntries {
+            removeNode(node)
             return
         }
         var names = Set<String>()
@@ -166,7 +157,9 @@ public actor CachedBackend: RangeReadableBackend {
         node.resolvedNames = names
         node.entryCount = entries.count
         totalCachedEntries += entries.count
-        enforceEntryBudget(preservingKey: key)
+        resolvedDirectoryCount += 1
+        moveToTail(node)
+        enforceEntryBudget()
     }
 
     private func evictIfMatching(key: String, id: UUID) {
@@ -188,14 +181,10 @@ public actor CachedBackend: RangeReadableBackend {
             try await innerBackend.list(key, refresh: refresh)
         }
         if maxEntries > 0 {
-            if cache.count >= maxEntries {
-                pruneForInsert()
-            }
-            if cache.count < maxEntries {
-                let node = LRUNode(key: key, id: entryId, at: now(), task: task)
-                cache[key] = node
-                appendToTail(node)
-            }
+            // Pending listings have no known cost. Admit them to the LRU budget only once resolved.
+            let node = LRUNode(key: key, id: entryId, at: now(), task: task)
+            cache[key] = node
+            appendToTail(node)
         }
         return (entryId, task)
     }
@@ -349,6 +338,7 @@ public actor CachedBackend: RangeReadableBackend {
         lruHead = nil
         lruTail = nil
         totalCachedEntries = 0
+        resolvedDirectoryCount = 0
     }
 
     public nonisolated var supportsServerBatching: Bool {
@@ -413,6 +403,12 @@ public actor CachedBackend: RangeReadableBackend {
             invalidateBatch(dirsOnly: [normSrc, normDst], subtrees: subtrees)
         }
         try await inner.move(srcDir: srcDir, dstDir: dstDir, names: names)
+    }
+
+    public func removeDirectoryIfEmpty(_ dir: String, removingSystemFiles: Bool) async throws -> Bool {
+        let norm = Self.normKey(dir)
+        defer { invalidateBatch(dirsOnly: [posixDirname(norm)], subtrees: [norm]) }
+        return try await inner.removeDirectoryIfEmpty(dir, removingSystemFiles: removingSystemFiles)
     }
 
     public func remove(dir: String, names: [String]) async throws {

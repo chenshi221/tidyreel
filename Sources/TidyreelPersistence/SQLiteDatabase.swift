@@ -627,6 +627,13 @@ final class SQLiteConnection: @unchecked Sendable {
                         """)
                 }
 
+                if fromVersion < 8 {
+                    try addColumnIfMissing(table: "history_records", column: "written_digest", definition: "TEXT NULL")
+                    // Older scans marked a tree complete even if a child listing failed.
+                    // Keep the listings, but verify tree coverage on the next visit.
+                    try execScript("UPDATE folder_stats_cache SET complete = 0 WHERE complete = 1")
+                }
+
                 // Always ensure all required tables & indexes exist and redundant indexes stay dropped.
                 try ensureAllIndexesAndModernTables()
 
@@ -691,6 +698,7 @@ final class SQLiteConnection: @unchecked Sendable {
             selected INTEGER NOT NULL CHECK ("selected" IN (0, 1)),
             warning TEXT NULL,
             overwrite INTEGER NOT NULL DEFAULT 0 CHECK ("overwrite" IN (0, 1)),
+            written_digest TEXT NULL,
             status TEXT NOT NULL,
             error TEXT NULL,
             updated_at INTEGER NOT NULL,
@@ -786,7 +794,7 @@ final class SQLiteConnection: @unchecked Sendable {
 /// Pure-Swift SQLite3 database actor serialized on a dedicated background `DispatchSerialQueue`.
 /// Never blocks `@MainActor` or starves Swift's cooperative thread pool during disk I/O.
 public actor SQLiteDatabase {
-    public static let currentSchemaVersion: Int = 7
+    public static let currentSchemaVersion: Int = 8
 
     private let serialQueue: DispatchSerialQueue
     private let connection: SQLiteConnection

@@ -56,6 +56,46 @@ struct LocalAndSMBTests {
         }
     }
 
+    @Test("Conditional directory cleanup preserves newly populated directories and only unlinks metadata files")
+    func conditionalDirectoryCleanup() async throws {
+        let (root, backend) = try makeTempLocal(["/dir/.DS_Store": 1, "/nested/Thumbs.db/keep.mkv": 1])
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(try await backend.list("/dir").count == 1)
+        try await backend.write("/dir/new.mkv", bytes: Data([1]))
+        #expect(try await !backend.removeDirectoryIfEmpty("/dir", removingSystemFiles: true))
+        #expect(try await backend.exists("/dir/new.mkv"))
+        #expect(try await !backend.removeDirectoryIfEmpty("/nested", removingSystemFiles: true))
+        #expect(try await backend.exists("/nested/Thumbs.db/keep.mkv"))
+        try await backend.remove(dir: "/dir", names: ["new.mkv"])
+        #expect(try await !backend.removeDirectoryIfEmpty("/dir", removingSystemFiles: false))
+        #expect(try await backend.removeDirectoryIfEmpty("/dir", removingSystemFiles: true))
+        #expect(try await !backend.exists("/dir"))
+        #expect(try await !backend.removeDirectoryIfEmpty("/", removingSystemFiles: true))
+    }
+
+    @Test("Concurrent moves to one target preserve all source payloads")
+    func concurrentExclusiveRename() async throws {
+        let sourceNames = (1...16).map { "/source-\($0)" }
+        let (root, backend) = try makeTempLocal(Dictionary(uniqueKeysWithValues: sourceNames.enumerated().map { ($1, $0 + 1) }))
+        defer { try? FileManager.default.removeItem(at: root) }
+        let successes = try await withThrowingTaskGroup(of: Int.self) { group in
+            for path in sourceNames {
+                group.addTask {
+                    do {
+                        try await backend.atomicRelocate(from: path, to: "/target")
+                        return 1
+                    } catch let error as StorageError where error.code == .alreadyExists {
+                        return 0
+                    }
+                }
+            }
+            return try await group.reduce(0, +)
+        }
+        #expect(successes == 1)
+        let entries = try await backend.list("/")
+        #expect(entries.map(\.size).sorted() == (1...16).map(Int64.init))
+    }
+
     @Test("LocalBackend supports case-only rename on APFS for files and directories")
     func localCaseOnlyRename() async throws {
         let (dir, be) = try makeTempLocal([
@@ -342,6 +382,47 @@ struct LocalAndSMBTests {
                 credentials: creds
             ) is SMBBackend
         )
+    }
+
+    @Test("Redirected downloads preserve Range and keep credentials within their origin")
+    func downloadRedirectHeaders() throws {
+        let origin = URL(string: "https://files.example/media")!
+        var request = URLRequest(url: origin)
+        request.setValue("bytes=1-4", forHTTPHeaderField: "Range")
+        request.setValue("test", forHTTPHeaderField: "Authorization")
+        request.setValue("test", forHTTPHeaderField: "Cookie")
+        request.setValue("test", forHTTPHeaderField: "X-Provider-Key")
+        let local = try #require(URLSessionStorageTransport.redirectRequest(
+            request, to: URL(string: "https://FILES.example:443/next")!, status: 302
+        ))
+        #expect(local.allHTTPHeaderFields == request.allHTTPHeaderFields)
+        for url in ["https://cdn.example/file", "https://nas.local/file", "https://files.example:444/file", "http://files.example/file"] {
+            let target = URL(string: url)!
+            let redirected = try #require(URLSessionStorageTransport.redirectRequest(local, to: target, status: 302))
+            let final = try #require(URLSessionStorageTransport.redirectRequest(redirected, to: target.appendingPathComponent("next"), status: 302))
+            #expect(final.value(forHTTPHeaderField: "Range") == "bytes=1-4")
+            #expect(final.allHTTPHeaderFields?.count == 1)
+        }
+        #expect(resolveValidURL("file:///tmp/example", relativeTo: origin) == nil)
+    }
+
+    @Test("Cross-origin redirects cannot replay request bodies")
+    func uploadRedirectBody() throws {
+        let origin = URL(string: "https://files.example/upload")!
+        let other = URL(string: "https://other.example/upload")!
+        var request = URLRequest(url: origin)
+        request.httpMethod = "PUT"
+        request.httpBody = Data([1, 2, 3])
+        request.setValue("test", forHTTPHeaderField: "Password")
+        for status in [307, 308] {
+            #expect(URLSessionStorageTransport.redirectRequest(request, to: other, status: status) == nil)
+            let same = try #require(URLSessionStorageTransport.redirectRequest(request, to: origin, status: status))
+            #expect(same.httpBody == request.httpBody)
+        }
+        let read = try #require(URLSessionStorageTransport.redirectRequest(request, to: other, status: 303))
+        #expect(read.httpMethod == "GET")
+        #expect(read.httpBody == nil)
+        #expect(read.value(forHTTPHeaderField: "Password") == nil)
     }
 
     @Test("URLSessionStorageTransport preserves Authorization and Range across LAN redirects")

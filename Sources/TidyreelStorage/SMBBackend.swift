@@ -446,6 +446,13 @@ public actor SMBBackend: RangeReadableBackend {
         }
     }
 
+    public func removeDirectoryIfEmpty(_ dir: String, removingSystemFiles: Bool) async throws -> Bool {
+        try validateSmbPath(dir)
+        return try await withMountedDelegate { delegate in
+            try await delegate.removeDirectoryIfEmpty(dir, removingSystemFiles: removingSystemFiles)
+        }
+    }
+
     public func remove(dir: String, names: [String]) async throws {
         try validateSmbPath(dir)
         for name in names {

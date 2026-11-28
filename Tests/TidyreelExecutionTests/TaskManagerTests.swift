@@ -377,6 +377,10 @@ private actor GatedBatchHistory: HistoryStore {
 
     func setHold(_ v: Bool) { hold = v }
 
+    func saveWrittenDigest(_ digest: String, batch: BatchId, op: OpId) async throws {
+        try await inner.saveWrittenDigest(digest, batch: batch, op: op)
+    }
+
     func beginBatch(task: TaskId, connection: ConnectionId, ops: [RenameOp]) async throws -> BatchId {
         try await inner.beginBatch(task: task, connection: connection, ops: ops)
     }

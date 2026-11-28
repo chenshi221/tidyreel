@@ -148,14 +148,10 @@ func resolveValidURL(_ raw: String, relativeTo base: URL, escapeHash: Bool = fal
     if trimmed.isEmpty { return nil }
     let encoded = percentEncodeLooseURL(trimmed, escapeHash: escapeHash)
     guard let comps = URLComponents(string: encoded) else { return nil }
-    if let scheme = comps.scheme, !scheme.isEmpty {
-        // An absolute http(s) URL must have a valid non-empty host.
-        if (scheme.lowercased() == "http" || scheme.lowercased() == "https"),
-           (comps.host == nil || comps.host?.isEmpty == true) {
-            return nil
-        }
-    }
-    return comps.url(relativeTo: base)?.absoluteURL
+    guard let url = comps.url(relativeTo: base)?.absoluteURL,
+          let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
+          url.host?.isEmpty == false else { return nil }
+    return url
 }
 
 func parseRangeHeader(_ value: String?) -> (start: Int64, length: Int)? {

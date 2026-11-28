@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import TidyreelModels
 
@@ -277,116 +278,6 @@ internal final class EnsuredDirsBox: @unchecked Sendable {
     }
 }
 
-private final class LockedDownloadTaskBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var task: URLSessionDataTask?
-    private var cancelled = false
-
-    func set(_ dataTask: URLSessionDataTask) -> Bool {
-        lock.withLock {
-            if cancelled { return true }
-            task = dataTask
-            return false
-        }
-    }
-
-    func cancel() {
-        let toCancel: URLSessionDataTask? = lock.withLock {
-            cancelled = true
-            let t = task
-            task = nil
-            return t
-        }
-        toCancel?.cancel()
-    }
-}
-
-private final class CappedDownloadDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
-    private let lock = NSLock()
-    private let url: URL
-    private let maxBytes: Int
-    private var buffer = Data()
-    private var continuation: CheckedContinuation<Data, any Error>?
-    private var finished = false
-
-    init(url: URL, maxBytes: Int, continuation: CheckedContinuation<Data, any Error>) {
-        self.url = url
-        self.maxBytes = maxBytes
-        self.continuation = continuation
-    }
-
-    func cancelBeforeResume() {
-        finish(.failure(CancellationError()))
-    }
-
-    private func finish(_ result: Result<Data, any Error>) {
-        let cont: CheckedContinuation<Data, any Error>? = lock.withLock {
-            guard !finished else { return nil }
-            finished = true
-            let c = continuation
-            continuation = nil
-            return c
-        }
-        cont?.resume(with: result)
-    }
-
-    func urlSession(
-        _ session: URLSession,
-        dataTask: URLSessionDataTask,
-        didReceive response: URLResponse,
-        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
-    ) {
-        if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-            let code: StorageErrorCode
-            switch http.statusCode {
-            case 404: code = .notFound
-            case 429: code = .rateLimited
-            case 401, 403: code = .unauthorized
-            default: code = .network
-            }
-            completionHandler(.cancel)
-            finish(.failure(StorageError(code, "下载 \(url.absoluteString)：HTTP \(http.statusCode)")))
-            return
-        }
-        if response.expectedContentLength > Int64(maxBytes) {
-            completionHandler(.cancel)
-            finish(.failure(StorageError(.other, "下载 \(url.absoluteString)：文件过大（超过 32 MiB 限制）")))
-            return
-        }
-        lock.withLock {
-            if response.expectedContentLength > 0 {
-                buffer.reserveCapacity(min(Int(response.expectedContentLength), maxBytes))
-            }
-        }
-        completionHandler(.allow)
-    }
-
-    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        let exceeded = lock.withLock { () -> Bool in
-            if finished { return true }
-            if data.count > maxBytes - buffer.count {
-                buffer.removeAll(keepingCapacity: false)
-                return true
-            }
-            buffer.append(data)
-            return false
-        }
-        if exceeded {
-            dataTask.cancel()
-            finish(.failure(StorageError(.other, "下载 \(url.absoluteString)：文件过大（超过 32 MiB 限制）")))
-        }
-    }
-
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        if let error {
-            finish(.failure(StorageError(.network, "下载 \(url.absoluteString)：\(error.localizedDescription)")))
-        } else {
-            let resultData = lock.withLock { buffer }
-            finish(.success(resultData))
-        }
-    }
-}
-
 internal final class PrelistedBox: @unchecked Sendable {
     private let lock = NSLock()
     private var map: [String: Set<String>]
@@ -430,9 +321,9 @@ public final class DefaultExecutor: Executor, Sendable {
         min(16, max(1, concurrencyProvider()))
     }
 
-    internal func waitForSettled() async {
+    internal func waitForSettled(owner: ExecutionOwner? = nil) async {
         while true {
-            let jobs = activeJobs.snapshot()
+            let jobs = activeJobs.snapshot(owner: owner)
             if jobs.isEmpty { return }
             for job in jobs {
                 await job.value
@@ -452,28 +343,12 @@ public final class DefaultExecutor: Executor, Sendable {
         return URLSession(configuration: config)
     }()
 
-    private static let maxDownloadBytes = 32 * 1024 * 1024
+    static func writtenDigest(_ data: Data) -> String {
+        Data(SHA256.hash(data: data)).base64EncodedString()
+    }
 
     private static func defaultFetchUrl(_ url: URL) async throws -> Data {
-        let taskBox = LockedDownloadTaskBox()
-        return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                let dataTask = downloadSession.dataTask(with: url)
-                let delegate = CappedDownloadDelegate(
-                    url: url,
-                    maxBytes: maxDownloadBytes,
-                    continuation: continuation
-                )
-                dataTask.delegate = delegate
-                if taskBox.set(dataTask) {
-                    delegate.cancelBeforeResume()
-                } else {
-                    dataTask.resume()
-                }
-            }
-        } onCancel: {
-            taskBox.cancel()
-        }
+        try await ArtworkDownload.fetchBytes(url, session: downloadSession)
     }
 
     private func fetchWithRetry(_ urlString: String) async throws -> Data {
@@ -527,7 +402,7 @@ public final class DefaultExecutor: Executor, Sendable {
             }
         }
         let ops = Self.ordered(plan.ops.filter(\.selected))
-        return makeStream { cancelFlag, continuation in
+        return makeStream(owner: .task(task)) { cancelFlag, continuation in
             let batch = try await self.history.beginBatch(task: task, connection: connection, ops: ops)
             try await self.forward(
                 ops: ops,
@@ -546,7 +421,7 @@ public final class DefaultExecutor: Executor, Sendable {
         batch: BatchId,
         backend: any StorageBackend
     ) -> AsyncThrowingStream<ExecProgress, any Error> {
-        makeStream { cancelFlag, continuation in
+        makeStream(owner: .batch(batch)) { cancelFlag, continuation in
             let records = try await self.history.records(batch: batch)
             let doneFolders = records
                 .filter { $0.status == .done && $0.op.phase == .folders && $0.op.kind == .relocate }
@@ -578,6 +453,7 @@ public final class DefaultExecutor: Executor, Sendable {
     // MARK: - Stream Driver
 
     internal func makeStream(
+        owner: ExecutionOwner,
         _ body: @escaping @Sendable (
             _ cancelFlag: CancellationFlag,
             _ continuation: AsyncThrowingStream<ExecProgress, any Error>.Continuation
@@ -595,7 +471,7 @@ public final class DefaultExecutor: Executor, Sendable {
                     continuation.finish(throwing: error)
                 }
             }
-            activeJobs.register(jobId, task: worker)
+            activeJobs.register(jobId, owner: owner, task: worker)
             continuation.onTermination = { _ in
                 cancelFlag.cancel()
             }
@@ -764,6 +640,7 @@ public final class DefaultExecutor: Executor, Sendable {
                         try await self.apply(
                             be: be,
                             op: op,
+                            writeBatch: batch,
                             resuming: resuming || retry,
                             srcTaken: state.isTaken(op.src),
                             ensuredDirs: ensuredDirs
@@ -942,6 +819,7 @@ public final class DefaultExecutor: Executor, Sendable {
     internal func apply(
         be: any StorageBackend,
         op: RenameOp,
+        writeBatch: BatchId? = nil,
         resuming: Bool,
         srcTaken: Bool,
         ensuredDirs: EnsuredDirsBox? = nil
@@ -1010,6 +888,9 @@ public final class DefaultExecutor: Executor, Sendable {
                 bytes = Data(op.src.dropFirst(writeTextPrefix.count).utf8)
             } else {
                 bytes = try await fetchWithRetry(op.src)
+            }
+            if let writeBatch {
+                try await history.saveWrittenDigest(Self.writtenDigest(bytes), batch: writeBatch, op: op.id)
             }
             try await be.write(op.dst, bytes: bytes)
 

@@ -20,7 +20,7 @@ esac
 if [ "$mode" = "release" ]; then
   swift build -c "$mode" --arch arm64 --product tidyreel -Xswiftc -Osize
 else
-  swift build -c "$mode" --arch arm64 --product tidyreel
+  tool/swift_debug.sh build --product tidyreel
 fi
 
 if [ -x ".build/arm64-apple-macosx/$mode/tidyreel" ]; then

@@ -14,5 +14,5 @@ swift_build=$(sed -n 's/^    public static let appBuild = \(.*\)$/\1/p' Sources/
   exit 1
 }
 
-swift build --product tidyreel -Xswiftc -warnings-as-errors --explicit-target-dependency-import-check error
-swift test --parallel -Xswiftc -warnings-as-errors --explicit-target-dependency-import-check error
+tool/swift_debug.sh build --product tidyreel
+tool/swift_debug.sh test --parallel

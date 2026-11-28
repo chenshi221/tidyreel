@@ -17,6 +17,8 @@ public protocol StorageBackend: Sendable {
     func rename(_ path: String, newName: String) async throws
     func renameMany(_ dir: String, names: [String: String]) async throws
     func move(srcDir: String, dstDir: String, names: [String]) async throws
+    /// Returns true only when the directory was removed. Backends without a conditional delete retain it.
+    func removeDirectoryIfEmpty(_ dir: String, removingSystemFiles: Bool) async throws -> Bool
     func remove(dir: String, names: [String]) async throws
     func exists(_ path: String) async throws -> Bool
     func read(_ path: String) async throws -> Data
@@ -35,6 +37,8 @@ public extension StorageBackend {
     func list(_ dir: String) async throws -> [RemoteEntry] {
         try await list(dir, refresh: false)
     }
+
+    func removeDirectoryIfEmpty(_ dir: String, removingSystemFiles: Bool) async throws -> Bool { false }
 
     var supportsServerBatching: Bool { false }
     var supportsAtomicRelocate: Bool { false }
@@ -151,6 +155,7 @@ public extension Planner {
 }
 
 public protocol HistoryStore: Sendable {
+    func saveWrittenDigest(_ digest: String, batch: BatchId, op: OpId) async throws
     func beginBatch(task: TaskId, connection: ConnectionId, ops: [RenameOp]) async throws -> BatchId
     func mark(batch: BatchId, op: OpId, status: OpStatus, error: String?) async throws
     func markBatch(batch: BatchId, updates: [(op: OpId, status: OpStatus, error: String?)]) async throws

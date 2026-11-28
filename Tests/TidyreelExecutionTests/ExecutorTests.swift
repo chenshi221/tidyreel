@@ -112,6 +112,10 @@ private actor CountingHistoryStore: HistoryStore {
         markBatchCalls = 0
     }
 
+    func saveWrittenDigest(_ digest: String, batch: BatchId, op: OpId) async throws {
+        try await inner.saveWrittenDigest(digest, batch: batch, op: op)
+    }
+
     func beginBatch(task: TaskId, connection: ConnectionId, ops: [RenameOp]) async throws -> BatchId {
         try await inner.beginBatch(task: task, connection: connection, ops: ops)
     }
@@ -189,6 +193,33 @@ private final class CachedBackend: StorageBackend, @unchecked Sendable {
 
 @Suite("DefaultExecutor Tests")
 struct ExecutorTests {
+    @Test("Settling a finished task does not wait for a different task blocked on storage")
+    func independentExecutionWorkers() async throws {
+        let executor = makeExecutor(MemoryHistoryStore())
+        let entered = AsyncGate()
+        let release = AsyncGate()
+        let slow = executor.makeStream(owner: .task("slow")) { _, _ in
+            entered.open()
+            await release.wait()
+        }
+        let consumer = Task { try await collectStream(slow) }
+        await entered.wait()
+        // Release a broken global wait too, so a regression fails without hanging the suite.
+        let timedOut = LockedBox(false)
+        let timeout = Task {
+            do { try await Task.sleep(for: .seconds(3)) } catch { return }
+            timedOut.value = true
+            release.open()
+        }
+        let fast = executor.makeStream(owner: .task("fast")) { _, _ in }
+        _ = try await collectStream(fast)
+        await executor.waitForSettled(owner: .task("fast"))
+        #expect(!timedOut.value)
+        timeout.cancel()
+        release.open()
+        _ = try await consumer.value
+    }
+
     @Test("Happy path runs files, then folders, then cleanup")
     func happyPathPhaseOrder() async throws {
         let history = MemoryHistoryStore()
@@ -392,6 +423,36 @@ struct ExecutorTests {
         #expect(statusCounts(try await history2.records(batch: b2)) == [.done: 1])
     }
 
+    @Test("Retrying an interrupted write undo keeps the replacement at the original path")
+    func interruptedWriteUndo() async throws {
+        let history = MemoryHistoryStore()
+        let fs = MemoryStorageBackend()
+        let executor = makeExecutor(history)
+        let op = RenameOp(id: idGen.next(), kind: .write, phase: .cleanup,
+                          src: "\(writeTextPrefix)original", dst: "/poster.nfo")
+        _ = try await collectStream(executor.execute(task: testTask, connection: testConn,
+                                                     plan: RenamePlan(ops: [op]), backend: fs))
+        let batch = try await firstBatch(history)
+        let interrupted = HookBackend(fs) { method, _ in
+            if method == "remove" {
+                try await fs.write(op.dst, bytes: Data("replacement".utf8))
+                throw StorageError(.other, "interrupted")
+            }
+        }
+        _ = try await collectStream(executor.undo(batch: batch, backend: interrupted))
+        #expect(try await history.records(batch: batch).first?.status == .done)
+        _ = try await collectStream(executor.undo(batch: batch, backend: fs))
+        #expect(await fs.textOf(op.dst) == "replacement")
+        #expect(await fs.allFilePaths() == [op.dst])
+        #expect(try await history.records(batch: batch).first?.status == .undone)
+
+        let legacy = try await history.beginBatch(task: testTask, connection: testConn, ops: [op])
+        try await history.mark(batch: legacy, op: op.id, status: .done)
+        _ = try await collectStream(executor.undo(batch: legacy, backend: fs))
+        #expect(await fs.textOf(op.dst) == "replacement")
+        #expect(try await history.records(batch: legacy).first?.status == .skipped)
+    }
+
     @Test("Write ops create text and downloaded files; overwrite swaps safely; undo behaves safely")
     func writeAndOverwriteSafety() async throws {
         let history = MemoryHistoryStore()
@@ -434,6 +495,15 @@ struct ExecutorTests {
         _ = try await collectStream(ex.undo(batch: b, backend: fs))
         #expect(!(try await fs.exists("/d/Show.S01/tvshow.nfo")))
         #expect(!(try await fs.exists("/d/Show.S01/poster.jpg")))
+
+        let modified = writeOp("/d/user-edited.nfo", "\(writeTextPrefix)original")
+        _ = try await collectStream(ex.execute(task: testTask, connection: testConn, plan: RenamePlan(ops: [modified]), backend: fs))
+        try await fs.remove(dir: "/d", names: ["user-edited.nfo"])
+        try await fs.write(modified.dst, bytes: Data("user edit".utf8))
+        let modifiedBatch = try await firstBatch(history)
+        _ = try await collectStream(ex.undo(batch: modifiedBatch, backend: fs))
+        #expect(await fs.textOf(modified.dst) == "user edit")
+        #expect(try await history.records(batch: modifiedBatch).first?.status == .skipped)
 
         // Overwrite: true backs up original before swap and undo skips deletion
         let fOver = MemoryStorageBackend()

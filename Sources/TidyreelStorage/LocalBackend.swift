@@ -370,7 +370,7 @@ public final class LocalBackend: RangeReadableBackend, Sendable {
         }
 
         try io(from) {
-            if Darwin.rename(src, dst) == 0 {
+            if Darwin.renamex_np(src, dst, UInt32(RENAME_EXCL)) == 0 {
                 if isFoldedSame {
                     let parentDir = (dst as NSString).deletingLastPathComponent
                     let dstName = (dst as NSString).lastPathComponent
@@ -380,12 +380,12 @@ public final class LocalBackend: RangeReadableBackend, Sendable {
                     }
                     // Underlying filesystem (e.g. certain SMB shares) ignored in-place case rename; hop via temp name.
                     let tmp = (parentDir as NSString).appendingPathComponent(".tidyreel-case-\(UUID().uuidString)")
-                    if Darwin.rename(src, tmp) != 0 {
+                    if Darwin.renamex_np(src, tmp, UInt32(RENAME_EXCL)) != 0 {
                         try posixThrow(errno, virtualPath: from, op: "rename")
                     }
-                    if Darwin.rename(tmp, dst) != 0 {
+                    if Darwin.renamex_np(tmp, dst, UInt32(RENAME_EXCL)) != 0 {
                         let err = errno
-                        _ = Darwin.rename(tmp, src)
+                        _ = Darwin.renamex_np(tmp, src, UInt32(RENAME_EXCL))
                         try posixThrow(err, virtualPath: from, op: "rename")
                     }
                 }
@@ -396,12 +396,12 @@ public final class LocalBackend: RangeReadableBackend, Sendable {
             if isFoldedSame && (renameErr == EEXIST || renameErr == EINVAL) {
                 let parentDir = (dst as NSString).deletingLastPathComponent
                 let tmp = (parentDir as NSString).appendingPathComponent(".tidyreel-case-\(UUID().uuidString)")
-                if Darwin.rename(src, tmp) != 0 {
+                if Darwin.renamex_np(src, tmp, UInt32(RENAME_EXCL)) != 0 {
                     try posixThrow(errno, virtualPath: from, op: "rename")
                 }
-                if Darwin.rename(tmp, dst) != 0 {
+                if Darwin.renamex_np(tmp, dst, UInt32(RENAME_EXCL)) != 0 {
                     let err = errno
-                    _ = Darwin.rename(tmp, src)
+                    _ = Darwin.renamex_np(tmp, src, UInt32(RENAME_EXCL))
                     try posixThrow(err, virtualPath: from, op: "rename")
                 }
                 return
@@ -502,6 +502,35 @@ public final class LocalBackend: RangeReadableBackend, Sendable {
             for name in names {
                 try self.relocate(from: posixJoin(srcDir, name), to: posixJoin(dstDir, name))
             }
+        }
+    }
+
+    public func removeDirectoryIfEmpty(_ dir: String, removingSystemFiles: Bool) async throws -> Bool {
+        let real = try resolveRealPath(dir)
+        guard real != rootPath else { return false }
+        return try await LocalIOExecutor.shared.run {
+            // Try rmdir first. Its emptiness check and removal are one filesystem operation.
+            if Darwin.rmdir(real) == 0 { return true }
+            let firstError = errno
+            guard firstError == ENOTEMPTY || firstError == EEXIST else {
+                try self.posixThrow(firstError, virtualPath: dir, op: "rmdir")
+            }
+            guard removingSystemFiles else { return false }
+            let fd = Darwin.open(real, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+            guard fd >= 0 else { try self.posixThrow(errno, virtualPath: dir, op: "open") }
+            defer { Darwin.close(fd) }
+            let names = try self.io(dir) { try FileManager.default.contentsOfDirectory(atPath: real) }
+            guard names.allSatisfy({ ignorableEmptyDirFiles.contains($0.lowercased()) }) else { return false }
+            for name in names {
+                // unlinkat without AT_REMOVEDIR cannot recursively delete a replacement directory.
+                if unlinkat(fd, name, 0) != 0 && errno != ENOENT {
+                    if errno == EISDIR || errno == EPERM { return false }
+                    try self.posixThrow(errno, virtualPath: dir, op: "unlinkat")
+                }
+            }
+            if Darwin.rmdir(real) == 0 { return true }
+            if errno == ENOTEMPTY || errno == EEXIST { return false }
+            try self.posixThrow(errno, virtualPath: dir, op: "rmdir")
         }
     }
 
