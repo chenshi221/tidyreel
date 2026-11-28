@@ -7,6 +7,50 @@ import TidyreelFakes
 
 @Suite("Integrated AppStore, SizeScanner & HealthScanner Tests")
 struct AppIntegrationTests {
+    @Test("Health deletion stops on WAL failure and leaves unattempted paths intact")
+    @MainActor
+    func journalHealthDeletion() async throws {
+        let fs = MemoryStorageBackend(initialSizes: ["/a": 1, "/b": 2, "/c": 3])
+        try await fs.mkdirs("/empty")
+        let entries = try await fs.list("/").filter { !$0.isDir }
+        let db = try SQLiteDatabase.inMemory()
+        let history = SQLiteHistoryStore(db: db)
+        var removed: [String] = []
+        func confirm() async throws {
+            try await HealthDeletion.run(
+                confirmation: UUID(), connection: "c", root: "/",
+                files: entries.map { ($0.path, $0.deleteIdentity) }, directories: ["/empty", "/"],
+                history: history, backend: fs, willAttempt: { _ in }, didRemove: { removed.append($0.src) }
+            )
+        }
+
+        try await db.executeScript("""
+            CREATE TRIGGER fail_intent BEFORE INSERT ON history_records WHEN NEW.src = '/b'
+            BEGIN SELECT RAISE(ABORT, 'WAL insert failed'); END;
+            """)
+        await #expect(throws: SQLiteError.self) { try await confirm() }
+        #expect(removed.isEmpty)
+        #expect(try await history.batches().isEmpty)
+        #expect(try await fs.exists("/a"))
+
+        try await db.executeScript("""
+            DROP TRIGGER fail_intent;
+            CREATE TRIGGER fail_result BEFORE UPDATE ON history_records WHEN NEW.src = '/b'
+            BEGIN SELECT RAISE(ABORT, 'WAL update failed'); END;
+            """)
+        await #expect(throws: SQLiteError.self) { try await confirm() }
+        #expect(removed == ["/a", "/b"])
+        let batch = try #require(try await history.batches().first)
+        let records = try await history.records(batch: batch.id)
+        #expect(records.map(\.op.src) == ["/a", "/b", "/c", "/empty"])
+        #expect(records.map(\.status) == [.done, .pending, .pending, .pending])
+        #expect(records.last?.op.kind == .healthDeleteEmptyDirectory)
+        #expect(try await !fs.exists("/b"))
+        #expect(try await fs.exists("/c"))
+        #expect(try await fs.exists("/empty"))
+        await db.close()
+    }
+
     @Test("Duplicate cleanup verifies a surviving copy against a fresh listing")
     func retainOriginalDuplicateVersion() async throws {
         let fs = MemoryStorageBackend(initialSizes: ["/keeper": 1])

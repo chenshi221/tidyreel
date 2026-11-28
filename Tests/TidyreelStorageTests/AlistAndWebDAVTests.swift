@@ -458,6 +458,26 @@ struct AlistAndWebDAVTests {
         await expectStorageError(.other) { try await backend.removeScannedFile("/ad.txt", identity: identity) }
     }
 
+    @Test("A lost DELETE response requires a new confirmation before another attempt")
+    func noAutomaticDeleteRetry() async throws {
+        actor Attempts {
+            var count = 0
+            func record() { count += 1 }
+        }
+        let attempts = Attempts()
+        let transport = ClosureHTTPTransport { _, _ in
+            await attempts.record()
+            throw StorageError(.network, "lost response")
+        }
+        let dav = WebDAVBackend(config: webdavCfg(), credentials: Credentials(), transport: transport)
+        let backend = ThrottledBackend(testing: dav, minIntervalMs: { 0 }, backoffMs: [0],
+                                       sleepMs: { _ in }, nowMs: { 0 })
+        await expectStorageError(.network) {
+            try await backend.removeScannedFile("/a", identity: "\"original\"")
+        }
+        #expect(await attempts.count == 1)
+    }
+
     @Test("WebDAVBackend readRange, cross-origin redirect auth stripping, 307 PUT redirect, and traversal checks")
     func webdavReadRangeRedirectsAndValidation() async throws {
         final class DavRangeBox: @unchecked Sendable {

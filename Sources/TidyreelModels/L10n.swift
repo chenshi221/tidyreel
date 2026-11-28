@@ -112,6 +112,9 @@ public struct AppL10n: Equatable, Sendable {
 }
 
 private let exactCoreMessages: [String: String] = [
+    "无法确认仍有保留副本，已停止删除": "Could not verify a remaining copy. Deletion stopped.",
+    "体检删除需要重新确认": "Confirm these health scan deletions again.",
+    "目录非空或存储端不支持安全删除": "The folder is not empty or the storage service cannot safely delete it.",
     "删除计划已变更，请重新核对并确认": "The files selected for deletion have changed. Review and confirm them again.",
     "正在等待开始": "Waiting to start",
     "正在导入文件": "Importing files",

@@ -430,7 +430,7 @@ extension DefaultExecutor {
         ensuredDirs: EnsuredDirsBox? = nil
     ) async throws -> String? {
         switch op.kind {
-        case .delete:
+        case .delete, .healthDeleteFile, .healthDeleteEmptyDirectory:
             return "删除无法撤销"
         case .mkdir:
             if !(try await be.exists(op.dst)) { return nil }

@@ -1002,7 +1002,7 @@ private struct OpRecordRow: View {
         case .mkdir:
             let newFolder = l10n.tr("新建文件夹", "New folder")
             return (newFolder, TasksFormatting.lastPathComponent(op.dst), newFolder, op.dst)
-        case .delete:
+        case .delete, .healthDeleteFile, .healthDeleteEmptyDirectory:
             return (TasksFormatting.lastPathComponent(op.src), l10n.delete, op.src, l10n.delete)
         case .write:
             if op.src.hasPrefix(writeTextPrefix) {

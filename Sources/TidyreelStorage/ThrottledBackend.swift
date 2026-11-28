@@ -63,6 +63,7 @@ public actor ThrottledBackend: RangeReadableBackend {
     }
 
     private func throttledCall<T: Sendable>(
+        allowRetry: Bool = true,
         _ operation: () async throws -> T
     ) async throws -> T {
         var attempt = 0
@@ -72,7 +73,7 @@ public actor ThrottledBackend: RangeReadableBackend {
                 return try await operation()
             } catch let err as StorageError {
                 let retryable = err.code == .rateLimited || err.code == .network || err.code == .busy
-                if !retryable || attempt >= backoffMs.count {
+                if !allowRetry || !retryable || attempt >= backoffMs.count {
                     if err.code == .rateLimited {
                         let cooldownDelay = Int64(backoffMs.last ?? 1000)
                         let until = nowMs() + cooldownDelay
@@ -168,11 +169,11 @@ public actor ThrottledBackend: RangeReadableBackend {
     }
 
     public func removeScannedFile(_ path: String, identity: String?) async throws {
-        try await throttledCall { try await inner.removeScannedFile(path, identity: identity) }
+        try await throttledCall(allowRetry: false) { try await inner.removeScannedFile(path, identity: identity) }
     }
 
     public func removeDirectoryIfEmpty(_ dir: String, removingSystemFiles: Bool) async throws -> Bool {
-        try await throttledCall {
+        try await throttledCall(allowRetry: false) {
             try await inner.removeDirectoryIfEmpty(dir, removingSystemFiles: removingSystemFiles)
         }
     }

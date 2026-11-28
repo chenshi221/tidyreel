@@ -141,7 +141,7 @@ internal final class ExecutionThrottledBackend: StorageBackend, RangeReadableBac
         }
     }
 
-    private func call<T>(_ fn: () async throws -> T) async throws -> T {
+    private func call<T>(allowRetry: Bool = true, _ fn: () async throws -> T) async throws -> T {
         var attempt = 0
         var ownCooldown: TimeInterval = 0
         while true {
@@ -150,7 +150,7 @@ internal final class ExecutionThrottledBackend: StorageBackend, RangeReadableBac
                 return try await fn()
             } catch let e as StorageError {
                 let retryable = e.code == .rateLimited || e.code == .network || e.code == .busy
-                if !retryable || attempt >= backoffMs.count {
+                if !allowRetry || !retryable || attempt >= backoffMs.count {
                     if e.code == .rateLimited {
                         _ = advanceCooldown(delayMs: backoffMs.last ?? 1000)
                     }
@@ -205,11 +205,11 @@ internal final class ExecutionThrottledBackend: StorageBackend, RangeReadableBac
     }
 
     func removeScannedFile(_ path: String, identity: String?) async throws {
-        try await call { try await inner.removeScannedFile(path, identity: identity) }
+        try await call(allowRetry: false) { try await inner.removeScannedFile(path, identity: identity) }
     }
 
     func removeDirectoryIfEmpty(_ dir: String, removingSystemFiles: Bool) async throws -> Bool {
-        try await call { try await inner.removeDirectoryIfEmpty(dir, removingSystemFiles: removingSystemFiles) }
+        try await call(allowRetry: false) { try await inner.removeDirectoryIfEmpty(dir, removingSystemFiles: removingSystemFiles) }
     }
 
     func remove(dir: String, names: [String]) async throws {

@@ -822,7 +822,7 @@ struct DetailPane: View {
         let iconName: String = {
             switch op.kind {
             case .mkdir: return "folder.badge.plus"
-            case .delete: return "trash"
+            case .delete, .healthDeleteFile, .healthDeleteEmptyDirectory: return "trash"
             case .relocate: return "arrow.right.square"
             case .write: return op.dst.lowercased().hasSuffix(".nfo") ? "doc.text" : "photo"
             }
@@ -842,7 +842,7 @@ struct DetailPane: View {
                     Text(l10n.tr("新建 \(op.dst)", "Create \(op.dst)"))
                         .font(.system(size: TidyreelTypeScale.body, weight: .medium))
                         .foregroundStyle(palette.text)
-                case .delete:
+                case .delete, .healthDeleteFile, .healthDeleteEmptyDirectory:
                     Text(l10n.tr("删除 \(op.src)", "Delete \(op.src)"))
                         .font(.system(size: TidyreelTypeScale.body, weight: .medium))
                         .foregroundStyle(palette.text)

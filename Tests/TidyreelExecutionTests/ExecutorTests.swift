@@ -303,6 +303,20 @@ struct ExecutorTests {
         #expect((try await history.records(batch: b)).isEmpty)
     }
 
+    @Test("An interrupted health confirmation cannot auto-resume through the organizer")
+    func healthBatchCannotResume() async throws {
+        let fs = MemoryStorageBackend(initialSizes: ["/a": 1])
+        let history = MemoryHistoryStore()
+        let op = RenameOp(id: "a", kind: .healthDeleteFile, phase: .cleanup,
+                          src: "/a", dst: "", deleteIdentity: "seed:/a")
+        let batch = try await history.beginBatch(task: "health-confirmation", connection: testConn, ops: [op])
+        await #expect(throws: TidyreelExecutionError.self) {
+            _ = try await collectStream(makeExecutor(history).resume(batch: batch, backend: fs))
+        }
+        #expect(try await fs.exists("/a"))
+        #expect(try await history.records(batch: batch).first?.status == .pending)
+    }
+
     @Test("Resume preserves replacements and files named by legacy delete records")
     func conditionalDeleteRecovery() async throws {
         let history = MemoryHistoryStore()

@@ -423,6 +423,9 @@ public final class DefaultExecutor: Executor, Sendable {
     ) -> AsyncThrowingStream<ExecProgress, any Error> {
         makeStream(owner: .batch(batch)) { cancelFlag, continuation in
             let records = try await self.history.records(batch: batch)
+            guard !records.contains(where: { $0.op.kind == .healthDeleteFile || $0.op.kind == .healthDeleteEmptyDirectory }) else {
+                throw TidyreelExecutionError.invalidState("体检删除需要重新确认")
+            }
             let doneFolders = records
                 .filter { $0.status == .done && $0.op.phase == .folders && $0.op.kind == .relocate }
                 .map(\.op)
@@ -838,6 +841,9 @@ public final class DefaultExecutor: Executor, Sendable {
         switch op.kind {
         case .mkdir:
             try await ensureDir(be, op.dst, ensuredDirs: ensuredDirs)
+
+        case .healthDeleteFile, .healthDeleteEmptyDirectory:
+            throw TidyreelExecutionError.invalidState("体检删除需要重新确认")
 
         case .delete:
             try await be.removeScannedFile(op.src, identity: op.deleteIdentity)

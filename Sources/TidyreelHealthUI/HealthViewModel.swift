@@ -427,15 +427,16 @@ public final class HealthSessionController {
 
         do {
             let backend = try store.backend(for: reportSnapshot.connection)
-            for copy in payload.copies where !copy.isDiscDir && !baseOf(copy.path).isEmpty {
-                guard try await HealthScannerActor.hasSurvivingCopy(payload.keepers, backend: backend) else {
-                    throw StorageError(.other, l10n.tr("无法确认仍有保留副本，已停止删除", "Could not verify a remaining copy. Deletion stopped."))
+            try await HealthDeletion.run(
+                confirmation: payload.id, connection: reportSnapshot.connection, root: reportSnapshot.rootDir,
+                files: payload.copies.map { ($0.path, $0.deleteIdentity) }, keepers: payload.keepers,
+                history: store.historyStore, backend: backend,
+                willAttempt: { affectedDirs.insert(normalizeDir(dirOf($0.src))) },
+                didRemove: { op in
+                    deletedPaths.insert(op.src)
+                    removedCount += 1
                 }
-                affectedDirs.insert(normalizeDir(dirOf(copy.path)))
-                try await backend.removeScannedFile(copy.path, identity: copy.deleteIdentity)
-                deletedPaths.insert(copy.path)
-                removedCount += 1
-            }
+            )
 
             if !affectedDirs.isEmpty {
                 await store.invalidateFolderStats(
@@ -610,34 +611,22 @@ public final class HealthSessionController {
         do {
             let backend = try store.backend(for: reportSnapshot.connection)
 
-            for file in files {
-                mutatedDirs.insert(normalizeDir(dirOf(file.path)))
-                try await backend.removeScannedFile(file.path, identity: file.deleteIdentity)
-                deletedFiles.insert(file.path)
-                filesRemovedCount += 1
-            }
-
-            // 2. Delete empty directories deepest-first after live re-verification
-            let protectedRoots: Set<String> = ["/", normalizeDir(reportSnapshot.rootDir)]
-            for dirItem in dirsDeepestFirst {
-                let normDir = normalizeDir(dirItem.path)
-                if protectedRoots.contains(normDir) { continue }
-                do {
-                    let parentDir = normalizeDir(dirOf(normDir))
-                    mutatedDirs.insert(parentDir)
-                    guard try await backend.removeDirectoryIfEmpty(normDir, removingSystemFiles: true) else { continue }
-                    mutatedDirs.insert(normDir)
-                    deletedDirs.insert(dirItem.path)
-                    deletedDirs.insert(normDir)
-                    dirsRemovedCount += 1
-                } catch let err as StorageError where err.code == .notFound {
-                    mutatedDirs.insert(normDir)
-                    mutatedDirs.insert(normalizeDir(dirOf(normDir)))
-                    deletedDirs.insert(dirItem.path)
-                    deletedDirs.insert(normDir)
-                    dirsRemovedCount += 1
+            try await HealthDeletion.run(
+                confirmation: payload.id, connection: reportSnapshot.connection, root: reportSnapshot.rootDir,
+                files: files.map { ($0.path, $0.deleteIdentity) }, directories: dirsDeepestFirst.map(\.path),
+                history: store.historyStore, backend: backend,
+                willAttempt: { mutatedDirs.insert(normalizeDir(dirOf($0.src))) },
+                didRemove: { op in
+                    if op.kind == .healthDeleteEmptyDirectory {
+                        mutatedDirs.insert(normalizeDir(op.src))
+                        deletedDirs.insert(op.src)
+                        dirsRemovedCount += 1
+                    } else {
+                        deletedFiles.insert(op.src)
+                        filesRemovedCount += 1
+                    }
                 }
-            }
+            )
 
             if !mutatedDirs.isEmpty {
                 await store.invalidateFolderStats(

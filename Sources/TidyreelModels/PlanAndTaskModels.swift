@@ -426,6 +426,8 @@ public enum OpKind: String, CaseIterable, Sendable {
     case mkdir
     case relocate
     case delete
+    case healthDeleteFile
+    case healthDeleteEmptyDirectory
     case write
 }
 

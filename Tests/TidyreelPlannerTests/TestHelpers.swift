@@ -566,6 +566,8 @@ func applyPlan(_ plan: RenamePlan, to backend: MemoryStorageBackend) async throw
                 try await backend.mkdirs(dstDir)
                 try await backend.move(srcDir: dirOf(cur), dstDir: dstDir, names: [name])
             }
+        case .healthDeleteFile, .healthDeleteEmptyDirectory:
+            throw StorageError(.other, "Health deletion requires confirmation")
         case .delete:
             try await backend.remove(dir: dirOf(op.src), names: [baseOf(op.src)])
         case .write:
