@@ -1549,15 +1549,15 @@ final class ReviewViewModel {
             activeSheet = .confirmPermanentDelete(paths: deletePaths)
             return
         }
-        await performRun(store: store, taskId: taskId)
+        await performRun(store: store, taskId: taskId, confirmedDeletePaths: [])
     }
 
-    func confirmPermanentDeleteAndRun(store: AppStore, taskId: TaskId) async {
+    func confirmPermanentDeleteAndRun(store: AppStore, taskId: TaskId, paths: [String]) async {
         activeSheet = nil
-        await performRun(store: store, taskId: taskId)
+        await performRun(store: store, taskId: taskId, confirmedDeletePaths: Set(paths))
     }
 
-    private func performRun(store: AppStore, taskId: TaskId) async {
+    private func performRun(store: AppStore, taskId: TaskId, confirmedDeletePaths: Set<String>) async {
         guard !isExecuting, pendingMutations == 0 else { return }
         isExecuting = true
         defer {
@@ -1566,13 +1566,14 @@ final class ReviewViewModel {
             }
         }
         do {
-            try await store.taskManager.run(taskId, onlyConfident: false)
+            try await store.taskManager.run(taskId, onlyConfident: false, confirmedDeletePaths: confirmedDeletePaths)
             if boundTaskId == taskId {
                 store.openTaskDetail(taskId)
             }
         } catch {
             if boundTaskId == taskId {
                 store.showToast(localizeCoreMessage(store.l10n, error.localizedDescription))
+                await load(store: store, taskId: taskId)
             }
         }
     }

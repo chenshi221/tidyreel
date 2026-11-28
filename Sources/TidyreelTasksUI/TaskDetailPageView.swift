@@ -14,8 +14,8 @@ private struct WorkSection: Identifiable, Equatable, Sendable {
     let id: String
     let match: Candidate?
     let fallbackTitle: String?
-    let records: [HistoryRecord]
-    let failedCount: Int
+    var records: [HistoryRecord]
+    var failedCount: Int
 }
 
 private struct DetailSnapshotResult: Sendable {
@@ -470,7 +470,7 @@ public struct TaskDetailPageView: View {
                                 canSingleUndo: canSingleUndo,
                                 isBusy: opBusy,
                                 onUndoOp: { opId in
-                                    undoSingleOp(opId)
+                                    undoSingleOp(opId, sectionId: section.id)
                                 },
                                 onCopyPath: { path in
                                     TasksFormatting.copyToPasteboard(path)
@@ -705,29 +705,31 @@ public struct TaskDetailPageView: View {
         }
     }
 
-    private func undoSingleOp(_ opId: OpId) {
+    private func undoSingleOp(_ opId: OpId, sectionId: String) {
+        guard let batch = summary?.batch else { return }
         let key = "\(taskId.value):\(opId.value)"
         guard busyTracker.tryAcquireKey(key) else { return }
         Task { @MainActor in
             defer { busyTracker.releaseKey(key) }
             do {
                 try await store.taskManager.undo(taskId, only: [opId])
-                let currentBatch = summary?.batch
-                let fetched = try await Self.fetchOffMainThread(
-                    taskId: taskId,
-                    batch: currentBatch,
-                    shouldLoadReview: true,
-                    existingReview: nil,
-                    taskManager: store.taskManager,
-                    historyStore: store.historyStore
-                )
-                review = fetched.review
-                records = fetched.records
-                workSections = fetched.workSections
-                hasDoneRelocate = fetched.hasDoneRelocate
-                reloadToken += 1
-                store.refreshTaskCardMeta(taskId)
-                store.showToast(l10n.tr("已撤销该操作", "Operation undone"))
+                guard let updated = try await store.historyStore.record(batch: batch, op: opId),
+                      summary?.batch == batch, lastReviewTaskId == taskId,
+                      let index = records.firstIndex(where: { $0.id == updated.id }),
+                      let section = workSections.firstIndex(where: { $0.id == sectionId }),
+                      let row = workSections[section].records.firstIndex(where: { $0.id == updated.id }) else { return }
+                let previous = records[index]
+                records[index] = updated
+                workSections[section].records[row] = updated
+                workSections[section].failedCount += (updated.status == .failed ? 1 : 0) - (previous.status == .failed ? 1 : 0)
+                if updated.op.kind == .relocate {
+                    hasDoneRelocate = records.contains { $0.op.kind == .relocate && $0.status == .done }
+                }
+                if updated.status == .undone {
+                    store.showToast(l10n.tr("已撤销该操作", "Operation undone"))
+                } else {
+                    store.showToast(TasksFormatting.localizedMessage(l10n, updated.error ?? l10n.tr("该操作尚未撤销", "Operation was not undone")))
+                }
             } catch {
                 store.showToast(TasksFormatting.readableError(error, l10n: l10n))
             }

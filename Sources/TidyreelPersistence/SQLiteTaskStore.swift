@@ -63,7 +63,7 @@ public final class SQLiteTaskStore: TaskStore, Sendable {
         id: TaskId,
         scan: ScanResult,
         decisions: [GroupId: GroupDecision],
-        unassignedDeletes: Set<String> = []
+        unassignedDeletes: [String: Bool] = [:]
     ) async throws {
         try await db.withConnection { conn in
             let payload: (scanBlob: Data, decisionsData: Data, unassignedDeletesData: Data?, cardMetaData: Data) = try autoreleasepool {
@@ -75,7 +75,7 @@ public final class SQLiteTaskStore: TaskStore, Sendable {
                 if unassignedDeletes.isEmpty {
                     unassignedDeletesData = nil
                 } else {
-                    unassignedDeletesData = try JSONSerialization.data(withJSONObject: unassignedDeletes.sorted())
+                    unassignedDeletesData = try JSONSerialization.data(withJSONObject: unassignedDeletes, options: .sortedKeys)
                 }
                 let cardMeta = TaskCardMeta.from(scan: scan, decisions: decisions)
                 let cardMetaData = try Self.encodeCardMeta(cardMeta)
@@ -121,7 +121,7 @@ public final class SQLiteTaskStore: TaskStore, Sendable {
     public func saveDecisions(
         id: TaskId,
         decisions: [GroupId: GroupDecision],
-        unassignedDeletes: Set<String>,
+        unassignedDeletes: [String: Bool],
         cardMeta: TaskCardMeta? = nil
     ) async throws {
         try await db.withConnection { conn in
@@ -132,7 +132,7 @@ public final class SQLiteTaskStore: TaskStore, Sendable {
                 if unassignedDeletes.isEmpty {
                     unassignedDeletesData = nil
                 } else {
-                    unassignedDeletesData = try JSONSerialization.data(withJSONObject: unassignedDeletes.sorted())
+                    unassignedDeletesData = try JSONSerialization.data(withJSONObject: unassignedDeletes, options: .sortedKeys)
                 }
                 let cardMetaData = try cardMeta.map(Self.encodeCardMeta)
                 return (decisionsData, unassignedDeletesData, cardMetaData)
@@ -527,11 +527,11 @@ public final class SQLiteTaskStore: TaskStore, Sendable {
         return (try? TidyreelCodecs.decisionsFromJson(raw)) ?? [:]
     }
 
-    private static func decodeUnassignedDeletes(_ data: Data?) -> Set<String> {
-        guard let data, !data.isEmpty,
-              let decoded = (try? JSONSerialization.jsonObject(with: data)) as? [Any] else {
-            return []
-        }
-        return Set(decoded.compactMap { $0 as? String })
+    private static func decodeUnassignedDeletes(_ data: Data?) -> [String: Bool] {
+        guard let data, let decoded = try? JSONSerialization.jsonObject(with: data) else { return [:] }
+        if let overrides = decoded as? [String: Bool] { return overrides }
+        // Older rows stored only explicitly selected deletions as an array.
+        let paths = (decoded as? [Any] ?? []).compactMap { $0 as? String }
+        return Dictionary(paths.map { ($0, true) }, uniquingKeysWith: { first, _ in first })
     }
 }

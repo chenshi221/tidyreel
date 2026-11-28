@@ -287,7 +287,7 @@ public final class SQLiteFolderStatsStore: FolderStatsCacheStore, Sendable {
                 } else {
                     mod = nil
                 }
-                out.append(RemoteEntry(path: p, name: n, isDir: isDir, size: size, modified: mod))
+                out.append(RemoteEntry(path: p, name: n, isDir: isDir, size: size, modified: mod, deleteIdentity: m["i"] as? String))
             }
             return out
         }

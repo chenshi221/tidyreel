@@ -148,6 +148,10 @@ final class HookBackend: StorageBackend, @unchecked Sendable {
         }
     }
 
+    func removeScannedFile(_ path: String, identity: String?) async throws {
+        try await record("remove", [dirOf(path), baseOf(path)]) { try await inner.removeScannedFile(path, identity: identity) }
+    }
+
     func remove(dir: String, names: [String]) async throws {
         try await record("remove", [dir] + names) { try await inner.remove(dir: dir, names: names) }
     }
@@ -181,6 +185,7 @@ final class AlistBackend: StorageBackend, @unchecked Sendable {
     func removeDirectoryIfEmpty(_ dir: String, removingSystemFiles: Bool) async throws -> Bool {
         try await hook.removeDirectoryIfEmpty(dir, removingSystemFiles: removingSystemFiles)
     }
+    func removeScannedFile(_ path: String, identity: String?) async throws { try await hook.removeScannedFile(path, identity: identity) }
     func remove(dir: String, names: [String]) async throws { try await hook.remove(dir: dir, names: names) }
     func exists(_ path: String) async throws -> Bool { try await hook.exists(path) }
     func read(_ path: String) async throws -> Data { try await hook.read(path) }

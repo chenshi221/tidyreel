@@ -167,6 +167,10 @@ public actor ThrottledBackend: RangeReadableBackend {
         }
     }
 
+    public func removeScannedFile(_ path: String, identity: String?) async throws {
+        try await throttledCall { try await inner.removeScannedFile(path, identity: identity) }
+    }
+
     public func removeDirectoryIfEmpty(_ dir: String, removingSystemFiles: Bool) async throws -> Bool {
         try await throttledCall {
             try await inner.removeDirectoryIfEmpty(dir, removingSystemFiles: removingSystemFiles)

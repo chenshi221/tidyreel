@@ -88,7 +88,7 @@ private actor CountingMediaProbe: MediaProbe {
 
 @Suite("SQLiteDatabase & Drift Schema Migrations")
 struct SQLiteDatabaseMigrationTests {
-    @Test("Fresh file database enables WAL, foreign_keys, tuning PRAGMAs, and creates v8 schema + indexes")
+    @Test("Fresh file database enables WAL, foreign_keys, tuning PRAGMAs, and creates v9 schema + indexes")
     func freshDatabasePragmasAndSchema() async throws {
         let dir = try makeTempDir("fresh-db")
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -96,7 +96,7 @@ struct SQLiteDatabaseMigrationTests {
         let dbURL = dir.appendingPathComponent("tidyreel.sqlite")
         let db = try SQLiteDatabase(url: dbURL)
 
-        #expect(try await db.schemaVersion() == 8)
+        #expect(try await db.schemaVersion() == SQLiteDatabase.currentSchemaVersion)
 
         let fkRows = try await db.query("PRAGMA foreign_keys")
         #expect(fkRows.first?.first == .integer(1))
@@ -143,7 +143,7 @@ struct SQLiteDatabaseMigrationTests {
         await db.close()
     }
 
-    @Test("Simulated Drift v5 tidyreel.sqlite upgrades cleanly to v8 moving scan_json to task_reviews")
+    @Test("Simulated Drift v5 tidyreel.sqlite upgrades cleanly to v9 moving scan_json to task_reviews")
     func upgradeFromSimulatedDriftV5Database() async throws {
         let dir = try makeTempDir("drift-v5-upgrade")
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -294,7 +294,7 @@ struct SQLiteDatabaseMigrationTests {
             """)
 
         let db = try SQLiteDatabase(path: dbPath)
-        #expect(try await db.schemaVersion() == 8)
+        #expect(try await db.schemaVersion() == SQLiteDatabase.currentSchemaVersion)
 
         // Verify redundant index was dropped and v7 indexes exist
         let indexNames = Set(
@@ -356,7 +356,7 @@ struct SQLiteDatabaseMigrationTests {
         let loadedReview = try #require(try await taskStore.loadReview(id: TaskId("T-v5")))
         #expect(loadedReview.scan == sampleScan)
         #expect(loadedReview.decisions == sampleDecisions)
-        #expect(loadedReview.unassignedDeletes == ["/下载/完成/ad.txt"])
+        #expect(loadedReview.unassignedDeletes == ["/下载/完成/ad.txt": true])
 
         // Verify loadCardMeta fallback decodes migrated blob and backfills tasks.card_meta_json
         let cardMetaMap = await taskStore.loadCardMeta(ids: [TaskId("T-v5")])
@@ -391,7 +391,7 @@ struct SQLiteDatabaseMigrationTests {
         await db.close()
     }
 
-    @Test("Simulated v6 database upgrades cleanly to v8 and migrates task reviews")
+    @Test("Simulated v6 database upgrades cleanly to v9 and migrates task reviews")
     func upgradeFromV6DatabaseToV7() async throws {
         let dir = try makeTempDir("v6-upgrade")
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -454,14 +454,14 @@ struct SQLiteDatabaseMigrationTests {
             """)
 
         let db = try SQLiteDatabase(path: dbPath)
-        #expect(try await db.schemaVersion() == 8)
+        #expect(try await db.schemaVersion() == SQLiteDatabase.currentSchemaVersion)
 
         let store = SQLiteTaskStore(db: db)
         let loaded = try #require(try await store.loadReview(id: TaskId("T-v6")))
         #expect(loaded.scan == scan)
 
         // Saving review again rewrites as compressed TRZ1 blob + writes card_meta_json
-        try await store.saveReview(id: TaskId("T-v6"), scan: scan, decisions: [:], unassignedDeletes: [])
+        try await store.saveReview(id: TaskId("T-v6"), scan: scan, decisions: [:], unassignedDeletes: [:])
         let blobRows = try await db.query("SELECT scan_blob FROM task_reviews WHERE task_id = 'T-v6'")
         let rawBlob = try #require(blobRows.first?.first?.dataValue)
         #expect(rawBlob.prefix(4) == Data("TRZ1".utf8))
@@ -472,7 +472,7 @@ struct SQLiteDatabaseMigrationTests {
         await db.close()
     }
 
-    @Test("Simulated Drift v1 database upgrades sequentially through v2..v8 with defaults")
+    @Test("Simulated Drift v1 database upgrades sequentially through v2..v9 with defaults")
     func upgradeFromSimulatedDriftV1Database() async throws {
         let dir = try makeTempDir("drift-v1-upgrade")
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -532,7 +532,7 @@ struct SQLiteDatabaseMigrationTests {
             """)
 
         let db = try SQLiteDatabase(path: dbPath)
-        #expect(try await db.schemaVersion() == 8)
+        #expect(try await db.schemaVersion() == SQLiteDatabase.currentSchemaVersion)
 
         let history = SQLiteHistoryStore(db: db)
         let recs = try await history.records(batch: BatchId("B-v1"))
@@ -590,6 +590,84 @@ struct SQLiteDatabaseMigrationTests {
 
 @Suite("SQLiteHistoryStore")
 struct SQLiteHistoryStoreTests {
+    @Test("Selective undo reads indexed journal subsets and chunks larger selections in sequence order")
+    func selectiveUndoQueryCost() async throws {
+        let db = try SQLiteDatabase.inMemory()
+        let store = SQLiteHistoryStore(db: db)
+        let files = (0..<820).map { i in makeOp("f\(i)", src: "/old/\(i)", dst: "/old/to-\(i)") }
+        let folder = makeOp("folder", src: "/old", dst: "/new", phase: .folders)
+        let batch = try await store.beginBatch(task: "t", connection: "c", ops: files + [folder])
+        try await db.execute("UPDATE history_records SET status = 'done' WHERE batch_id = ?", bindings: [.text(batch.value)])
+
+        // SQLite's own counters on cached statements measure the work done by the real store methods.
+        func queryCounters() async throws -> (calls: Int, steps: Int) {
+            try await db.withConnection { conn in
+                let handle = try conn.requireHandle()
+                var stmt = sqlite3_next_stmt(handle, nil)
+                var calls = 0
+                var steps = 0
+                while let current = stmt {
+                    let sql = String(cString: sqlite3_sql(current))
+                    if sql.hasPrefix("SELECT") && sql.contains("FROM history_records") {
+                        calls += Int(sqlite3_stmt_status(current, SQLITE_STMTSTATUS_RUN, 0))
+                        steps += Int(sqlite3_stmt_status(current, SQLITE_STMTSTATUS_VM_STEP, 0))
+                    }
+                    stmt = sqlite3_next_stmt(handle, current)
+                }
+                return (calls, steps)
+            }
+        }
+        let before = try await queryCounters()
+        let one = try await store.undoSnapshot(batch: batch, only: [files[500].id])
+        #expect(one.selected.map(\.op) == [files[500]])
+        #expect(one.folderMoves.map(\.id) == [folder.id])
+        let outcome = try await store.undoOutcome(batch: batch, attempted: [files[500].id])
+        #expect(outcome.remaining && outcome.statuses == [files[500].id: .done])
+        let after = try await queryCounters()
+        #expect(after.calls - before.calls == 4)
+        #expect(after.steps - before.steps < files.count)
+
+        let refreshed = try await store.record(batch: batch, op: files[500].id)
+        #expect(refreshed?.op == files[500])
+        let afterRowRefresh = try await queryCounters()
+        #expect(afterRowRefresh.calls - after.calls == 1)
+        #expect(afterRowRefresh.steps - after.steps < files.count)
+
+        let large = try await store.undoSnapshot(batch: batch, only: Set(files.map(\.id)))
+        #expect(large.selected.map(\.op.id) == files.map(\.id))
+        #expect(try await queryCounters().calls - afterRowRefresh.calls == 4) // Three ID chunks and one folder query.
+        await db.close()
+    }
+
+    @Test("File deletion identities survive history and folder cache round trips")
+    func deletionIdentityRoundTrip() async throws {
+        let db = try SQLiteDatabase.inMemory()
+        let history = SQLiteHistoryStore(db: db)
+        let op = RenameOp(id: "del", kind: .delete, phase: .cleanup, src: "/ad.txt", dst: "", deleteIdentity: "v1")
+        let batch = try await history.beginBatch(task: "t", connection: "c", ops: [op])
+        #expect(try await history.records(batch: batch).first?.op == op)
+        let folders = SQLiteFolderStatsStore(db: db)
+        let entry = RemoteEntry(path: "/ad.txt", name: "ad.txt", isDir: false, deleteIdentity: "v1")
+        try await folders.saveDir(connection: "c", dirPath: "/", entries: [entry])
+        #expect(try await folders.loadFor("c")["/"]?.entries == [entry])
+        await db.close()
+    }
+
+    @Test("Cycle phase persists independently of operation outcomes and survives retry")
+    func durableCyclePhase() async throws {
+        let db = try SQLiteDatabase.inMemory()
+        let store = SQLiteHistoryStore(db: db)
+        let ops = [makeOp("a", src: "/a", dst: "/b"), makeOp("b", src: "/b", dst: "/a")]
+        let batch = try await store.beginBatch(task: "t", connection: "c", ops: ops)
+        #expect(try await store.records(batch: batch).allSatisfy { $0.cyclePhase == .planned })
+        try await store.setCyclePhase(.landing, batch: batch, ops: ops.map(\.id))
+        try await store.mark(batch: batch, op: ops[0].id, status: .failed)
+        try await store.resetFailedToPending(batch: batch)
+        let reloaded = try await SQLiteHistoryStore(db: db).records(batch: batch)
+        #expect(reloaded.count == 2 && reloaded.allSatisfy { $0.status == .pending && $0.cyclePhase == .landing })
+        await db.close()
+    }
+
     @Test("beginBatch, mark, records order, batches order & undone derivation, deleteTask")
     func batchLifecycleAndDeleteTask() async throws {
         let db = try SQLiteDatabase.inMemory()
@@ -848,7 +926,7 @@ struct SQLiteTaskStoreTests {
             id: taskId,
             scan: scan,
             decisions: decisions,
-            unassignedDeletes: ["/下载/完成/junk.txt", "/下载/完成/ad.nfo"]
+            unassignedDeletes: ["/下载/完成/junk.txt": true, "/下载/完成/ad.nfo": true]
         )
 
         // Updating summary MUST NOT overwrite task_reviews or card_meta_json!
@@ -864,7 +942,7 @@ struct SQLiteTaskStoreTests {
         let review = try #require(try await store.loadReview(id: taskId))
         #expect(review.scan == scan)
         #expect(review.decisions == decisions)
-        #expect(review.unassignedDeletes == ["/下载/完成/junk.txt", "/下载/完成/ad.nfo"])
+        #expect(review.unassignedDeletes == ["/下载/完成/junk.txt": true, "/下载/完成/ad.nfo": true])
 
         // Clear review keeps summary intact
         try await store.clearReview(id: taskId)
@@ -931,7 +1009,7 @@ struct SQLiteTaskStoreTests {
             id: taskId,
             scan: scan,
             decisions: [GroupId("g1"): GroupDecision(match: work1, selected: true)],
-            unassignedDeletes: []
+            unassignedDeletes: [:]
         )
 
         // Verify scan_blob has TRZ1 header and is meaningfully compressed
@@ -956,7 +1034,7 @@ struct SQLiteTaskStoreTests {
         try await store.saveDecisions(
             id: taskId,
             decisions: updatedDecisions,
-            unassignedDeletes: ["/dl/readme.txt"],
+            unassignedDeletes: ["/dl/readme.txt": true, "/dl/keep.txt": false],
             cardMeta: updatedMeta
         )
 
@@ -969,7 +1047,7 @@ struct SQLiteTaskStoreTests {
         let reloadedReview = try #require(try await store.loadReview(id: taskId))
         #expect(reloadedReview.scan == scan)
         #expect(reloadedReview.decisions == updatedDecisions)
-        #expect(reloadedReview.unassignedDeletes == ["/dl/readme.txt"])
+        #expect(reloadedReview.unassignedDeletes == ["/dl/readme.txt": true, "/dl/keep.txt": false])
 
         // pruneScanBlob clears scan_blob while preserving card_meta_json on tasks
         try await store.pruneScanBlob(id: taskId)
@@ -1034,7 +1112,7 @@ struct SQLiteTaskStoreTests {
             id: tPartial.id,
             scan: ScanResult(connection: conn, roots: ["/partial"], groups: []),
             decisions: [:],
-            unassignedDeletes: ["/partial/a.txt"]
+            unassignedDeletes: ["/partial/a.txt": true]
         )
 
         try await db.execute(
@@ -1330,6 +1408,38 @@ struct SQLiteTmdbCacheTests {
 
 @Suite("SQLiteMediaProbeCache & CachingMediaProbe")
 struct SQLiteMediaProbeCacheTests {
+    @Test("Concurrent probes of different file versions return their own metadata")
+    func changedVersionDuringProbe() async throws {
+        let db = try SQLiteDatabase.inMemory()
+        let cache = SQLiteMediaProbeCache(db: db)
+        let conn = ConnectionId("nas")
+        let previous = MediaProbeInfo(width: 1280)
+        let current = MediaProbeInfo(width: 1920)
+        let started = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        let old = Task {
+            await cache.probeOrLoad(connection: conn, path: "/movie.mkv", fileSize: 1) {
+                started.continuation.finish()
+                for await _ in release.stream {}
+                return previous
+            }
+        }
+        for await _ in started.stream {}
+        let new = Task {
+            await cache.probeOrLoad(connection: conn, path: "/movie.mkv", fileSize: 2) { current }
+        }
+        // Let a broken singleflight implementation fail its assertion rather than deadlock the test.
+        let timeout = Task {
+            try await Task.sleep(for: .seconds(3))
+            release.continuation.finish()
+        }
+        defer { timeout.cancel() }
+        #expect(await new.value == current)
+        release.continuation.finish()
+        #expect(await old.value == previous)
+        #expect(await cache.get(connection: conn, path: "/movie.mkv", fileSize: 2) == .hit(current))
+    }
+
     @Test("Hit/miss across L1 & L2, (fileSize, modifiedAt) invalidation, fileSize-only fallback, negative TTL, singleflight & clear")
     func mediaProbeCacheLifecycleAndSingleflight() async throws {
         let db = try SQLiteDatabase.inMemory()

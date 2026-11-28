@@ -14,6 +14,37 @@ struct RecognizerTests {
         AnchorRecognizer(parser: TestFilenameParser(), metadata: metadata ?? TestMetadataProvider())
     }
 
+    @Test("Cancelling recognition stops scheduling additional probes")
+    func cancellingProbeQueue() async throws {
+        actor BlockingProbe: MediaProbe {
+            let started: AsyncStream<Void>.Continuation
+            private(set) var count = 0
+            init(_ started: AsyncStream<Void>.Continuation) { self.started = started }
+            func probe(backend: any StorageBackend, path: String, fileSize: Int64?) async -> MediaProbeInfo? {
+                count += 1
+                started.finish()
+                try? await Task.sleep(for: .seconds(5))
+                return nil
+            }
+        }
+        let started = AsyncStream<Void>.makeStream()
+        let probe = BlockingProbe(started.continuation)
+        let recognizer = AnchorRecognizer(
+            parser: TestFilenameParser(), metadata: TestMetadataProvider(),
+            mediaProbe: probe, probeMedia: { true }
+        )
+        let files = (1...20).map { n in
+            RemoteEntry(path: "/dl/Movie \(n).mkv", name: "Movie \(n).mkv", isDir: false, size: 1234)
+        }
+        let task = Task {
+            try await recognizer.recognize(connection: conn, roots: ["/dl"], files: files, backend: MemoryStorageBackend())
+        }
+        for await _ in started.stream {}
+        task.cancel()
+        await #expect(throws: CancellationError.self) { try await task.value }
+        #expect(await probe.count <= 4)
+    }
+
     @Test("groups by title folder and loose files, deterministic IDs, and alias matching")
     func groupingAndDeterminism() async throws {
         let files = [

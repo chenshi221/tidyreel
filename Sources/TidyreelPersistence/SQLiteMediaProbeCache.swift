@@ -34,6 +34,8 @@ public actor SQLiteMediaProbeCache {
 
     private struct InFlightEntry {
         let id: UInt64
+        let fileSize: Int64?
+        let modifiedAtMs: Int64?
         let task: Task<MediaProbeInfo?, Never>
     }
 
@@ -134,7 +136,8 @@ public actor SQLiteMediaProbeCache {
             return info
         }
 
-        if let existing = inFlight[key] {
+        if let existing = inFlight[key],
+           existing.fileSize == fileSize, existing.modifiedAtMs == queryModMs {
             return await existing.task.value
         }
 
@@ -167,7 +170,7 @@ public actor SQLiteMediaProbeCache {
             return probed
         }
 
-        inFlight[key] = InFlightEntry(id: flightId, task: task)
+        inFlight[key] = InFlightEntry(id: flightId, fileSize: fileSize, modifiedAtMs: queryModMs, task: task)
         return await task.value
     }
 
@@ -395,6 +398,7 @@ public actor SQLiteMediaProbeCache {
         modifiedAt: Date?,
         info: MediaProbeInfo?
     ) async {
+        guard inFlight[key]?.id == flightId else { return }
         if info != nil || negativeTtlMs > 0 {
             await storeEntry(
                 key: key,

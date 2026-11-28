@@ -204,6 +204,10 @@ internal final class ExecutionThrottledBackend: StorageBackend, RangeReadableBac
         }
     }
 
+    func removeScannedFile(_ path: String, identity: String?) async throws {
+        try await call { try await inner.removeScannedFile(path, identity: identity) }
+    }
+
     func removeDirectoryIfEmpty(_ dir: String, removingSystemFiles: Bool) async throws -> Bool {
         try await call { try await inner.removeDirectoryIfEmpty(dir, removingSystemFiles: removingSystemFiles) }
     }

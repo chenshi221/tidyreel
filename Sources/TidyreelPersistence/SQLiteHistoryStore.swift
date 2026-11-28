@@ -32,6 +32,21 @@ public final class SQLiteHistoryStore: HistoryStore, @unchecked Sendable {
         self.db = db
     }
 
+    public func setCyclePhase(_ phase: RelocationCyclePhase, batch: BatchId, ops: [OpId]) async throws {
+        try await db.withConnection { conn in
+            try conn.withTransaction {
+                let stmt = try conn.prepareCached("UPDATE history_records SET cycle_phase = ? WHERE batch_id = ? AND op_id = ?")
+                for op in ops {
+                    stmt.reset()
+                    try stmt.bindInt(1, phase.rawValue)
+                    try stmt.bindText(2, batch.value)
+                    try stmt.bindText(3, op.value)
+                    try stmt.step()
+                }
+            }
+        }
+    }
+
     public func saveWrittenDigest(_ digest: String, batch: BatchId, op: OpId) async throws {
         try await db.withConnection { conn in
             let stmt = try conn.prepareCached("UPDATE history_records SET written_digest = ? WHERE batch_id = ? AND op_id = ?")
@@ -69,8 +84,8 @@ public final class SQLiteHistoryStore: HistoryStore, @unchecked Sendable {
                     let recStmt = try conn.prepareCached("""
                         INSERT INTO history_records (
                             batch_id, op_id, seq, kind, phase, src, dst,
-                            group_id, selected, warning, overwrite, status, error, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+                            group_id, selected, warning, overwrite, status, error, updated_at, delete_identity, cycle_phase
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
                         """)
                     for (seq, op) in ops.enumerated() {
                         recStmt.reset()
@@ -87,6 +102,8 @@ public final class SQLiteHistoryStore: HistoryStore, @unchecked Sendable {
                         try recStmt.bindBool(11, op.overwrite)
                         try recStmt.bindText(12, OpStatus.pending.rawValue)
                         try recStmt.bindDateSeconds(13, now)
+                        try recStmt.bindText(14, op.deleteIdentity)
+                        try recStmt.bindInt(15, RelocationCyclePhase.planned.rawValue)
                         try recStmt.step()
                     }
                 }
@@ -226,55 +243,148 @@ public final class SQLiteHistoryStore: HistoryStore, @unchecked Sendable {
         }
     }
 
+    private static let recordColumns = """
+        batch_id, op_id, kind, phase, src, dst, group_id, selected, warning, overwrite,
+        status, error, updated_at, written_digest, delete_identity, cycle_phase
+        """
+
+    private static func decodeRecord(_ stmt: SQLiteStatement) -> HistoryRecord {
+        let batchId = BatchId(stmt.columnText(0))
+        let opId = OpId(stmt.columnText(1))
+        let kind = OpKind(rawValue: stmt.columnText(2)) ?? .relocate
+        let phase = ExecPhase(rawValue: stmt.columnText(3)) ?? .files
+        let src = stmt.columnText(4)
+        let dst = stmt.columnText(5)
+        let group = stmt.columnOptionalText(6).map { GroupId($0) }
+        let selected = stmt.columnBool(7)
+        let warning = stmt.columnOptionalText(8)
+        let overwrite = stmt.columnBool(9)
+        let status = OpStatus(rawValue: stmt.columnText(10)) ?? .pending
+        let error = stmt.columnOptionalText(11)
+        let updatedAt = stmt.columnDateSeconds(12)
+
+        return HistoryRecord(
+            batch: batchId,
+            op: RenameOp(
+                id: opId,
+                kind: kind,
+                phase: phase,
+                src: src,
+                dst: dst,
+                group: group,
+                selected: selected,
+                warning: warning,
+                overwrite: overwrite,
+                deleteIdentity: stmt.columnOptionalText(14)
+            ),
+            status: status,
+            cyclePhase: RelocationCyclePhase(rawValue: stmt.columnInt(15)),
+            writtenDigest: stmt.columnOptionalText(13),
+            error: error,
+            updatedAt: updatedAt
+        )
+    }
+
     public func records(batch: BatchId) async throws -> [HistoryRecord] {
         try await db.withConnection { conn in
             let stmt = try conn.prepareCached("""
-                SELECT batch_id, op_id, kind, phase, src, dst, group_id,
-                       selected, warning, overwrite, status, error, updated_at, written_digest
-                FROM history_records
-                WHERE batch_id = ?
-                ORDER BY seq ASC
+                SELECT \(Self.recordColumns) FROM history_records WHERE batch_id = ? ORDER BY seq
                 """)
             try stmt.bindText(1, batch.value)
+            var records: [HistoryRecord] = []
+            while try stmt.step() { records.append(Self.decodeRecord(stmt)) }
+            return records
+        }
+    }
 
-            var out: [HistoryRecord] = []
-            while try stmt.step() {
-                let batchId = BatchId(stmt.columnText(0))
-                let opId = OpId(stmt.columnText(1))
-                let kind = OpKind(rawValue: stmt.columnText(2)) ?? .relocate
-                let phase = ExecPhase(rawValue: stmt.columnText(3)) ?? .files
-                let src = stmt.columnText(4)
-                let dst = stmt.columnText(5)
-                let group = stmt.columnOptionalText(6).map { GroupId($0) }
-                let selected = stmt.columnBool(7)
-                let warning = stmt.columnOptionalText(8)
-                let overwrite = stmt.columnBool(9)
-                let status = OpStatus(rawValue: stmt.columnText(10)) ?? .pending
-                let error = stmt.columnOptionalText(11)
-                let updatedAt = stmt.columnDateSeconds(12)
-
-                out.append(
-                    HistoryRecord(
-                        batch: batchId,
-                        op: RenameOp(
-                            id: opId,
-                            kind: kind,
-                            phase: phase,
-                            src: src,
-                            dst: dst,
-                            group: group,
-                            selected: selected,
-                            warning: warning,
-                            overwrite: overwrite
-                        ),
-                        status: status,
-                        writtenDigest: stmt.columnOptionalText(13),
-                        error: error,
-                        updatedAt: updatedAt
-                    )
-                )
+    public func record(batch: BatchId, op: OpId) async throws -> HistoryRecord? {
+        try await db.withConnection { conn in
+            var row: HistoryRecord?
+            try Self.forSelectedRows(conn, batch: batch, ids: [op], columns: Self.recordColumns) { stmt in
+                row = Self.decodeRecord(stmt)
             }
-            return out
+            return row
+        }
+    }
+
+    /// Binds selected IDs in chunks against the (batch_id, op_id) primary key.
+    private static func forSelectedRows(
+        _ conn: SQLiteConnection, batch: BatchId, ids: Set<OpId>, columns: String,
+        read: (SQLiteStatement) -> Void
+    ) throws {
+        let ids = Array(ids)
+        for start in stride(from: 0, to: ids.count, by: maxPlaceholdersPerQuery) {
+            let chunk = ids[start..<min(start + maxPlaceholdersPerQuery, ids.count)]
+            let slots = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let stmt = try conn.prepareCached("""
+                SELECT \(columns) FROM history_records WHERE batch_id = ? AND op_id IN (\(slots))
+                """)
+            try stmt.bindText(1, batch.value)
+            for (offset, op) in chunk.enumerated() {
+                try stmt.bindText(Int32(offset + 2), op.value)
+            }
+            while try stmt.step() { read(stmt) }
+        }
+    }
+
+    public func undoSnapshot(batch: BatchId, only: Set<OpId>?) async throws -> UndoSnapshot {
+        try await db.withConnection { conn in
+            try conn.withTransaction(deferred: true) {
+                guard let only else {
+                    let stmt = try conn.prepareCached("""
+                        SELECT \(Self.recordColumns) FROM history_records WHERE batch_id = ? AND status = 'done' ORDER BY seq
+                        """)
+                    try stmt.bindText(1, batch.value)
+                    var selected: [HistoryRecord] = []
+                    var folders: [RenameOp] = []
+                    while try stmt.step() {
+                        let row = Self.decodeRecord(stmt)
+                        selected.append(row)
+                        if row.op.phase == .folders && row.op.kind == .relocate { folders.append(row.op) }
+                    }
+                    return UndoSnapshot(selected: selected, folderMoves: folders)
+                }
+
+                var selected: [(seq: Int, row: HistoryRecord)] = []
+                try Self.forSelectedRows(conn, batch: batch, ids: only, columns: Self.recordColumns + ", seq") { stmt in
+                    if stmt.columnText(10) == OpStatus.done.rawValue {
+                        selected.append((stmt.columnInt(16), Self.decodeRecord(stmt)))
+                    }
+                }
+                var folders: [RenameOp] = []
+                if !selected.isEmpty {
+                    let stmt = try conn.prepareCached("""
+                        SELECT op_id, src, dst FROM history_records INDEXED BY idx_history_batch_phase
+                        WHERE batch_id = ? AND phase = 'folders' AND kind = 'relocate' AND status = 'done'
+                        ORDER BY seq
+                        """)
+                    try stmt.bindText(1, batch.value)
+                    while try stmt.step() {
+                        folders.append(RenameOp(
+                            id: OpId(stmt.columnText(0)), kind: .relocate, phase: .folders,
+                            src: stmt.columnText(1), dst: stmt.columnText(2)
+                        ))
+                    }
+                }
+                selected.sort { $0.seq < $1.seq }
+                return UndoSnapshot(selected: selected.map(\.row), folderMoves: folders)
+            }
+        }
+    }
+
+    public func undoOutcome(batch: BatchId, attempted: Set<OpId>) async throws -> (remaining: Bool, statuses: [OpId: OpStatus]) {
+        try await db.withConnection { conn in
+            try conn.withTransaction(deferred: true) {
+                var statuses: [OpId: OpStatus] = [:]
+                try Self.forSelectedRows(conn, batch: batch, ids: attempted, columns: "op_id, status") { stmt in
+                    statuses[OpId(stmt.columnText(0))] = OpStatus(rawValue: stmt.columnText(1)) ?? .pending
+                }
+                let stmt = try conn.prepareCached("SELECT 1 FROM history_records WHERE batch_id = ? AND status = 'done' LIMIT 1")
+                try stmt.bindText(1, batch.value)
+                let remaining = try stmt.step()
+                stmt.reset()
+                return (remaining, statuses)
+            }
         }
     }
 

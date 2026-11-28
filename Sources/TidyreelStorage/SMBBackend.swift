@@ -73,13 +73,17 @@ private func splitHostAndPort(_ authority: String) -> (host: String, port: Int) 
 func findMatchingSmbMount(
     entries: [MountedFilesystemEntry],
     target: SmbTarget,
-    directoryExists: (String) -> Bool = { path in
-        var isDir: ObjCBool = false
-        return FileManager.default.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
-    }
+    username: String?,
+    mountPaths: Set<String>? = nil
 ) -> String? {
     let (wantedHost, wantedPort) = splitHostAndPort(target.host)
     let wantedShare = target.share.precomposedStringWithCanonicalMapping.lowercased()
+
+    // smbfs encodes a Windows domain as DOMAIN;user in f_mntfromname.
+    func principal(_ user: String) -> String {
+        user.replacingOccurrences(of: "\\", with: ";").precomposedStringWithCanonicalMapping
+    }
+    let expectedUser = principal(username.flatMap { $0.isEmpty ? nil : $0 } ?? "guest")
 
     for entry in entries where entry.fsType.lowercased() == "smbfs" {
         var raw = entry.fromName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -87,16 +91,19 @@ func findMatchingSmbMount(
             raw = String(raw.dropFirst(4))
         }
         let segs = raw.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
-        guard segs.count >= 2 else { continue }
+        guard segs.count == 2, let at = segs[0].lastIndex(of: "@"),
+              mountPaths?.contains(entry.onName) != false else { continue }
+        var rawUser = String(segs[0][..<at])
+        if rawUser.hasSuffix(":") { rawUser.removeLast() }
+        guard let mountedUser = rawUser.removingPercentEncoding, !mountedUser.isEmpty else { continue }
+        guard principal(mountedUser).caseInsensitiveCompare(expectedUser) == .orderedSame else { continue }
 
         let (mountedHost, mountedPort) = splitHostAndPort(segs[0])
         let rawShare = segs[1].removingPercentEncoding ?? segs[1]
         let mountedShare = rawShare.precomposedStringWithCanonicalMapping.lowercased()
 
         if mountedHost == wantedHost && mountedPort == wantedPort && mountedShare == wantedShare {
-            if directoryExists(entry.onName) {
-                return entry.onName
-            }
+            return entry.onName
         }
     }
     return nil
@@ -111,15 +118,18 @@ private func cCharTupleToString<T>(_ tuple: T) -> String {
 
 private func currentMountedFilesystems() -> [MountedFilesystemEntry] {
     var mntbuf: UnsafeMutablePointer<statfs>?
-    let count = Int(getmntinfo(&mntbuf, MNT_NOWAIT))
+    let count = Int(getmntinfo_r_np(&mntbuf, MNT_NOWAIT))
     guard count > 0, let mntbuf else { return [] }
+    defer { free(mntbuf) }
     var entries: [MountedFilesystemEntry] = []
     entries.reserveCapacity(count)
     for i in 0..<count {
         let fs = mntbuf[i]
+        let fsType = cCharTupleToString(fs.f_fstypename)
+        guard fsType == "smbfs" else { continue }
         entries.append(
             MountedFilesystemEntry(
-                fsType: cCharTupleToString(fs.f_fstypename),
+                fsType: fsType,
                 fromName: cCharTupleToString(fs.f_mntfromname),
                 onName: cCharTupleToString(fs.f_mntonname)
             )
@@ -161,62 +171,94 @@ private func buildSmbShareURL(_ target: SmbTarget) throws -> URL {
     return url
 }
 
+/// The NetFS completion block is suppressed after cancellation. Serialize completion, timeout
+/// and cancellation so exactly one of them resumes the caller.
+actor SmbMountRequest {
+    typealias Reply = (status: Int32, paths: [String])
+    typealias Completion = @Sendable (Int32, [String]) -> Void
+    typealias Start = (@escaping Completion) -> (status: Int32, cancel: () -> Void)
+    private var continuation: CheckedContinuation<Reply, Error>?
+    private var cancelMount: (() -> Void)?
+    private var timer: Task<Void, Never>?
+
+    func run(timeout: Duration = .seconds(30), start: Start) async throws -> Reply {
+        try Task.checkCancellation()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                guard !Task.isCancelled else { continuation.resume(throwing: CancellationError()); return }
+                self.continuation = continuation
+                let request = start { status, paths in
+                    Task { await self.complete((status, paths)) }
+                }
+                if request.status != 0 {
+                    complete((request.status, []))
+                    return
+                }
+                cancelMount = request.cancel
+                timer = Task {
+                    do { try await Task.sleep(for: timeout) } catch { return }
+                    abort(StorageError(.network, "SMB 挂载超时"))
+                }
+            }
+        } onCancel: {
+            Task { await self.abort(CancellationError()) }
+        }
+    }
+
+    private func complete(_ reply: Reply) {
+        timer?.cancel()
+        timer = nil
+        cancelMount = nil
+        continuation?.resume(returning: reply)
+        continuation = nil
+    }
+
+    private func abort(_ error: Error) {
+        timer?.cancel()
+        timer = nil
+        cancelMount?()
+        cancelMount = nil
+        continuation?.resume(throwing: error)
+        continuation = nil
+    }
+}
+
+func verifiedSmbMount(status: Int32, paths: [String], entries: [MountedFilesystemEntry],
+                      target: SmbTarget, username: String?) throws -> String {
+    guard status == 0 || status == EEXIST else {
+        throw StorageError(mapSmbMountErrorCode(status), "挂载 SMB 共享失败（错误码 \(status)）")
+    }
+    guard let path = findMatchingSmbMount(entries: entries, target: target, username: username,
+                                          mountPaths: paths.isEmpty ? nil : Set(paths)) else {
+        throw StorageError(.unauthorized, "无法验证 SMB 共享的挂载位置或登录账号")
+    }
+    return path
+}
+
 private func mountSmbShareViaNetFS(
     target: SmbTarget,
     username: String?,
     password: String?
 ) async throws -> String {
     let shareURL = try buildSmbShareURL(target)
-    let cleanUser = (username?.isEmpty == false) ? username : nil
-    let cleanPass = (password?.isEmpty == false) ? password : nil
-
-    return try await withCheckedThrowingContinuation { cont in
-        DispatchQueue.global(qos: .userInitiated).async {
-            let openOpts = NSMutableDictionary()
-            openOpts[kNAUIOptionKey] = kNAUIOptionNoUI
-            if cleanUser == nil && cleanPass == nil {
-                openOpts["Guest"] = true
-            }
-
-            let mountOpts = NSMutableDictionary()
-            mountOpts[kNetFSSoftMountKey] = true
-
-            var mountpoints: Unmanaged<CFArray>?
-            let rc = NetFSMountURLSync(
-                shareURL as CFURL,
-                nil,
-                cleanUser as CFString?,
-                cleanPass as CFString?,
-                openOpts as CFMutableDictionary,
-                mountOpts as CFMutableDictionary,
-                &mountpoints
-            )
-
-            if rc == 0,
-               let array = mountpoints?.takeRetainedValue() as? [String],
-               let firstMount = array.first,
-               !firstMount.isEmpty {
-                cont.resume(returning: firstMount)
-                return
-            }
-
-            // Re-check getmntinfo in case macOS mounted it concurrently without populating mountpoints.
-            if rc == 0 || rc == EEXIST {
-                if let found = findMatchingSmbMount(entries: currentMountedFilesystems(), target: target) {
-                    cont.resume(returning: found)
-                    return
-                }
-            }
-
-            let errCode = mapSmbMountErrorCode(rc)
-            cont.resume(
-                throwing: StorageError(
-                    errCode,
-                    "挂载 SMB 共享失败（smb://\(target.host)/\(target.share)）：错误码 \(rc)"
-                )
-            )
+    let user = username.flatMap { $0.isEmpty ? nil : $0 }
+    let pass = password.flatMap { $0.isEmpty ? nil : $0 }
+    let reply = try await SmbMountRequest().run { completion in
+        let openOpts = NSMutableDictionary()
+        openOpts[kNAUIOptionKey] = kNAUIOptionNoUI
+        openOpts[kNetFSForceNewSessionKey] = true
+        if user == nil { openOpts[kNetFSUseGuestKey] = true }
+        let mountOpts = NSMutableDictionary()
+        mountOpts[kNetFSSoftMountKey] = true
+        var requestID: AsyncRequestID?
+        let status = NetFSMountURLAsync(shareURL as CFURL, nil, user as CFString?, pass as CFString?,
+                                        openOpts, mountOpts, &requestID, .global(qos: .userInitiated)) { status, _, paths in
+            completion(status, paths as? [String] ?? [])
         }
+        return (status, { if let requestID { _ = NetFSMountURLCancel(requestID) } })
     }
+    return try verifiedSmbMount(status: reply.status, paths: reply.paths, entries: currentMountedFilesystems(),
+                                target: target, username: user)
 }
 
 // MARK: - SMBBackend
@@ -227,23 +269,30 @@ public actor SMBBackend: RangeReadableBackend {
     private let config: ConnectionConfig
     private let credentials: Credentials
     private let mountResolver: ShareMountResolver
+    private let isMountValid: @Sendable (String) -> Bool
     private let healthCheckTTL: TimeInterval
     private let now: @Sendable () -> TimeInterval
     private var activeMountRoot: String?
     private var localDelegate: LocalBackend?
-    private var mountTask: Task<LocalBackend, Error>?
+    private var mountTask: Task<Void, Never>?
+    private var mountWaiters: [UUID: CheckedContinuation<LocalBackend, Error>] = [:]
     private var lastMountCheckAt: TimeInterval?
     private var mountGeneration: UInt64 = 0
 
     public init(config: ConnectionConfig, credentials: Credentials) {
         self.config = config
         self.credentials = credentials
-        self.healthCheckTTL = 8.0
+        // Revalidate the mount-table identity before each operation. A mount point may
+        // still exist as a local folder or be reused by another account after unmount.
+        self.healthCheckTTL = 0
+        self.isMountValid = { path in
+            guard let target = parseSmbEndpoint(config.endpoint) else { return false }
+            return findMatchingSmbMount(entries: currentMountedFilesystems(), target: target,
+                                        username: config.username, mountPaths: [path]) != nil
+        }
         self.now = { ProcessInfo.processInfo.systemUptime }
         self.mountResolver = { target, cfg, creds in
-            if let existing = try await LocalIOExecutor.shared.run({
-                findMatchingSmbMount(entries: currentMountedFilesystems(), target: target)
-            }) {
+            if let existing = findMatchingSmbMount(entries: currentMountedFilesystems(), target: target, username: cfg.username) {
                 return existing
             }
             return try await mountSmbShareViaNetFS(
@@ -263,84 +312,74 @@ public actor SMBBackend: RangeReadableBackend {
     ) {
         self.config = config
         self.credentials = credentials
+        self.isMountValid = { path in
+            var isDir: ObjCBool = false
+            return FileManager.default.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
+        }
         self.healthCheckTTL = healthCheckTTL
         self.now = now
         self.mountResolver = mountResolver
     }
 
     private func ensureMounted() async throws -> LocalBackend {
-        if let localDelegate,
-           let activeMountRoot {
-            if let lastCheck = lastMountCheckAt, (now() - lastCheck) < healthCheckTTL {
-                return localDelegate
+        try Task.checkCancellation()
+        if let delegate = localDelegate, let path = activeMountRoot {
+            if let lastCheck = lastMountCheckAt, now() - lastCheck < healthCheckTTL { return delegate }
+            if isMountValid(path) {
+                lastMountCheckAt = now()
+                return delegate
             }
-            let mountPath = activeMountRoot
-            let gen = mountGeneration
-            let stillMounted = (try? await LocalIOExecutor.shared.run {
-                var isDir: ObjCBool = false
-                return FileManager.default.fileExists(atPath: mountPath, isDirectory: &isDir) && isDir.boolValue
-            }) ?? false
-
-            if mountGeneration == gen {
-                if stillMounted, let currentDelegate = self.localDelegate {
-                    self.lastMountCheckAt = now()
-                    return currentDelegate
-                }
-                self.localDelegate = nil
-                self.activeMountRoot = nil
-                self.lastMountCheckAt = nil
-            } else if let currentDelegate = self.localDelegate,
-                      let lastCheck = self.lastMountCheckAt,
-                      (now() - lastCheck) < healthCheckTTL {
-                return currentDelegate
-            }
+            localDelegate = nil
+            activeMountRoot = nil
+            lastMountCheckAt = nil
         }
-
-        if let existingTask = mountTask {
-            return try await existingTask.value
-        }
-
         guard let target = parseSmbEndpoint(config.endpoint) else {
             throw StorageError(.other, "地址应为 smb://主机/共享名：\(config.endpoint)")
         }
-
         let baseSegments = try validatedPathSegments(target.base)
-        let resolver = self.mountResolver
-        let cfg = self.config
-        let creds = self.credentials
-
-        let task = Task<LocalBackend, Error> {
-            let shareMount = try await resolver(target, cfg, creds)
-            let scopedRoot: String
-            if baseSegments.isEmpty {
-                scopedRoot = shareMount
-            } else {
-                let trimmedMount = shareMount.hasSuffix("/") ? String(shareMount.dropLast()) : shareMount
-                scopedRoot = trimmedMount + "/" + baseSegments.joined(separator: "/")
+        let waiter = UUID()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                guard !Task.isCancelled else { continuation.resume(throwing: CancellationError()); return }
+                mountWaiters[waiter] = continuation
+                guard mountTask == nil else { return }
+                mountGeneration &+= 1
+                let generation = mountGeneration
+                mountTask = Task {
+                    do {
+                        let root = try await mountResolver(target, config, credentials)
+                        guard generation == mountGeneration else { return }
+                        let scopedRoot = baseSegments.reduce(URL(fileURLWithPath: root)) { $0.appendingPathComponent($1) }
+                        let delegate = LocalBackend(rootPath: scopedRoot.path)
+                        activeMountRoot = root
+                        localDelegate = delegate
+                        lastMountCheckAt = now()
+                        finishMount(.success(delegate))
+                    } catch {
+                        guard generation == mountGeneration else { return }
+                        finishMount(.failure(error))
+                    }
+                }
             }
-            return (shareMount, LocalBackend(rootPath: scopedRoot)).1
+        } onCancel: {
+            Task { await self.cancelMountWaiter(waiter) }
         }
-        // Keep track of shareMount separately after resolution:
-        self.mountTask = task
-        defer {
-            self.mountTask = nil
-        }
+    }
 
-        let delegate = try await task.value
-        // Recover shareMount root by stripping baseSegments from delegate.rootPath
-        if baseSegments.isEmpty {
-            self.activeMountRoot = delegate.rootPath
-        } else {
-            var root = delegate.rootPath
-            for _ in baseSegments {
-                root = (root as NSString).deletingLastPathComponent
-            }
-            self.activeMountRoot = root
+    private func finishMount(_ result: Result<LocalBackend, Error>) {
+        mountTask = nil
+        for waiter in mountWaiters.values { waiter.resume(with: result) }
+        mountWaiters.removeAll()
+    }
+
+    private func cancelMountWaiter(_ id: UUID) {
+        guard let waiter = mountWaiters.removeValue(forKey: id) else { return }
+        waiter.resume(throwing: CancellationError())
+        if mountWaiters.isEmpty {
+            mountGeneration &+= 1
+            mountTask?.cancel()
+            mountTask = nil
         }
-        self.localDelegate = delegate
-        self.lastMountCheckAt = now()
-        self.mountGeneration &+= 1
-        return delegate
     }
 
     private static func shouldInvalidateMountHealth(_ error: Error) -> Bool {
@@ -378,6 +417,7 @@ public actor SMBBackend: RangeReadableBackend {
         _ operation: (LocalBackend) async throws -> T
     ) async throws -> T {
         let delegate = try await ensureMounted()
+        try Task.checkCancellation()
         do {
             return try await operation(delegate)
         } catch {
@@ -446,6 +486,13 @@ public actor SMBBackend: RangeReadableBackend {
         }
     }
 
+    public func removeScannedFile(_ path: String, identity: String?) async throws {
+        try validateSmbPath(path)
+        try await withMountedDelegate { delegate in
+            try await delegate.removeScannedFile(path, identity: identity)
+        }
+    }
+
     public func removeDirectoryIfEmpty(_ dir: String, removingSystemFiles: Bool) async throws -> Bool {
         try validateSmbPath(dir)
         return try await withMountedDelegate { delegate in
@@ -502,7 +549,7 @@ public actor SMBBackend: RangeReadableBackend {
 
     public func close() async {
         mountTask?.cancel()
-        mountTask = nil
+        finishMount(.failure(CancellationError()))
         localDelegate = nil
         activeMountRoot = nil
         lastMountCheckAt = nil

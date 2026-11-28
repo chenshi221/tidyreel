@@ -56,6 +56,26 @@ struct LocalAndSMBTests {
         }
     }
 
+    @Test("Scanned-file deletion retains replacements and cannot remove a directory tree")
+    func removeOnlyScannedFile() async throws {
+        let (root, backend) = try makeTempLocal(["/ad.txt": 1])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let identity = try #require(try await backend.list("/").first?.deleteIdentity)
+        try await backend.rename("/ad.txt", newName: "original")
+        try await backend.mkdirs("/ad.txt")
+        try await backend.write("/ad.txt/sentinel", bytes: Data([1]))
+        await expectStorageError(.other) { try await backend.removeScannedFile("/ad.txt", identity: identity) }
+        #expect(try await backend.exists("/ad.txt/sentinel"))
+        try await backend.rename("/ad.txt", newName: "replacement")
+        try await backend.write("/ad.txt", bytes: Data([1]))
+        await expectStorageError(.other) { try await backend.removeScannedFile("/ad.txt", identity: identity) }
+        await expectStorageError(.other) { try await backend.removeScannedFile("/ad.txt", identity: nil) }
+        #expect(try await backend.read("/ad.txt") == Data([1]))
+        try await backend.removeScannedFile("/original", identity: identity)
+        try await backend.removeScannedFile("/original", identity: identity)
+        #expect(try await !backend.exists("/original"))
+    }
+
     @Test("Conditional directory cleanup preserves newly populated directories and only unlinks metadata files")
     func conditionalDirectoryCleanup() async throws {
         let (root, backend) = try makeTempLocal(["/dir/.DS_Store": 1, "/nested/Thumbs.db/keep.mkv": 1])
@@ -241,23 +261,103 @@ struct LocalAndSMBTests {
         let match1 = findMatchingSmbMount(
             entries: entries,
             target: SmbTarget(host: "192.168.1.10", share: "影视"),
-            directoryExists: { _ in true }
+            username: "admin"
         )
         #expect(match1 == "/Volumes/影视")
 
         let match2 = findMatchingSmbMount(
             entries: entries,
             target: SmbTarget(host: "NAS.LOCAL:4445", share: "anime vault"),
-            directoryExists: { _ in true }
+            username: nil
         )
         #expect(match2 == "/Volumes/Anime Vault")
 
         let mismatchPort = findMatchingSmbMount(
             entries: entries,
             target: SmbTarget(host: "nas.local", share: "Anime Vault"),
-            directoryExists: { _ in true }
+            username: nil
         )
         #expect(mismatchPort == nil)
+    }
+
+    @Test("SMB validates returned mounts and EEXIST against the requested server and account")
+    func smbVerifiesMountIdentity() throws {
+        let target = SmbTarget(host: "nas", share: "Media")
+        let entries = [
+            MountedFilesystemEntry(fsType: "smbfs", fromName: "//guest@nas/Media", onName: "/guest"),
+            MountedFilesystemEntry(fsType: "smbfs", fromName: "//nas/Media", onName: "/unknown"),
+            MountedFilesystemEntry(fsType: "smbfs", fromName: "//DOMAIN;A%20B@nas/Media", onName: "/user"),
+            MountedFilesystemEntry(fsType: "smbfs", fromName: "//other@nas/Media/sub", onName: "/sub"),
+        ]
+        #expect(try verifiedSmbMount(status: EEXIST, paths: [], entries: entries, target: target, username: nil) == "/guest")
+        #expect(try verifiedSmbMount(status: 0, paths: ["/user"], entries: entries, target: target,
+                                    username: "domain\\a b") == "/user")
+        for status: Int32 in [0, EEXIST] {
+            for path in ["/guest", "/unknown", "/sub"] {
+                #expect(throws: StorageError.self) {
+                    try verifiedSmbMount(status: status, paths: [path], entries: entries, target: target,
+                                         username: "domain\\a b")
+                }
+            }
+        }
+        #expect(findMatchingSmbMount(entries: entries, target: target, username: "other") == nil)
+    }
+
+    @Test("SMB native mount timeout and cancellation cancel the underlying request exactly once")
+    func smbMountDeadlineAndCancellation() async throws {
+        final class Probe: @unchecked Sendable {
+            private let lock = NSLock()
+            private var cancelled = 0
+            var count: Int { lock.withLock { cancelled } }
+            func cancel() { lock.withLock { cancelled += 1 } }
+        }
+        let timeout = Probe()
+        await expectStorageError(.network) {
+            _ = try await SmbMountRequest().run(timeout: .milliseconds(10)) { _ in (0, timeout.cancel) }
+        }
+        #expect(timeout.count == 1)
+
+        let cancel = Probe()
+        let (started, signal) = AsyncStream<Void>.makeStream()
+        let task = Task {
+            try await SmbMountRequest().run { _ in
+                signal.yield()
+                signal.finish()
+                return (0, cancel.cancel)
+            }
+        }
+        for await _ in started { break }
+        task.cancel()
+        await #expect(throws: CancellationError.self) { try await task.value }
+        #expect(cancel.count == 1)
+    }
+
+    @Test("Closing a pending SMB mount releases its caller and a new operation can mount again")
+    func smbCloseDuringMount() async throws {
+        actor Resolver {
+            var calls = 0
+            func resolve(started: AsyncStream<Void>.Continuation) async throws -> String {
+                calls += 1
+                if calls == 1 {
+                    started.yield()
+                    started.finish()
+                    try await Task.sleep(for: .seconds(30))
+                }
+                return FileManager.default.temporaryDirectory.path
+            }
+        }
+        let resolver = Resolver()
+        let (started, signal) = AsyncStream<Void>.makeStream()
+        let backend = SMBBackend(config: ConnectionConfig(id: "id", name: "NAS", type: .smb, endpoint: "smb://nas/media"),
+                                 credentials: Credentials()) { _, _, _ in
+            try await resolver.resolve(started: signal)
+        }
+        let first = Task { try await backend.ping() }
+        for await _ in started { break }
+        await backend.close()
+        await #expect(throws: CancellationError.self) { try await first.value }
+        try await backend.ping()
+        #expect(await resolver.calls == 2)
     }
 
     @Test("SMBBackend delegates filesystem and readRange operations scoped to share + base")

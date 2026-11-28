@@ -6,6 +6,7 @@ import TidyreelModels
 public actor MemoryStorageBackend: RangeReadableBackend {
     private var files: [String: Data] = [:]
     private var dirs: Set<String> = ["/"]
+    private var fileIDs: [String: String] = [:]
     private var modDates: [String: Date] = [:]
 
     public init(initialSizes: [String: Int] = [:], initialFiles: [String: Data] = [:]) {
@@ -29,6 +30,7 @@ public actor MemoryStorageBackend: RangeReadableBackend {
             initFiles[p] = data
             addParents(p)
         }
+        self.fileIDs = Dictionary(uniqueKeysWithValues: initFiles.keys.map { ($0, "seed:" + $0) })
         self.files = initFiles
         self.dirs = initDirs
     }
@@ -55,7 +57,7 @@ public actor MemoryStorageBackend: RangeReadableBackend {
             }
         }
         for (f, data) in files where dirOf(f) == norm {
-            out.append(RemoteEntry(path: f, name: baseOf(f), isDir: false, size: Int64(data.count), modified: modDates[f]))
+            out.append(RemoteEntry(path: f, name: baseOf(f), isDir: false, size: Int64(data.count), modified: modDates[f], deleteIdentity: fileIDs[f]))
         }
         return out.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
@@ -78,6 +80,7 @@ public actor MemoryStorageBackend: RangeReadableBackend {
         }
         if let data = files.removeValue(forKey: norm) {
             files[dst] = data
+            fileIDs[dst] = fileIDs.removeValue(forKey: norm)
             modDates[dst] = Date()
             return
         }
@@ -94,6 +97,7 @@ public actor MemoryStorageBackend: RangeReadableBackend {
                 if let val = files.removeValue(forKey: f) {
                     let moved = dst + String(f.dropFirst(norm.count))
                     files[moved] = val
+                    fileIDs[moved] = fileIDs.removeValue(forKey: f)
                 }
             }
             return
@@ -121,6 +125,7 @@ public actor MemoryStorageBackend: RangeReadableBackend {
             }
             if let data = files.removeValue(forKey: src) {
                 files[dst] = data
+                fileIDs[dst] = fileIDs.removeValue(forKey: src)
             } else if dirs.contains(src) {
                 let prefix = src + "/"
                 for d in dirs.filter({ $0 == src || $0.hasPrefix(prefix) }) {
@@ -129,13 +134,24 @@ public actor MemoryStorageBackend: RangeReadableBackend {
                 }
                 for f in files.keys.filter({ $0.hasPrefix(prefix) }) {
                     if let val = files.removeValue(forKey: f) {
-                        files[dst + String(f.dropFirst(src.count))] = val
+                        let moved = dst + String(f.dropFirst(src.count))
+                        files[moved] = val
+                        fileIDs[moved] = fileIDs.removeValue(forKey: f)
                     }
                 }
             } else {
                 throw StorageError(.notFound, "源路径不存在：\(src)")
             }
         }
+    }
+
+    public func removeScannedFile(_ path: String, identity: String?) async throws {
+        let norm = normalizeDir(path)
+        guard let identity else { throw StorageError(.other, "缺少文件标识：\(path)") }
+        if !dirs.contains(norm) && files[norm] == nil { return }
+        guard files[norm] != nil, fileIDs[norm] == identity else { throw StorageError(.other, "文件已变更：\(path)") }
+        files.removeValue(forKey: norm)
+        fileIDs.removeValue(forKey: norm)
     }
 
     public func removeDirectoryIfEmpty(_ dir: String, removingSystemFiles: Bool) async throws -> Bool {
@@ -146,7 +162,10 @@ public actor MemoryStorageBackend: RangeReadableBackend {
         guard children.allSatisfy({ removingSystemFiles && ignorableEmptyDirFiles.contains(baseOf($0).lowercased()) }) else {
             return false
         }
-        for path in children { files.removeValue(forKey: path) }
+        for path in children {
+            files.removeValue(forKey: path)
+            fileIDs.removeValue(forKey: path)
+        }
         dirs.remove(norm)
         return true
     }
@@ -155,12 +174,16 @@ public actor MemoryStorageBackend: RangeReadableBackend {
         let norm = normalizeDir(dir)
         for name in names {
             let target = joinPath(norm, name)
-            if files.removeValue(forKey: target) != nil { continue }
+            if files.removeValue(forKey: target) != nil {
+                fileIDs.removeValue(forKey: target)
+                continue
+            }
             if dirs.contains(target) {
                 let prefix = target + "/"
                 dirs = dirs.filter { $0 != target && !$0.hasPrefix(prefix) }
                 for k in files.keys.filter({ $0.hasPrefix(prefix) }) {
                     files.removeValue(forKey: k)
+                    fileIDs.removeValue(forKey: k)
                 }
             }
         }
@@ -185,6 +208,7 @@ public actor MemoryStorageBackend: RangeReadableBackend {
             throw StorageError(.alreadyExists, "目标已存在：\(norm)")
         }
         registerParents(of: norm)
+        fileIDs[norm] = UUID().uuidString
         files[norm] = bytes
         modDates[norm] = Date()
     }
@@ -215,7 +239,7 @@ public actor MemoryTaskStore: TaskStore {
         id: TaskId,
         scan: ScanResult,
         decisions: [GroupId: GroupDecision],
-        unassignedDeletes: Set<String> = []
+        unassignedDeletes: [String: Bool] = [:]
     ) async throws {
         reviews[id] = StoredTaskReview(scan: scan, decisions: decisions, unassignedDeletes: unassignedDeletes)
     }
@@ -239,7 +263,7 @@ public actor MemoryTaskStore: TaskStore {
                 summary: s,
                 scan: r?.scan,
                 decisions: r?.decisions ?? [:],
-                unassignedDeletes: r?.unassignedDeletes ?? []
+                unassignedDeletes: r?.unassignedDeletes ?? [:]
             )
         }
     }
@@ -265,6 +289,15 @@ public actor MemoryHistoryStore: HistoryStore {
 
     public init() {}
 
+    public func setCyclePhase(_ phase: RelocationCyclePhase, batch: BatchId, ops: [OpId]) async throws {
+        guard var entry = store[batch] else { throw StorageError(.notFound, batch.value) }
+        let ids = Set(ops)
+        for index in entry.records.indices where ids.contains(entry.records[index].op.id) {
+            entry.records[index].cyclePhase = phase
+        }
+        store[batch] = entry
+    }
+
     public func saveWrittenDigest(_ digest: String, batch: BatchId, op: OpId) async throws {
         guard let i = store[batch]?.records.firstIndex(where: { $0.op.id == op }) else { return }
         store[batch]?.records[i].writtenDigest = digest
@@ -274,7 +307,7 @@ public actor MemoryHistoryStore: HistoryStore {
         seq += 1
         let id = BatchId("B\(seq)")
         let now = Date()
-        let recs = ops.map { HistoryRecord(batch: id, op: $0, status: .pending, updatedAt: now) }
+        let recs = ops.map { HistoryRecord(batch: id, op: $0, status: .pending, cyclePhase: .planned, updatedAt: now) }
         store[id] = BatchEntry(id: id, task: task, connection: connection, createdAt: now, records: recs)
         order.append(id)
         return id

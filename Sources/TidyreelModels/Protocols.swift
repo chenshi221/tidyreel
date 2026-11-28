@@ -19,6 +19,8 @@ public protocol StorageBackend: Sendable {
     func move(srcDir: String, dstDir: String, names: [String]) async throws
     /// Returns true only when the directory was removed. Backends without a conditional delete retain it.
     func removeDirectoryIfEmpty(_ dir: String, removingSystemFiles: Bool) async throws -> Bool
+    /// Deletes only the regular file version identified by the scan. An already absent file is settled.
+    func removeScannedFile(_ path: String, identity: String?) async throws
     func remove(dir: String, names: [String]) async throws
     func exists(_ path: String) async throws -> Bool
     func read(_ path: String) async throws -> Data
@@ -39,6 +41,10 @@ public extension StorageBackend {
     }
 
     func removeDirectoryIfEmpty(_ dir: String, removingSystemFiles: Bool) async throws -> Bool { false }
+
+    func removeScannedFile(_ path: String, identity: String?) async throws {
+        throw StorageError(.other, "存储端无法核验待删除文件，已保留：\(path)")
+    }
 
     var supportsServerBatching: Bool { false }
     var supportsAtomicRelocate: Bool { false }
@@ -155,12 +161,16 @@ public extension Planner {
 }
 
 public protocol HistoryStore: Sendable {
+    func setCyclePhase(_ phase: RelocationCyclePhase, batch: BatchId, ops: [OpId]) async throws
     func saveWrittenDigest(_ digest: String, batch: BatchId, op: OpId) async throws
     func beginBatch(task: TaskId, connection: ConnectionId, ops: [RenameOp]) async throws -> BatchId
     func mark(batch: BatchId, op: OpId, status: OpStatus, error: String?) async throws
     func markBatch(batch: BatchId, updates: [(op: OpId, status: OpStatus, error: String?)]) async throws
     func resetFailedToPending(batch: BatchId) async throws
     func records(batch: BatchId) async throws -> [HistoryRecord]
+    func record(batch: BatchId, op: OpId) async throws -> HistoryRecord?
+    func undoSnapshot(batch: BatchId, only: Set<OpId>?) async throws -> UndoSnapshot
+    func undoOutcome(batch: BatchId, attempted: Set<OpId>) async throws -> (remaining: Bool, statuses: [OpId: OpStatus])
     func batches() async throws -> [BatchSummary]
     func latestBatch(task: TaskId) async throws -> BatchSummary?
     func isOrganized(connection: ConnectionId, path: String) async throws -> Bool
@@ -169,6 +179,24 @@ public protocol HistoryStore: Sendable {
 }
 
 public extension HistoryStore {
+    func record(batch: BatchId, op: OpId) async throws -> HistoryRecord? {
+        try await records(batch: batch).first { $0.op.id == op }
+    }
+
+    func undoSnapshot(batch: BatchId, only: Set<OpId>?) async throws -> UndoSnapshot {
+        let done = try await records(batch: batch).filter { $0.status == .done }
+        let selected = only.map { ids in done.filter { ids.contains($0.op.id) } } ?? done
+        return UndoSnapshot(selected: selected, folderMoves: done.compactMap {
+            $0.op.phase == .folders && $0.op.kind == .relocate ? $0.op : nil
+        })
+    }
+
+    func undoOutcome(batch: BatchId, attempted: Set<OpId>) async throws -> (remaining: Bool, statuses: [OpId: OpStatus]) {
+        let rows = try await records(batch: batch)
+        let statuses = Dictionary(uniqueKeysWithValues: rows.filter { attempted.contains($0.op.id) }.map { ($0.op.id, $0.status) })
+        return (rows.contains { $0.status == .done }, statuses)
+    }
+
     func markBatch(batch: BatchId, updates: [(op: OpId, status: OpStatus, error: String?)]) async throws {
         for update in updates {
             try await mark(batch: batch, op: update.op, status: update.status, error: update.error)
@@ -196,13 +224,13 @@ public protocol TaskStore: Sendable {
         id: TaskId,
         scan: ScanResult,
         decisions: [GroupId: GroupDecision],
-        unassignedDeletes: Set<String>
+        unassignedDeletes: [String: Bool]
     ) async throws
     var supportsTargetedDecisionSave: Bool { get }
     func saveDecisions(
         id: TaskId,
         decisions: [GroupId: GroupDecision],
-        unassignedDeletes: Set<String>,
+        unassignedDeletes: [String: Bool],
         cardMeta: TaskCardMeta?
     ) async throws
     func pruneScanBlob(id: TaskId) async throws
@@ -221,7 +249,7 @@ public extension TaskStore {
     func saveDecisions(
         id: TaskId,
         decisions: [GroupId: GroupDecision],
-        unassignedDeletes: Set<String>,
+        unassignedDeletes: [String: Bool],
         cardMeta: TaskCardMeta?
     ) async throws {
         if let existing = try await loadReview(id: id) {
@@ -282,7 +310,7 @@ public protocol TaskManager: Sendable {
     func setUnassignedDeletes(_ id: TaskId, updates: [String: Bool]) async throws -> TaskReview
     func mergeGroups(_ id: TaskId, keep: GroupId, absorb: GroupId) async throws -> TaskReview
     func splitGroup(_ id: TaskId, group: GroupId, filePaths: Set<String>) async throws -> TaskReview
-    func run(_ id: TaskId, onlyConfident: Bool) async throws
+    func run(_ id: TaskId, onlyConfident: Bool, confirmedDeletePaths: Set<String>) async throws
     func cancel(_ id: TaskId) async
     func undo(_ id: TaskId, only: Set<OpId>?) async throws
     func findEmptyDirs(_ id: TaskId) async throws -> [String]
@@ -294,6 +322,10 @@ public protocol TaskManager: Sendable {
 }
 
 public extension TaskManager {
+    func run(_ id: TaskId, onlyConfident: Bool) async throws {
+        try await run(id, onlyConfident: onlyConfident, confirmedDeletePaths: [])
+    }
+
     func updateDecisions(
         _ id: TaskId,
         updates: [(group: GroupId, decision: GroupDecision)]

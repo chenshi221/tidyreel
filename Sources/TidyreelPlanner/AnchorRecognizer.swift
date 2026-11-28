@@ -190,7 +190,8 @@ public final class AnchorRecognizer: Recognizer, Sendable {
                 name: e.name,
                 size: e.size,
                 role: role,
-                parsed: parsed
+                parsed: parsed,
+                deleteIdentity: e.deleteIdentity
             )
             switch role {
             case .video:
@@ -206,6 +207,7 @@ public final class AnchorRecognizer: Recognizer, Sendable {
             videos = await probeVideos(videos, probe: mediaProbe, backend: backend, connection: connection)
         }
 
+        try Task.checkCancellation()
         let currentHint = hint()
         inferDirectoryContext(&videos, hint: currentHint, rootDirs: rootDirs)
 
@@ -1278,7 +1280,7 @@ private actor IndexQueue {
     }
 
     func next() -> Int? {
-        guard current < count else { return nil }
+        guard !Task.isCancelled, current < count else { return nil }
         defer { current += 1 }
         return current
     }

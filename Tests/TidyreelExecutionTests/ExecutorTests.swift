@@ -52,7 +52,8 @@ private func delOp(_ path: String) -> RenameOp {
         kind: .delete,
         phase: .cleanup,
         src: path,
-        dst: ""
+        dst: "",
+        deleteIdentity: "seed:" + path
     )
 }
 
@@ -112,6 +113,10 @@ private actor CountingHistoryStore: HistoryStore {
         markBatchCalls = 0
     }
 
+    func setCyclePhase(_ phase: RelocationCyclePhase, batch: BatchId, ops: [OpId]) async throws {
+        try await inner.setCyclePhase(phase, batch: batch, ops: ops)
+    }
+
     func saveWrittenDigest(_ digest: String, batch: BatchId, op: OpId) async throws {
         try await inner.saveWrittenDigest(digest, batch: batch, op: op)
     }
@@ -164,6 +169,7 @@ private final class ThrottledBackend: StorageBackend, @unchecked Sendable {
     func atomicRelocate(from src: String, to dst: String) async throws { try await inner.atomicRelocate(from: src, to: dst) }
     func renameMany(_ dir: String, names: [String: String]) async throws { try await inner.renameMany(dir, names: names) }
     func move(srcDir: String, dstDir: String, names: [String]) async throws { try await inner.move(srcDir: srcDir, dstDir: dstDir, names: names) }
+    func removeScannedFile(_ path: String, identity: String?) async throws { try await inner.removeScannedFile(path, identity: identity) }
     func remove(dir: String, names: [String]) async throws { try await inner.remove(dir: dir, names: names) }
     func exists(_ path: String) async throws -> Bool { try await inner.exists(path) }
     func read(_ path: String) async throws -> Data { try await inner.read(path) }
@@ -183,6 +189,7 @@ private final class CachedBackend: StorageBackend, @unchecked Sendable {
     func atomicRelocate(from src: String, to dst: String) async throws { try await inner.atomicRelocate(from: src, to: dst) }
     func renameMany(_ dir: String, names: [String: String]) async throws { try await inner.renameMany(dir, names: names) }
     func move(srcDir: String, dstDir: String, names: [String]) async throws { try await inner.move(srcDir: srcDir, dstDir: dstDir, names: names) }
+    func removeScannedFile(_ path: String, identity: String?) async throws { try await inner.removeScannedFile(path, identity: identity) }
     func remove(dir: String, names: [String]) async throws { try await inner.remove(dir: dir, names: names) }
     func exists(_ path: String) async throws -> Bool { try await inner.exists(path) }
     func read(_ path: String) async throws -> Data { try await inner.read(path) }
@@ -294,6 +301,24 @@ struct ExecutorTests {
         #expect(await fs.allFilePaths() == sampleTree().keys.sorted())
         let b = try await firstBatch(history)
         #expect((try await history.records(batch: b)).isEmpty)
+    }
+
+    @Test("Resume preserves replacements and files named by legacy delete records")
+    func conditionalDeleteRecovery() async throws {
+        let history = MemoryHistoryStore()
+        let fs = MemoryStorageBackend(initialSizes: ["/a": 1, "/b": 2])
+        let identity = try #require(try await fs.list("/").first(where: { $0.name == "a" })?.deleteIdentity)
+        let ops = [
+            RenameOp(id: "a", kind: .delete, phase: .cleanup, src: "/a", dst: "", deleteIdentity: identity),
+            RenameOp(id: "b", kind: .delete, phase: .cleanup, src: "/b", dst: ""),
+        ]
+        let batch = try await history.beginBatch(task: testTask, connection: testConn, ops: ops)
+        try await fs.removeScannedFile("/a", identity: identity)
+        try await fs.write("/a", bytes: Data([7]))
+        _ = try await collectStream(makeExecutor(history).resume(batch: batch, backend: fs))
+        #expect(try await fs.read("/a") == Data([7]))
+        #expect(try await fs.exists("/b"))
+        #expect(try await history.records(batch: batch).allSatisfy { $0.status == .failed })
     }
 
     @Test("Write-ahead log is written before storage is touched")
@@ -646,6 +671,72 @@ struct ExecutorTests {
         #expect(skippedKinds == [.relocate, .mkdir])
         #expect((await fs4.allFilePaths()).contains("/d/Movie (2010)/Movie.2010.mkv"))
         #expect((try await fs4.read("/d/Movie.mkv")).count == 99)
+    }
+
+    @Test("A landed cycle with pending journal rows is reconciled without replaying the swap")
+    func landedCycleRecovery() async throws {
+        let ops = [reloc("/d/a", "/d/b"), reloc("/d/b", "/d/a")]
+        let h = MemoryHistoryStore()
+        let b = try await h.beginBatch(task: testTask, connection: testConn, ops: ops)
+        let f = MemoryStorageBackend(initialSizes: ["/d/a": 2, "/d/b": 1])
+        let executor = makeExecutor(h)
+        try await h.setCyclePhase(.landing, batch: b, ops: ops.map(\.id))
+        _ = try await collectStream(executor.resume(batch: b, backend: f))
+        func sizes() async throws -> [String: Int64] {
+            Dictionary(uniqueKeysWithValues: (try await f.list("/d", refresh: true)).map { ($0.name, $0.size) })
+        }
+        #expect(try await sizes() == ["a": 2, "b": 1])
+        #expect(statusCounts(try await h.records(batch: b)) == [.done: 2])
+
+        // Reverse-direction landing can lose its acknowledgement as well.
+        try await h.setCyclePhase(.undoLanding, batch: b, ops: ops.map(\.id))
+        try await f.rename("/d/a", newName: "hold")
+        try await f.rename("/d/b", newName: "a")
+        try await f.rename("/d/hold", newName: "b")
+        _ = try await collectStream(executor.undo(batch: b, backend: f))
+        #expect(try await sizes() == ["a": 1, "b": 2])
+        #expect(statusCounts(try await h.records(batch: b)) == [.undone: 2])
+    }
+
+    @Test("A lost landing acknowledgement resumes from the committed parking boundary")
+    func cycleWithLostAcknowledgement() async throws {
+        let ops = [reloc("/d/a", "/d/b"), reloc("/d/b", "/d/a")]
+        let files = MemoryStorageBackend(initialSizes: ["/d/a": 1, "/d/b": 2])
+        let history = MemoryHistoryStore()
+        let executor = makeExecutor(history)
+        let backend = HookBackend(files, supportsServerBatching: true) { method, args in
+            guard method == "rename", args.count == 2, args[1] == "b" else { return }
+            try await files.rename(args[0], newName: args[1])
+            throw StorageError(.other, "lost reply")
+        }
+        await #expect(throws: StorageError.self) {
+            _ = try await collectStream(executor.execute(
+                task: testTask, connection: testConn, plan: RenamePlan(ops: ops), backend: backend
+            ))
+        }
+        let batch = try await firstBatch(history)
+        let interrupted = try await history.records(batch: batch)
+        #expect(interrupted.allSatisfy { $0.cyclePhase == .landing && $0.status == .pending })
+        _ = try await collectStream(executor.resume(batch: batch, backend: files))
+        #expect(statusCounts(try await history.records(batch: batch)) == [.done: 2])
+        let entries = try await files.list("/d", refresh: true)
+        #expect(Dictionary(uniqueKeysWithValues: entries.map { ($0.name, $0.size) }) == ["a": 2, "b": 1])
+    }
+
+    @Test("Legacy cycle without a durable phase is preserved for review")
+    func legacyCycleIsAmbiguous() async throws {
+        let ops = [reloc("/d/a", "/d/b"), reloc("/d/b", "/d/a")]
+        let h = MemoryHistoryStore()
+        let b = try await h.beginBatch(task: testTask, connection: testConn, ops: ops)
+        let f = MemoryStorageBackend(initialSizes: ["/d/a": 2, "/d/b": 1])
+        await #expect(throws: TidyreelExecutionError.self) {
+            _ = try await makeExecutor(h).performCycles(
+                in: ops, batch: b, backend: f, phases: [:], undo: false, resuming: true,
+                cancelled: { false }, blocked: { _ in false }, landed: { _ in Issue.record("unexpected landing") }
+            )
+        }
+        let entries = try await f.list("/d", refresh: true)
+        #expect(Dictionary(uniqueKeysWithValues: entries.map { ($0.name, $0.size) }) == ["a": 2, "b": 1])
     }
 
     @Test("Swaps, chains, partial undo, half-applied batch undo, and parked undo recovery")

@@ -6,7 +6,7 @@ public actor WebDAVBackend: RangeReadableBackend {
         (
             #"<?xml version="1.0" encoding="utf-8"?>"#
             + #"<d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/>"#
-            + #"<d:getcontentlength/><d:getlastmodified/></d:prop></d:propfind>"#
+            + #"<d:getcontentlength/><d:getlastmodified/><d:getetag/></d:prop></d:propfind>"#
         ).utf8
     )
 
@@ -131,7 +131,8 @@ public actor WebDAVBackend: RangeReadableBackend {
                     name: posixBasename(path),
                     isDir: item.isCollection,
                     size: max(0, size),
-                    modified: modified
+                    modified: modified,
+                    deleteIdentity: item.isCollection ? nil : Self.strongETag(item.etag)
                 )
             )
         }
@@ -488,6 +489,24 @@ public actor WebDAVBackend: RangeReadableBackend {
         }
     }
 
+    private nonisolated static func strongETag(_ value: String?) -> String? {
+        guard let value, value.utf8.count >= 2, value.first == "\"", value.last == "\"",
+              value.utf8.dropFirst().dropLast().allSatisfy({ $0 == 0x21 || (0x23...0x7E).contains($0) })
+        else { return nil }
+        return value
+    }
+
+    public func removeScannedFile(_ path: String, identity: String?) async throws {
+        guard let tag = Self.strongETag(identity) else {
+            throw StorageError(.other, "WebDAV 未提供强 ETag，已保留：\(path)")
+        }
+        let (_, http) = try await send(method: "DELETE", path: path, headers: ["If-Match": tag])
+        if http.statusCode == 412 { throw StorageError(.other, "文件已变更，已保留：\(path)") }
+        guard [200, 204, 404].contains(http.statusCode) else {
+            throw fail(method: "DELETE", path: path, status: http.statusCode)
+        }
+    }
+
     public func remove(dir: String, names: [String]) async throws {
         _ = try validatedPathSegments(dir)
         for name in names {
@@ -829,6 +848,7 @@ struct WebDAVParsedResponse: Sendable {
     var isCollection: Bool = false
     var contentLength: String?
     var lastModified: String?
+    var etag: String?
 }
 
 private final class WebDAVMultistatusParser: NSObject, XMLParserDelegate {
@@ -836,6 +856,7 @@ private final class WebDAVMultistatusParser: NSObject, XMLParserDelegate {
         var isCollection: Bool = false
         var contentLength: String?
         var lastModified: String?
+        var etag: String?
         var status: String?
     }
 
@@ -1016,6 +1037,7 @@ private final class WebDAVMultistatusParser: NSObject, XMLParserDelegate {
             textBuffer = ""
         case "getcontentlength" where inResponse,
              "getlastmodified" where inResponse,
+             "getetag" where inResponse,
              "status" where inResponse && currentPropStat != nil:
             activeTextTag = local
             textBuffer = ""
@@ -1056,6 +1078,14 @@ private final class WebDAVMultistatusParser: NSObject, XMLParserDelegate {
                 directProps.contentLength = val
             }
             activeTextTag = nil
+        case "getetag" where activeTextTag == "getetag":
+            let val = textBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+            if currentPropStat != nil {
+                currentPropStat?.etag = val
+            } else {
+                directProps.etag = val
+            }
+            activeTextTag = nil
         case "getlastmodified" where activeTextTag == "getlastmodified":
             let val = textBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
             if currentPropStat != nil {
@@ -1080,6 +1110,7 @@ private final class WebDAVMultistatusParser: NSObject, XMLParserDelegate {
             for b in blocks {
                 if b.isCollection { merged.isCollection = true }
                 if let len = b.contentLength, !len.isEmpty { merged.contentLength = len }
+                if let etag = b.etag { merged.etag = etag }
                 if let mod = b.lastModified, !mod.isEmpty { merged.lastModified = mod }
             }
             results.append(merged)

@@ -9,11 +9,26 @@ extension DefaultExecutor {
         backend: any StorageBackend,
         only: Set<OpId>? = nil
     ) -> AsyncThrowingStream<ExecProgress, any Error> {
+        undo(batch: batch, backend: backend, only: only, snapshot: nil)
+    }
+
+    func undo(
+        batch: BatchId,
+        backend: any StorageBackend,
+        only: Set<OpId>?,
+        snapshot: UndoSnapshot?
+    ) -> AsyncThrowingStream<ExecProgress, any Error> {
         makeStream(owner: .batch(batch)) { cancelFlag, continuation in
+            let input: UndoSnapshot
+            if let snapshot {
+                input = snapshot
+            } else {
+                input = try await self.history.undoSnapshot(batch: batch, only: only)
+            }
             try await self.performUndo(
                 batch: batch,
                 be: self.wrap(backend),
-                only: only,
+                snapshot: input,
                 cancelFlag: cancelFlag,
                 continuation: continuation
             )
@@ -25,16 +40,15 @@ extension DefaultExecutor {
     private func performUndo(
         batch: BatchId,
         be: any StorageBackend,
-        only: Set<OpId>?,
+        snapshot: UndoSnapshot,
         cancelFlag: CancellationFlag,
         continuation: AsyncThrowingStream<ExecProgress, any Error>.Continuation
     ) async throws {
-        let records = try await history.records(batch: batch)
+        let records = snapshot.selected
         let writtenDigests = Dictionary(uniqueKeysWithValues: records.compactMap { record in
             record.writtenDigest.map { (record.op.id, $0) }
         })
         let todo = records.reversed()
-            .filter { $0.status == .done && (only == nil || only!.contains($0.op.id)) }
             .map(\.op)
 
         var counts: [ExecPhase: Int] = [:]
@@ -69,9 +83,7 @@ extension DefaultExecutor {
             return failure == nil
         }
 
-        var activeFolders = records
-            .filter { $0.status == .done && $0.op.phase == .folders && $0.op.kind == .relocate }
-            .map(\.op)
+        var activeFolders = snapshot.folderMoves
 
         let cleanup = todo.filter { $0.phase == .cleanup }
         let folders = todo.filter { $0.phase == .folders }
@@ -110,8 +122,24 @@ extension DefaultExecutor {
             }
         }
 
-        let mappedFiles = files.map { Self.mapOp($0, doneFolders: activeFolders) }
+        var mappedFiles = files.map { Self.mapOp($0, doneFolders: activeFolders) }
         let mappedMkdirs = mkdirs.map { Self.mapOp($0, doneFolders: activeFolders) }
+
+        let cyclePhases = Dictionary(uniqueKeysWithValues: records.compactMap { r in r.cyclePhase.map { (r.op.id, $0) } })
+        let inverseMoves = mappedFiles.filter { $0.kind == .relocate }.map { op in
+            var inverse = op
+            inverse.src = op.dst
+            inverse.dst = op.src
+            return inverse
+        }
+        let restMoves = try await performCycles(
+            in: inverseMoves, batch: batch, backend: be, phases: cyclePhases,
+            undo: true, resuming: false, cancelled: { cancelFlag.isCancelled }, blocked: { _ in false },
+            landed: { try await finish($0, nil, nil) }
+        )
+        if cancelFlag.isCancelled { return }
+        let remainingMoves = Set(restMoves.map(\.id))
+        mappedFiles.removeAll { $0.kind == .relocate && !remainingMoves.contains($0.id) }
 
         var dirs: Set<String> = []
         for o in mappedFiles where o.kind == .relocate {

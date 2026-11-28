@@ -375,6 +375,7 @@ public enum TidyreelCodecs {
             "role": f.role.rawValue,
         ]
         if let p = f.parsed { d["parsed"] = parsedToDict(p) } else { d["parsed"] = NSNull() }
+        if let identity = f.deleteIdentity { d["deleteIdentity"] = identity }
         if f.isDiscDir { d["isDiscDir"] = true }
         return d
     }
@@ -391,7 +392,8 @@ public enum TidyreelCodecs {
             size: size,
             role: role,
             parsed: parsed,
-            isDiscDir: (j["isDiscDir"] as? Bool) ?? false
+            isDiscDir: (j["isDiscDir"] as? Bool) ?? false,
+            deleteIdentity: j["deleteIdentity"] as? String
         )
     }
 
@@ -565,6 +567,7 @@ public enum TidyreelCodecs {
                     "d": e.isDir,
                     "s": e.size,
                 ]
+                if let identity = e.deleteIdentity { d["i"] = identity }
                 if let m = e.modified { d["m"] = Int64((m.timeIntervalSince1970 * 1000.0).rounded()) }
                 return d
             }
@@ -591,7 +594,7 @@ public enum TidyreelCodecs {
                 } else {
                     mod = nil
                 }
-                return RemoteEntry(path: p, name: n, isDir: isDir, size: size, modified: mod)
+                return RemoteEntry(path: p, name: n, isDir: isDir, size: size, modified: mod, deleteIdentity: m["i"] as? String)
             }
         }
     }

@@ -78,7 +78,7 @@ private final class FakeRecognizer: Recognizer, @unchecked Sendable {
             } else {
                 role = .junk
             }
-            let sf = ScanFile(path: f.path, name: f.name, size: f.size, role: role)
+            let sf = ScanFile(path: f.path, name: f.name, size: f.size, role: role, deleteIdentity: f.deleteIdentity)
             if role == .junk {
                 junk.append(sf)
             } else {
@@ -259,7 +259,8 @@ private final class FakePlanner: Planner, @unchecked Sendable {
                     phase: .cleanup,
                     src: u.path,
                     dst: "",
-                    selected: shouldDel
+                    selected: shouldDel,
+                    deleteIdentity: u.deleteIdentity
                 )
             )
         }
@@ -301,6 +302,8 @@ private actor SpyTaskStore: TaskStore {
     var loadSummariesCalls = 0
     var loadAllCalls = 0
     var loadReviewCalls: [TaskId] = []
+    var rejectNextSummary = false
+    func failNextSummarySave() { rejectNextSummary = true }
     var saveReviewCalls = 0
     var saveDecisionsCalls = 0
     var lastCardMeta: TaskCardMeta?
@@ -310,6 +313,10 @@ private actor SpyTaskStore: TaskStore {
     }
 
     func saveSummary(_ summary: TaskSummary) async throws {
+        if rejectNextSummary {
+            rejectNextSummary = false
+            throw TidyreelExecutionError.invalidState("summary store unavailable")
+        }
         try await inner.saveSummary(summary)
     }
 
@@ -317,7 +324,7 @@ private actor SpyTaskStore: TaskStore {
         id: TaskId,
         scan: ScanResult,
         decisions: [GroupId: GroupDecision],
-        unassignedDeletes: Set<String>
+        unassignedDeletes: [String: Bool]
     ) async throws {
         saveReviewCalls += 1
         try await inner.saveReview(id: id, scan: scan, decisions: decisions, unassignedDeletes: unassignedDeletes)
@@ -326,7 +333,7 @@ private actor SpyTaskStore: TaskStore {
     func saveDecisions(
         id: TaskId,
         decisions: [GroupId: GroupDecision],
-        unassignedDeletes: Set<String>,
+        unassignedDeletes: [String: Bool],
         cardMeta: TaskCardMeta?
     ) async throws {
         saveDecisionsCalls += 1
@@ -376,6 +383,10 @@ private actor GatedBatchHistory: HistoryStore {
     let release = AsyncGate()
 
     func setHold(_ v: Bool) { hold = v }
+
+    func setCyclePhase(_ phase: RelocationCyclePhase, batch: BatchId, ops: [OpId]) async throws {
+        try await inner.setCyclePhase(phase, batch: batch, ops: ops)
+    }
 
     func saveWrittenDigest(_ digest: String, batch: BatchId, op: OpId) async throws {
         try await inner.saveWrittenDigest(digest, batch: batch, op: op)
@@ -443,6 +454,7 @@ private final class LockedFolderBackend: StorageBackend, @unchecked Sendable {
 
     func renameMany(_ dir: String, names: [String: String]) async throws { try await inner.renameMany(dir, names: names) }
     func move(srcDir: String, dstDir: String, names: [String]) async throws { try await inner.move(srcDir: srcDir, dstDir: dstDir, names: names) }
+    func removeScannedFile(_ path: String, identity: String?) async throws { try await inner.removeScannedFile(path, identity: identity) }
     func remove(dir: String, names: [String]) async throws { try await inner.remove(dir: dir, names: names) }
     func exists(_ path: String) async throws -> Bool { try await inner.exists(path) }
     func read(_ path: String) async throws -> Data { try await inner.read(path) }
@@ -468,6 +480,37 @@ private func waitForTask(
 
 @Suite("DefaultTaskManager Tests")
 struct TaskManagerTests {
+    @Test("Failed submissions stay unpublished and execution honors the reviewed deletion set")
+    func submissionAndDeletionConsent() async throws {
+        let fs = MemoryStorageBackend(initialSizes: ["/a/v.mkv": 1, "/a/ad.txt": 1, "/b/v.mkv": 1])
+        let store = SpyTaskStore(supportsTargetedDecisionSave: true)
+        let history = MemoryHistoryStore()
+        let tm = DefaultTaskManager(
+            backendFor: { _ in fs }, recognizer: FakeRecognizer(), planner: FakePlanner(),
+            executor: DefaultExecutor(history: history, sleepMs: { _ in }), history: history,
+            store: store, options: { _, mode in PlanOptions(mode: mode, libraryRoot: "/lib", deleteJunk: true) }
+        )
+        await store.failNextSummarySave()
+        await #expect(throws: TidyreelExecutionError.self) {
+            try await tm.submit(connection: testConn, paths: ["/a"], mode: .moveToLibrary)
+        }
+        #expect(await tm.currentSummaries().isEmpty)
+
+        let id = try await tm.submit(connection: testConn, paths: ["/a"], mode: .moveToLibrary)
+        _ = try await waitForTask(tm, id: id) { $0.stage == .awaitingReview }
+        await #expect(throws: TidyreelExecutionError.self) {
+            try await tm.run(id, confirmedDeletePaths: ["/a/another.txt"])
+        }
+        #expect(try await history.latestBatch(task: id) == nil)
+        _ = try await tm.setUnassignedDelete(id, filePath: "/a/ad.txt", delete: false)
+        let other = try await tm.submit(connection: testConn, paths: ["/b"], mode: .moveToLibrary)
+        _ = try await waitForTask(tm, id: other) { $0.stage == .awaitingReview }
+        #expect(await tm.hasCachedReview(id) == false)
+        try await tm.run(id)
+        #expect(try await fs.exists("/a/ad.txt"))
+        await tm.dispose()
+    }
+
     @Test("CRITICAL MEMORY FIX: Startup uses loadSummaries only, loads review lazily on demand, and evicts ScanResult when finished")
     func lazyReviewLoadAndMemoryEviction() async throws {
         let fs = MemoryStorageBackend(initialSizes: sampleLibrary())
@@ -507,7 +550,7 @@ struct TaskManagerTests {
                     ]
                 ),
                 decisions: [GroupId("g-\(i)"): GroupDecision()],
-                unassignedDeletes: []
+                unassignedDeletes: [:]
             )
         }
 
@@ -540,7 +583,7 @@ struct TaskManagerTests {
                 ]
             ),
             decisions: [GroupId("g:/in/Good"): GroupDecision()],
-            unassignedDeletes: []
+            unassignedDeletes: [:]
         )
 
         let tm = DefaultTaskManager(
@@ -929,7 +972,7 @@ struct TaskManagerTests {
                 ]
             ),
             decisions: [gidChain: GroupDecision()],
-            unassignedDeletes: []
+            unassignedDeletes: [:]
         )
         let chainPlan = RenamePlan(ops: [
             RenameOp(id: OpId("low-vacate"), kind: .relocate, phase: .files, src: "\(dirChain)/a.mkv", dst: "\(dirChain)/b.mkv", group: gidChain, warning: "识别置信度较低"),
@@ -973,7 +1016,7 @@ struct TaskManagerTests {
                 ]
             ),
             decisions: [GroupId("g"): GroupDecision()],
-            unassignedDeletes: []
+            unassignedDeletes: [:]
         )
         let tmErr = DefaultTaskManager(
             backendFor: { _ in MemoryStorageBackend(initialSizes: ["/in/Good/a.mkv": 1]) },
@@ -1167,7 +1210,7 @@ struct TaskManagerTests {
                 ]
             ),
             decisions: [gidNaming: GroupDecision()],
-            unassignedDeletes: []
+            unassignedDeletes: [:]
         )
         let fsNaming = MemoryStorageBackend(initialSizes: ["/d/Show/a.mkv": 1])
         let plannerNaming = FakePlanner()

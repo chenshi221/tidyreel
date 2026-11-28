@@ -564,7 +564,7 @@ public struct ReviewPageView: View {
                 },
                 onConfirm: {
                     Task {
-                        await viewModel.confirmPermanentDeleteAndRun(store: store, taskId: taskId)
+                        await viewModel.confirmPermanentDeleteAndRun(store: store, taskId: taskId, paths: paths)
                     }
                 }
             )

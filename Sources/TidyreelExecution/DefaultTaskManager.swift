@@ -392,7 +392,7 @@ public actor DefaultTaskManager: TaskManager {
         guard let stored = storedOpt else {
             throw TidyreelExecutionError.invalidState("任务尚未识别完成")
         }
-        let deletesMap = Dictionary(uniqueKeysWithValues: stored.unassignedDeletes.map { ($0, true) })
+        let deletesMap = stored.unassignedDeletes
 
         // Cache in RAM ONLY while awaitingReview or actively executing/editing (LRU of 1 awaitingReview task).
         if t.summary.stage == .awaitingReview ||
@@ -541,9 +541,9 @@ public actor DefaultTaskManager: TaskManager {
             ),
             orderIndex: nextOrderIndex
         )
+        try await store.saveSummary(t.summary)
         tasks[id] = t
         broadcastSnapshot()
-        try await persistSummary(t)
         let gen = t.tracker.bumpPipelineGen()
         t.pipelineTask = (gen: gen, task: Task { await self.pipeline(t, gen: gen) })
         return id
@@ -822,7 +822,8 @@ public actor DefaultTaskManager: TaskManager {
             size: orig.size,
             role: role,
             parsed: parsed,
-            isDiscDir: orig.isDiscDir
+            isDiscDir: orig.isDiscDir,
+            deleteIdentity: orig.deleteIdentity
         )
         var nextUnassigned = scan.unassigned
         nextUnassigned.remove(at: uIdx)
@@ -1262,7 +1263,7 @@ public actor DefaultTaskManager: TaskManager {
         return err.hasPrefix("依赖的操作失败")
     }
 
-    public func run(_ id: TaskId, onlyConfident: Bool = false) async throws {
+    public func run(_ id: TaskId, onlyConfident: Bool = false, confirmedDeletePaths: Set<String> = []) async throws {
         let t = try await getTask(id)
         try requireStage(t, .awaitingReview)
         if t.busy { throw TidyreelExecutionError.invalidState("任务正在处理中") }
@@ -1277,6 +1278,10 @@ public actor DefaultTaskManager: TaskManager {
                 if t.cancelled || self.tasks[id] !== t { return }
                 if onlyConfident {
                     plan = self.confidentOnly(t, plan: plan)
+                }
+                let deletes = plan.ops.filter { $0.selected && $0.kind == .delete }
+                guard deletes.allSatisfy({ confirmedDeletePaths.contains($0.src) }) else {
+                    throw TidyreelExecutionError.invalidState("删除计划已变更，请重新核对并确认")
                 }
                 if !plan.canExecute {
                     throw TidyreelExecutionError.invalidState("存在冲突，无法执行")
@@ -1526,17 +1531,19 @@ public actor DefaultTaskManager: TaskManager {
 
         await withBusy(t) {
             do {
-                let beforeRecords = try await self.history.records(batch: batch)
-                let attemptedIds = Set(
-                    beforeRecords
-                        .filter { $0.status == .done && (only == nil || only!.contains($0.op.id)) }
-                        .map { $0.op.id }
-                )
+                let snapshot = try await self.history.undoSnapshot(batch: batch, only: only)
+                let attemptedIds = Set(snapshot.selected.map(\.op.id))
                 let totalOps = attemptedIds.count
                 var completed = 0
                 t.lastProgressEmitAt = 0
                 let be = try self.backendFor(t.summary.connection)
-                for try await ev in self.executor.undo(batch: batch, backend: be, only: only) {
+                let stream: AsyncThrowingStream<ExecProgress, any Error>
+                if let executor = self.executor as? DefaultExecutor {
+                    stream = executor.undo(batch: batch, backend: be, only: only, snapshot: snapshot)
+                } else {
+                    stream = self.executor.undo(batch: batch, backend: be, only: only)
+                }
+                for try await ev in stream {
                     completed += 1
                     let shownTotal = totalOps > 0 ? totalOps : completed
                     let clamped = min(completed, shownTotal)
@@ -1557,13 +1564,14 @@ public actor DefaultTaskManager: TaskManager {
                     }
                 }
 
-                let afterRecords = try await self.history.records(batch: batch)
-                let remaining = afterRecords.contains { $0.status == .done }
-                let failedCount = afterRecords.filter { attemptedIds.contains($0.op.id) && $0.status == .done }.count
-                let skippedCount = afterRecords.filter { attemptedIds.contains($0.op.id) && $0.status == .skipped }.count
+                let outcome = try await self.history.undoOutcome(batch: batch, attempted: attemptedIds)
+                let remaining = outcome.remaining
+                let failedCount = outcome.statuses.values.filter { $0 == .done }.count
+                let skippedCount = outcome.statuses.values.filter { $0 == .skipped }.count
                 if let onPathsMutated = self.onPathsMutated {
-                    let undoneRecords = afterRecords.filter { attemptedIds.contains($0.op.id) && $0.status == .undone }
-                    let mutatedDirs = Self.mutatedParentDirs(from: undoneRecords, statuses: [.undone])
+                    let mutatedDirs = Self.mutatedParentDirs(from: snapshot.selected) {
+                        outcome.statuses[$0.op.id] == .undone
+                    }
                     if !mutatedDirs.isEmpty {
                         await onPathsMutated(t.summary.connection, mutatedDirs)
                     }
@@ -2437,7 +2445,7 @@ public actor DefaultTaskManager: TaskManager {
         if t.cancelled || tasks[t.summary.id] !== t { return }
 
         if let onPathsMutated {
-            let mutatedDirs = Self.mutatedParentDirs(from: batchRecords, statuses: [.done])
+            let mutatedDirs = Self.mutatedParentDirs(from: batchRecords) { $0.status == .done }
             if !mutatedDirs.isEmpty {
                 await onPathsMutated(t.summary.connection, mutatedDirs)
             }
@@ -2722,7 +2730,6 @@ public actor DefaultTaskManager: TaskManager {
         let id = t.summary.id
         guard tasks[id] === t else { return }
         let decisionsSnap = decisions
-        let deletesSet = Set(unassignedDeletes.compactMap { $0.value ? $0.key : nil })
         let oid = ObjectIdentifier(t)
         let storeRef = store
         try await enqueuePersist(t) { [weak self] in
@@ -2731,7 +2738,7 @@ public actor DefaultTaskManager: TaskManager {
                 id: id,
                 scan: scan,
                 decisions: decisionsSnap,
-                unassignedDeletes: deletesSet
+                unassignedDeletes: unassignedDeletes
             )
         }
     }
@@ -2745,7 +2752,6 @@ public actor DefaultTaskManager: TaskManager {
         let id = t.summary.id
         guard tasks[id] === t else { return }
         let decisionsSnap = decisions
-        let deletesSet = Set(unassignedDeletes.compactMap { $0.value ? $0.key : nil })
         let cardMeta = TaskCardMeta.from(scan: scan, decisions: decisionsSnap)
         let oid = ObjectIdentifier(t)
         let storeRef = store
@@ -2754,7 +2760,7 @@ public actor DefaultTaskManager: TaskManager {
             try await storeRef.saveDecisions(
                 id: id,
                 decisions: decisionsSnap,
-                unassignedDeletes: deletesSet,
+                unassignedDeletes: unassignedDeletes,
                 cardMeta: cardMeta
             )
         }
@@ -2762,10 +2768,10 @@ public actor DefaultTaskManager: TaskManager {
 
     private static func mutatedParentDirs(
         from records: [HistoryRecord],
-        statuses: Set<OpStatus>
+        where isMutated: (HistoryRecord) -> Bool
     ) -> [String] {
         var dirs: Set<String> = []
-        for r in records where statuses.contains(r.status) {
+        for r in records where isMutated(r) {
             let op = r.op
             if (op.kind == .relocate || op.kind == .delete), !op.src.isEmpty {
                 dirs.insert(dirOf(op.src))

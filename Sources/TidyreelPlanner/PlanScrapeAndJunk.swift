@@ -549,7 +549,8 @@ extension PlanBuilder {
                 phase: .cleanup,
                 src: path,
                 dst: "",
-                selected: override ?? opts.deleteJunk
+                selected: override ?? opts.deleteJunk,
+                deleteIdentity: f.deleteIdentity
             ))
         }
     }

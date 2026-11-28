@@ -285,6 +285,7 @@ public actor HealthScannerActor {
                     name: e.name,
                     dir: dir,
                     size: e.size,
+                    deleteIdentity: e.deleteIdentity,
                     modifiedAt: e.modified,
                     parsed: parsed,
                     chain: chain,
@@ -301,6 +302,7 @@ public actor HealthScannerActor {
                         name: e.name,
                         dir: dir,
                         size: e.size,
+                        deleteIdentity: e.deleteIdentity,
                         modifiedAt: e.modified,
                         parsed: parsed,
                         chain: chain,
@@ -418,11 +420,33 @@ public actor HealthScannerActor {
 
     // MARK: - Internal Models & Audits
 
+    /// Re-read the retained candidates before each destructive operation, including repeated confirmations.
+    public nonisolated static func hasSurvivingCopy(
+        _ keepers: [DuplicateMediaCopy], backend: any StorageBackend
+    ) async throws -> Bool {
+        let byDir = Dictionary(grouping: keepers.filter { $0.deleteIdentity != nil && !$0.isDiscDir }) { dirOf($0.path) }
+        for (dir, candidates) in byDir {
+            let entries: [RemoteEntry]
+            do {
+                entries = try await backend.list(dir, refresh: true)
+            } catch let error as StorageError where error.code == .notFound {
+                continue
+            }
+            let versions = Dictionary(grouping: candidates, by: \.path)
+            if entries.contains(where: { entry in
+                guard !entry.isDir, let id = entry.deleteIdentity else { return false }
+                return versions[entry.path]?.contains(where: { $0.deleteIdentity == id }) == true
+            }) { return true }
+        }
+        return false
+    }
+
     private struct ScannedVideo: Sendable {
         var path: String
         var name: String
         var dir: String
         var size: Int64
+        var deleteIdentity: String?
         var modifiedAt: Date?
         var parsed: ParsedName
         var chain: [String]
@@ -470,6 +494,20 @@ public actor HealthScannerActor {
             let isGenericOrRoot = dir == normRoot || dir == "/" || isGenericContainerDir(dirBase)
             let folderParsed = isGenericOrRoot ? nil : parser.parse(dirBase)
             let folderTitle = folderParsed?.title?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            // Conflicting catalog IDs identify separate works even in a folder named for one of them.
+            if Set(vs.compactMap(\.parsed.externalId)).count > 1 {
+                let groups = Dictionary(grouping: vs) { video in
+                    if let id = video.parsed.externalId { return "id:\(id)" }
+                    let title = normTitle(video.parsed.title ?? "")
+                    return title.isEmpty ? "path:\(video.path)" : "title:\(title):\(video.parsed.year ?? 0)"
+                }
+                for group in groups.values {
+                    works.append(makeWork(rootDir: dir, videos: group, folderTitle: nil,
+                                          folderYear: nil, folderExternalId: nil, ownsDir: false))
+                }
+                continue
+            }
 
             var byTitle: [String: [ScannedVideo]] = [:]
             for v in vs {
@@ -596,18 +634,26 @@ public actor HealthScannerActor {
                     let season = v.parsed.kind == .special ? 0 : (v.parsed.season ?? 1)
                     let sortedEps = Array(Set(eps)).sorted()
                     let epKey = sortedEps.map(String.init).joined(separator: "-")
-                    let nt = normTitle(w.anchorTitle)
-                    if w.tmdbId == nil && nt.isEmpty { continue }
-                    let showKey = w.tmdbId != nil ? "tmdb:\(w.tmdbId!)" : "title:\(nt):\(w.anchorYear ?? 0)"
+                    // Use the identity parsed for this file (including its parent directory).
+                    // A majority title or ID from a sibling cannot identify this episode.
+                    let title = v.parsed.title ?? w.anchorTitle
+                    let showKey: String
+                    if let id = v.parsed.externalId {
+                        showKey = "ext:\(id.source):\(id.id.lowercased())"
+                    } else {
+                        let normalizedTitle = normTitle(title)
+                        guard !normalizedTitle.isEmpty else { continue }
+                        showKey = "title:\(normalizedTitle):\(v.parsed.year ?? 0)"
+                    }
                     let key = "tv:\(showKey):s\(season):e\(epKey):p\(v.parsed.part ?? 0)"
                     let code = sortedEps.count == 1
                         ? String(format: "S%02dE%02d", season, sortedEps[0])
                         : String(format: "S%02dE%02d-E%02d", season, sortedEps.first!, sortedEps.last!)
                     var b = buckets[key] ?? Bucket(
                         id: "dup-\(stableHash(key))",
-                        title: "\(w.anchorTitle) \(code)",
+                        title: "\(title) \(code)",
                         kind: .episode,
-                        tmdbId: w.tmdbId,
+                        tmdbId: v.parsed.externalId.flatMap { $0.source == "tmdb" ? Int($0.id) : nil },
                         season: season,
                         episode: sortedEps[0]
                     )
@@ -685,6 +731,7 @@ public actor HealthScannerActor {
                     parsedResolution: v.parsed.resolution,
                     parsedExtraInfo: v.parsed.extraInfo,
                     isDiscDir: v.isDiscDir,
+                    deleteIdentity: v.deleteIdentity,
                     qualityRank: computeMediaQualityRank(
                         probe: pr,
                         parsedResolution: v.parsed.resolution,
@@ -781,11 +828,9 @@ public actor HealthScannerActor {
         allDirs: Set<String>,
         discDirs: Set<String>
     ) -> [String] {
-        func insideDisc(_ dir: String) -> Bool {
-            discDirs.contains { d in dir == d || dir.hasPrefix(d + "/") }
-        }
+        // The walker never enqueues children of a disc root.
         let sortedDirs = allDirs
-            .filter { $0 != "/" && $0 != normRoot && !insideDisc($0) }
+            .filter { $0 != "/" && $0 != normRoot && !discDirs.contains($0) }
             .sorted { $0.filter({ $0 == "/" }).count > $1.filter({ $0 == "/" }).count }
 
         var likelyEmpty: Set<String> = []
@@ -806,7 +851,7 @@ public actor HealthScannerActor {
         likelyEmpty: [String]
     ) async -> [CleanupIssue] {
         var items = junkFiles.map { f, reason in
-            CleanupIssue(path: f.path, name: f.name, kind: .junkFile, size: f.size, reason: reason)
+            CleanupIssue(path: f.path, name: f.name, kind: .junkFile, size: f.size, reason: reason, deleteIdentity: f.deleteIdentity)
         }
         if !likelyEmpty.isEmpty && !cancelledFlag {
             if let verified = try? await findEmptySourceDirs(

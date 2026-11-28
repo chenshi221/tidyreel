@@ -7,6 +7,19 @@ import TidyreelFakes
 
 @Suite("Integrated AppStore, SizeScanner & HealthScanner Tests")
 struct AppIntegrationTests {
+    @Test("Duplicate cleanup verifies a surviving copy against a fresh listing")
+    func retainOriginalDuplicateVersion() async throws {
+        let fs = MemoryStorageBackend(initialSizes: ["/keeper": 1])
+        let entry = try #require(try await fs.list("/").first)
+        let keeper = DuplicateMediaCopy(path: entry.path, name: entry.name, fileSize: entry.size,
+                                        deleteIdentity: entry.deleteIdentity, qualityRank: 1)
+        #expect(try await HealthScannerActor.hasSurvivingCopy([keeper], backend: fs))
+        try await fs.removeScannedFile(entry.path, identity: entry.deleteIdentity)
+        #expect(try await !HealthScannerActor.hasSurvivingCopy([keeper], backend: fs))
+        try await fs.write(entry.path, bytes: Data([0]))
+        #expect(try await !HealthScannerActor.hasSurvivingCopy([keeper], backend: fs))
+    }
+
     @Test("End-to-end demo AppStore submits, recognizes, reviews, executes, and undoes cleanly")
     @MainActor
     func demoEndToEndWorkflow() async throws {
@@ -212,6 +225,44 @@ struct AppIntegrationTests {
         #expect(await scanner.childrenEntries(of: "/other").isEmpty)
         let other = await scanner.snapshot(for: "/other", naming: .vidhub)
         #expect(other.rootStats.total == 80)
+    }
+
+    @Test("A fresh completion marker cannot hide an expired or missing child listing")
+    func incompleteDescendantsRequireRefresh() async throws {
+        let db = try SQLiteDatabase.inMemory()
+        let folders = SQLiteFolderStatsStore(db: db)
+        let backend = MemoryStorageBackend(initialSizes: ["/old/A.mkv": 42, "/missing/B.mkv": 5])
+        let scanner = SizeScannerActor(connectionId: "ttl", backend: backend, historyStore: SQLiteHistoryStore(db: db),
+                                       cacheStore: folders)
+        try await folders.saveDir(connection: "ttl", dirPath: "/", entries: try await backend.list("/"), complete: true)
+        let old = RemoteEntry(path: "/old/A.mkv", name: "A.mkv", isDir: false, size: 9)
+        try await folders.saveDir(connection: "ttl", dirPath: "/old", entries: [old],
+                                  scannedAt: Date(timeIntervalSinceNow: -48 * 3600))
+        let partial = await scanner.snapshot(for: "/", naming: .vidhub)
+        #expect(!partial.isComplete)
+        await scanner.scan(root: "/", naming: .vidhub) { _ in }
+        let final = await scanner.snapshot(for: "/", naming: .vidhub)
+        #expect(final.isComplete)
+        #expect(final.rootStats.total == 47)
+    }
+
+    @Test("Health scan separates conflicting show IDs and keeps true duplicate episodes")
+    func duplicateEpisodeIdentity() async throws {
+        let alpha = "/TV/Alpha/Alpha.S01E01.{tmdb-100}"
+        let backend = MemoryStorageBackend(initialSizes: [
+            alpha + ".720p.mkv": 1, alpha + ".1080p.mkv": 2,
+            "/TV/Alpha/Alpha.S01E02.{tmdb-100}.mkv": 1,
+            "/TV/Alpha/Beta.S01E01.{tmdb-200}.mkv": 1,
+            "/TV/Disc/BDMV/STREAM/00001.m2ts": 1,
+        ])
+        try await backend.mkdirs("/TV/Empty")
+        let scanner = HealthScannerActor(backend: backend, connectionId: "tv", probeMedia: false)
+        let report = try await scanner.scan(rootDir: "/TV", fresh: true)
+        #expect(report.duplicates.count == 1)
+        let issue = try #require(report.duplicates.first)
+        #expect(issue.tmdbId == 100)
+        #expect(Set(issue.copies.map(\.path)) == Set([alpha + ".720p.mkv", alpha + ".1080p.mkv"]))
+        #expect(report.cleanupItems.filter { $0.kind == .emptyDir }.map(\.path) == ["/TV/Empty"])
     }
 
     @Test("Skipped children keep the map incomplete until a successful retry")

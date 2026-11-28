@@ -613,6 +613,30 @@ struct TmdbProviderTests {
         #expect(await a2.requests().isEmpty)
     }
 
+    @Test("Disk cache isolates endpoint, credential and legacy entries, including cached 404s")
+    func diskCacheScopes() async throws {
+        let cache = MapTmdbCache()
+        await cache.put("/movie/1?", json: #"{"origin":"legacy"}"#)
+        let transport = MockHTTPTransport { request in
+            let key = request.queryMap["api_key"]
+            if key == "absent" {
+                return MockHTTPTransport.makeResponse(for: request, status: 404, body: "{}")
+            }
+            return MockHTTPTransport.makeJSONResponse(for: request, jsonObject: ["origin": request.url?.host ?? ""])
+        }
+        func client(_ endpoint: String, _ key: String) -> TmdbClient {
+            TmdbClient(apiKey: key, baseUrl: endpoint, transport: transport, cache: cache, minIntervalMs: 0)
+        }
+        let a = "https://a.example/3"
+        let b = "https://b.example/3"
+        #expect(try await client(a, "first").get("/movie/1")["origin"] == .string("a.example"))
+        #expect(try await client(b, "first").get("/movie/1")["origin"] == .string("b.example"))
+        await #expect(throws: TmdbError.self) { try await client(a, "absent").get("/movie/1") }
+        await #expect(throws: TmdbError.self) { try await client(a, "absent").get("/movie/1") }
+        #expect(try await client(a + "/", "first").get("/movie/1")["origin"] == .string("a.example"))
+        #expect(await transport.requests().count == 3)
+    }
+
     @Test("429 is retried honoring Retry-After and gives up after maxRetries")
     func retry429AndGiveUp() async throws {
         let sleeper1 = RecordingSleeper()
@@ -991,10 +1015,10 @@ struct TmdbProviderTests {
         // Expired L2 sentinel (> 6h old) falls through to network
         let expiredCache = MapTmdbCache()
         let staleTs = Int64(Date().timeIntervalSince1970 - TmdbClient.negative404TTL - 60)
-        let key = TmdbClient.makeCacheKey(path: "/tv/1668/season/1", query: ["language": "zh-CN"])
+        let (p3, t3) = makeProvider(cache: expiredCache)
+        let key = p3.client.makeCacheKey(path: "/tv/1668/season/1", query: ["language": "zh-CN"])
         await expiredCache.put(key, json: #"{"__tidyreel_negative_404":true,"ts":\#(staleTs)}"#)
 
-        let (p3, t3) = makeProvider(cache: expiredCache)
         let eps = try await p3.season(1668, season: 1)
         #expect(eps.count == 2)
         #expect(await t3.count(path: "/3/tv/1668/season/1") == 1)
@@ -1002,8 +1026,9 @@ struct TmdbProviderTests {
 
     @Test("TmdbClient percent-encodes cache keys and bounds L1 entries")
     func cacheKeyEncodingAndBoundedL1() async throws {
-        let k1 = TmdbClient.makeCacheKey(path: "/search/movie", query: ["a": "1&b=2"])
-        let k2 = TmdbClient.makeCacheKey(path: "/search/movie", query: ["a": "1", "b": "2"])
+        let client = TmdbClient(apiKey: "k")
+        let k1 = client.makeCacheKey(path: "/search/movie", query: ["a": "1&b=2"])
+        let k2 = client.makeCacheKey(path: "/search/movie", query: ["a": "1", "b": "2"])
         #expect(k1 != k2)
         #expect(k1.contains("%26"))
         #expect(k1.contains("%3D"))

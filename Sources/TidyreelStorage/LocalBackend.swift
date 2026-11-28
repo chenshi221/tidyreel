@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 import TidyreelModels
@@ -304,7 +305,8 @@ public final class LocalBackend: RangeReadableBackend, Sendable {
                             name: name,
                             isDir: isDir,
                             size: size,
-                            modified: modified
+                            modified: modified,
+                            deleteIdentity: lstatInfo.flatMap(Self.fileIdentity)
                         )
                     )
                 }
@@ -501,6 +503,64 @@ public final class LocalBackend: RangeReadableBackend, Sendable {
             }
             for name in names {
                 try self.relocate(from: posixJoin(srcDir, name), to: posixJoin(dstDir, name))
+            }
+        }
+    }
+
+    private static func fileIdentity(_ st: Darwin.stat) -> String? {
+        guard st.st_mode & S_IFMT == S_IFREG, st.st_ino != 0,
+              st.st_birthtimespec.tv_sec != 0 || st.st_birthtimespec.tv_nsec != 0 else { return nil }
+        // Birth time distinguishes reused inodes; length and mtime detect edits in place.
+        return "\(st.st_dev):\(st.st_ino):\(st.st_birthtimespec.tv_sec):\(st.st_birthtimespec.tv_nsec):\(st.st_size):\(st.st_mtimespec.tv_sec):\(st.st_mtimespec.tv_nsec)"
+    }
+
+    public func removeScannedFile(_ path: String, identity: String?) async throws {
+        guard let identity else { throw StorageError(.other, "缺少文件标识，已保留：\(path)") }
+        let name = baseOf(path)
+        try validateChildName(name)
+        let parent = try resolveRealPath(dirOf(path))
+        let key = Data("\(name)\u{0}\(identity)".utf8)
+        let digest = SHA256.hash(data: key).map { String(format: "%02x", $0) }.joined()
+        let staged = ".tidyreel-delete-\(digest)"
+        try await LocalIOExecutor.shared.run {
+            let fd = Darwin.open(parent, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+            if fd < 0 {
+                if errno == ENOENT { return }
+                try self.posixThrow(errno, virtualPath: dirOf(path), op: "open")
+            }
+            defer { Darwin.close(fd) }
+
+            func info(_ item: String) throws -> Darwin.stat? {
+                var st = Darwin.stat()
+                if fstatat(fd, item, &st, AT_SYMLINK_NOFOLLOW) == 0 { return st }
+                if errno == ENOENT { return nil }
+                try self.posixThrow(errno, virtualPath: path, op: "fstatat")
+            }
+            let stagedByThisCall = try info(staged) == nil
+            if stagedByThisCall {
+                guard let original = try info(name) else { return }
+                guard Self.fileIdentity(original) == identity else {
+                    throw StorageError(.other, "文件已变更，已保留：\(path)")
+                }
+                if renameatx_np(fd, name, fd, staged, UInt32(RENAME_EXCL)) != 0 {
+                    try self.posixThrow(errno, virtualPath: path, op: "renameatx_np")
+                }
+            }
+            // Recheck after isolation. A replacement arriving at the public name is untouched.
+            guard let isolated = try info(staged) else { return }
+            guard Self.fileIdentity(isolated) == identity else {
+                if !stagedByThisCall || renameatx_np(fd, staged, fd, name, UInt32(RENAME_EXCL)) != 0 {
+                    throw StorageError(.other, "文件已变更，请检查暂存项：\(joinPath(dirOf(path), staged))")
+                }
+                throw StorageError(.other, "文件已变更，已保留：\(path)")
+            }
+            // Without AT_REMOVEDIR, unlinkat can never recursively remove a directory.
+            if unlinkat(fd, staged, 0) != 0 && errno != ENOENT {
+                let error = errno
+                if renameatx_np(fd, staged, fd, name, UInt32(RENAME_EXCL)) == 0 {
+                    try self.posixThrow(error, virtualPath: path, op: "unlinkat")
+                }
+                try self.posixThrow(error, virtualPath: joinPath(dirOf(path), staged), op: "unlinkat")
             }
         }
     }

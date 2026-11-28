@@ -245,6 +245,7 @@ public actor SizeScannerActor {
             if path == "/" { break }
             path = dirOf(path)
         }
+        var incompleteDirs: Set<String> = []
         for (dir, rec) in rows {
             let norm = normalizeDir(dir)
             if invalidatedDirs.contains(norm) { continue }
@@ -254,18 +255,33 @@ public actor SizeScannerActor {
             let isStale = cacheTTL > 0 && now.timeIntervalSince(rec.scannedAt) > cacheTTL
             if isStale {
                 staleDirs.insert(norm)
+                incompleteDirs.insert(norm)
             } else if rec.complete && !invalidatedAncestors.contains(norm) {
                 completeDirs.insert(norm)
             }
             for e in rec.entries {
+                if e.isDir && rows[normalizeDir(e.path)] == nil && listings[normalizeDir(e.path)] == nil {
+                    incompleteDirs.insert(norm)
+                }
                 if (e.isDir || parser.classify(e.name) == .video) && !checkedOrganized.contains(e.path) {
                     toCheck.append(e.path)
                 }
             }
         }
+        // A root completion marker can be newer than reused child listings.
+        // Remove all affected ancestors after every row has been considered.
+        var incompleteAncestors: Set<String> = []
+        for dir in incompleteDirs {
+            var ancestor = dir
+            while incompleteAncestors.insert(ancestor).inserted && ancestor != "/" {
+                ancestor = dirOf(ancestor)
+            }
+        }
+        completeDirs.subtract(incompleteAncestors)
         await checkOrganizedBatches(toCheck)
         guard releaseGeneration == startReleaseGen else { return }
         if rows[root] != nil, !invalidatedDirs.contains(root), !invalidatedAncestors.contains(root),
+           !incompleteAncestors.contains(root),
            !staleDirs.contains(where: { isWithinDir($0, root: root) }),
            ancestors.contains(where: { dir, scannedAt in
                !invalidatedAncestors.contains(dir) && !invalidatedDirs.contains(dir)

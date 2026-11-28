@@ -444,6 +444,7 @@ public final class DefaultExecutor: Executor, Sendable {
                 cancelFlag: cancelFlag,
                 continuation: continuation,
                 resuming: true,
+                cyclePhases: Dictionary(uniqueKeysWithValues: records.compactMap { r in r.cyclePhase.map { (r.op.id, $0) } }),
                 initialFailed: failedOps,
                 landed: landed
             )
@@ -523,7 +524,8 @@ public final class DefaultExecutor: Executor, Sendable {
             group: op.group,
             selected: op.selected,
             warning: op.warning,
-            overwrite: op.overwrite
+            overwrite: op.overwrite,
+            deleteIdentity: op.deleteIdentity
         )
     }
 
@@ -561,7 +563,7 @@ public final class DefaultExecutor: Executor, Sendable {
         return ops.filter { $0.kind == .relocate && $0.src != $0.dst && sources.contains($0.dst) }
     }
 
-    private func findParked(be: any StorageBackend, op: RenameOp) async throws -> ParkedAt {
+    internal func findParked(be: any StorageBackend, op: RenameOp) async throws -> ParkedAt {
         let srcDir = dirOf(op.src)
         let dstDir = dirOf(op.dst)
         let tmp = Self.tmpName(op.id)
@@ -581,6 +583,7 @@ public final class DefaultExecutor: Executor, Sendable {
         cancelFlag: CancellationFlag,
         continuation: AsyncThrowingStream<ExecProgress, any Error>.Continuation,
         resuming: Bool,
+        cyclePhases: [OpId: RelocationCyclePhase] = [:],
         initialFailed: [RenameOp],
         landed: Set<String>
     ) async throws {
@@ -688,6 +691,14 @@ public final class DefaultExecutor: Executor, Sendable {
 
             for (rawGroup, width) in groups where !rawGroup.isEmpty {
                 var group = rawGroup
+                if phase == .files && group.contains(where: { $0.kind == .relocate }) {
+                    group = try await performCycles(
+                        in: group, batch: batch, backend: be, phases: cyclePhases,
+                        undo: false, resuming: resuming, cancelled: { cancelFlag.isCancelled },
+                        blocked: { state.blocker(of: $0) != nil },
+                        landed: { try await record($0, .done, nil) }
+                    )
+                }
                 if phase == .files && !resuming && be.supportsServerBatching {
                     group = try await batched(
                         group: group,
@@ -829,8 +840,7 @@ public final class DefaultExecutor: Executor, Sendable {
             try await ensureDir(be, op.dst, ensuredDirs: ensuredDirs)
 
         case .delete:
-            if resuming, !(try await be.exists(op.src)) { return }
-            try await be.remove(dir: dirOf(op.src), names: [baseOf(op.src)])
+            try await be.removeScannedFile(op.src, identity: op.deleteIdentity)
 
         case .write:
             if op.overwrite {

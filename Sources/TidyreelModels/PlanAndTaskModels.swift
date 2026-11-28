@@ -218,19 +218,22 @@ public struct RemoteEntry: Equatable, Hashable, Sendable, Identifiable {
     public var isDir: Bool
     public var size: Int64
     public var modified: Date?
+    public var deleteIdentity: String?
 
     public init(
         path: String,
         name: String,
         isDir: Bool,
         size: Int64 = 0,
-        modified: Date? = nil
+        modified: Date? = nil,
+        deleteIdentity: String? = nil
     ) {
         self.path = path
         self.name = name
         self.isDir = isDir
         self.size = size
         self.modified = modified
+        self.deleteIdentity = deleteIdentity
     }
 }
 
@@ -242,6 +245,7 @@ public struct ScanFile: Equatable, Hashable, Sendable, Identifiable {
     public var role: FileRole
     public var parsed: ParsedName?
     public var isDiscDir: Bool
+    public var deleteIdentity: String?
 
     public init(
         path: String,
@@ -249,7 +253,8 @@ public struct ScanFile: Equatable, Hashable, Sendable, Identifiable {
         size: Int64,
         role: FileRole,
         parsed: ParsedName? = nil,
-        isDiscDir: Bool = false
+        isDiscDir: Bool = false,
+        deleteIdentity: String? = nil
     ) {
         self.path = path
         self.name = name
@@ -257,6 +262,7 @@ public struct ScanFile: Equatable, Hashable, Sendable, Identifiable {
         self.role = role
         self.parsed = parsed
         self.isDiscDir = isDiscDir
+        self.deleteIdentity = deleteIdentity
     }
 }
 
@@ -435,6 +441,7 @@ public struct RenameOp: Equatable, Hashable, Sendable, Identifiable {
     public var selected: Bool
     public var warning: String?
     public var overwrite: Bool
+    public var deleteIdentity: String?
 
     public init(
         id: OpId,
@@ -445,7 +452,8 @@ public struct RenameOp: Equatable, Hashable, Sendable, Identifiable {
         group: GroupId? = nil,
         selected: Bool = true,
         warning: String? = nil,
-        overwrite: Bool = false
+        overwrite: Bool = false,
+        deleteIdentity: String? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -456,6 +464,7 @@ public struct RenameOp: Equatable, Hashable, Sendable, Identifiable {
         self.selected = selected
         self.warning = warning
         self.overwrite = overwrite
+        self.deleteIdentity = deleteIdentity
     }
 }
 
@@ -541,11 +550,20 @@ public struct ExecProgress: Equatable, Sendable {
     }
 }
 
+public enum RelocationCyclePhase: Int, Sendable {
+    case parking = 1
+    case landing
+    case undoParking
+    case undoLanding
+    case planned
+}
+
 public struct HistoryRecord: Equatable, Sendable, Identifiable {
     public var id: String { "\(batch.value):\(op.id.value)" }
     public var batch: BatchId
     public var op: RenameOp
     public var status: OpStatus
+    public var cyclePhase: RelocationCyclePhase?
     public var writtenDigest: String? = nil
     public var error: String?
     public var updatedAt: Date
@@ -554,6 +572,7 @@ public struct HistoryRecord: Equatable, Sendable, Identifiable {
         batch: BatchId,
         op: RenameOp,
         status: OpStatus,
+        cyclePhase: RelocationCyclePhase? = nil,
         writtenDigest: String? = nil,
         error: String? = nil,
         updatedAt: Date
@@ -561,9 +580,21 @@ public struct HistoryRecord: Equatable, Sendable, Identifiable {
         self.batch = batch
         self.op = op
         self.status = status
+        self.cyclePhase = cyclePhase
         self.writtenDigest = writtenDigest
         self.error = error
         self.updatedAt = updatedAt
+    }
+}
+
+/// Completed operations in forward journal order, plus folder moves needed to locate their current paths.
+public struct UndoSnapshot: Sendable {
+    public let selected: [HistoryRecord]
+    public let folderMoves: [RenameOp]
+
+    public init(selected: [HistoryRecord], folderMoves: [RenameOp]) {
+        self.selected = selected
+        self.folderMoves = folderMoves
     }
 }
 
@@ -702,12 +733,12 @@ public struct TaskReview: Equatable, Sendable {
 public struct StoredTaskReview: Equatable, Sendable {
     public var scan: ScanResult
     public var decisions: [GroupId: GroupDecision]
-    public var unassignedDeletes: Set<String>
+    public var unassignedDeletes: [String: Bool]
 
     public init(
         scan: ScanResult,
         decisions: [GroupId: GroupDecision] = [:],
-        unassignedDeletes: Set<String> = []
+        unassignedDeletes: [String: Bool] = [:]
     ) {
         self.scan = scan
         self.decisions = decisions
@@ -719,13 +750,13 @@ public struct StoredTask: Equatable, Sendable {
     public var summary: TaskSummary
     public var scan: ScanResult?
     public var decisions: [GroupId: GroupDecision]
-    public var unassignedDeletes: Set<String>
+    public var unassignedDeletes: [String: Bool]
 
     public init(
         summary: TaskSummary,
         scan: ScanResult? = nil,
         decisions: [GroupId: GroupDecision] = [:],
-        unassignedDeletes: Set<String> = []
+        unassignedDeletes: [String: Bool] = [:]
     ) {
         self.summary = summary
         self.scan = scan

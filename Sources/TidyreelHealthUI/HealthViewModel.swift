@@ -8,7 +8,10 @@ import TidyreelServices
 
 struct DuplicateDeletePayload: Identifiable, Equatable, Sendable {
     let id = UUID()
+    let connection: ConnectionId
+    let scannedAt: Date
     let copies: [DuplicateMediaCopy]
+    let keepers: [DuplicateMediaCopy]
 
     var totalBytes: Int64 {
         copies.reduce(0) { $0 + max(0, $1.fileSize) }
@@ -17,6 +20,8 @@ struct DuplicateDeletePayload: Identifiable, Equatable, Sendable {
 
 struct CleanupConfirmPayload: Identifiable, Equatable, Sendable {
     let id = UUID()
+    let connection: ConnectionId
+    let scannedAt: Date
     let items: [CleanupIssue]
 
     var junkFiles: [CleanupIssue] {
@@ -191,6 +196,10 @@ public final class HealthSessionController {
     }
 
     private func applyReport(_ nextReport: HealthReport?) {
+        if report?.connection != nextReport?.connection || report?.scannedAt != nextReport?.scannedAt {
+            pendingCleanupDelete = nil
+            pendingDuplicateDelete = nil
+        }
         report = nextReport
         guard let nextReport else {
             sortedDuplicateIssues = []
@@ -386,22 +395,27 @@ public final class HealthSessionController {
 
     func requestDeleteIssueRedundant(_ issue: DuplicateMediaIssue) {
         let copies = issue.redundantCopies.filter { $0.path != issue.recommendedKeepPath && !$0.isDiscDir }
-        requestDeleteCopies(copies)
+        prepareDuplicateDeletion(issue: issue, copies: copies)
     }
 
     func requestDeleteSingleCopy(_ copy: DuplicateMediaCopy) {
-        guard !copy.isDiscDir else { return }
-        requestDeleteCopies([copy])
+        guard let issue = report?.duplicates.first(where: { $0.copies.contains(copy) }), !copy.isDiscDir else { return }
+        prepareDuplicateDeletion(issue: issue, copies: [copy])
     }
 
-    func requestDeleteCopies(_ copies: [DuplicateMediaCopy]) {
-        let deletable = copies.filter { !$0.isDiscDir }
-        guard !deletable.isEmpty, !isBusyAction else { return }
-        pendingDuplicateDelete = DuplicateDeletePayload(copies: deletable)
+    private func prepareDuplicateDeletion(issue: DuplicateMediaIssue, copies: [DuplicateMediaCopy]) {
+        guard let report, report.duplicates.contains(issue), !copies.isEmpty, !isBusyAction else { return }
+        let selected = Set(copies.map(\.path))
+        pendingDuplicateDelete = DuplicateDeletePayload(
+            connection: report.connection, scannedAt: report.scannedAt, copies: copies,
+            keepers: issue.copies.filter { !selected.contains($0.path) }
+        )
     }
 
     func confirmDeleteDuplicates(_ payload: DuplicateDeletePayload, store: AppStore) async {
-        guard let currentReport = report, !payload.copies.isEmpty, !isBusyAction else { return }
+        guard let currentReport = report, pendingDuplicateDelete?.id == payload.id,
+              currentReport.connection == payload.connection, currentReport.scannedAt == payload.scannedAt,
+              !payload.copies.isEmpty, !isBusyAction else { return }
         let reportSnapshot = currentReport
         pendingDuplicateDelete = nil
         isBusyAction = true
@@ -413,24 +427,14 @@ public final class HealthSessionController {
 
         do {
             let backend = try store.backend(for: reportSnapshot.connection)
-            var orderedDirs: [String] = []
-            var copiesByDir: [String: [DuplicateMediaCopy]] = [:]
             for copy in payload.copies where !copy.isDiscDir && !baseOf(copy.path).isEmpty {
-                let dir = normalizeDir(dirOf(copy.path))
-                if copiesByDir[dir] == nil { orderedDirs.append(dir) }
-                copiesByDir[dir, default: []].append(copy)
-            }
-
-            for dir in orderedDirs {
-                guard let dirCopies = copiesByDir[dir], !dirCopies.isEmpty else { continue }
-                let names = dirCopies.map { baseOf($0.path) }
-                try await backend.remove(dir: dir, names: names)
-                affectedDirs.insert(dir)
-                for c in dirCopies {
-                    deletedPaths.insert(c.path)
-                    deletedPaths.insert(joinPath(dir, baseOf(c.path)))
-                    removedCount += 1
+                guard try await HealthScannerActor.hasSurvivingCopy(payload.keepers, backend: backend) else {
+                    throw StorageError(.other, l10n.tr("无法确认仍有保留副本，已停止删除", "Could not verify a remaining copy. Deletion stopped."))
                 }
+                affectedDirs.insert(normalizeDir(dirOf(copy.path)))
+                try await backend.removeScannedFile(copy.path, identity: copy.deleteIdentity)
+                deletedPaths.insert(copy.path)
+                removedCount += 1
             }
 
             if !affectedDirs.isEmpty {
@@ -578,11 +582,13 @@ public final class HealthSessionController {
         guard let report, !selectedCleanupPaths.isEmpty, !isBusyAction else { return }
         let chosen = report.cleanupItems.filter { selectedCleanupPaths.contains($0.path) }
         guard !chosen.isEmpty else { return }
-        pendingCleanupDelete = CleanupConfirmPayload(items: chosen)
+        pendingCleanupDelete = CleanupConfirmPayload(connection: report.connection, scannedAt: report.scannedAt, items: chosen)
     }
 
     func confirmCleanup(_ payload: CleanupConfirmPayload, store: AppStore) async {
-        guard let currentReport = report, !payload.items.isEmpty, !isBusyAction else { return }
+        guard let currentReport = report, pendingCleanupDelete?.id == payload.id,
+              currentReport.connection == payload.connection, currentReport.scannedAt == payload.scannedAt,
+              !payload.items.isEmpty, !isBusyAction else { return }
         let reportSnapshot = currentReport
         pendingCleanupDelete = nil
         isBusyAction = true
@@ -604,24 +610,11 @@ public final class HealthSessionController {
         do {
             let backend = try store.backend(for: reportSnapshot.connection)
 
-            // 1. Delete junk files first, grouped by parent directory
-            var orderedParentDirs: [String] = []
-            var filesByDir: [String: [CleanupIssue]] = [:]
             for file in files {
-                let dir = normalizeDir(dirOf(file.path))
-                if filesByDir[dir] == nil { orderedParentDirs.append(dir) }
-                filesByDir[dir, default: []].append(file)
-            }
-
-            for dir in orderedParentDirs {
-                guard let dirFiles = filesByDir[dir], !dirFiles.isEmpty else { continue }
-                try await backend.remove(dir: dir, names: dirFiles.map(\.name))
-                mutatedDirs.insert(dir)
-                for f in dirFiles {
-                    deletedFiles.insert(f.path)
-                    deletedFiles.insert(joinPath(dir, f.name))
-                    filesRemovedCount += 1
-                }
+                mutatedDirs.insert(normalizeDir(dirOf(file.path)))
+                try await backend.removeScannedFile(file.path, identity: file.deleteIdentity)
+                deletedFiles.insert(file.path)
+                filesRemovedCount += 1
             }
 
             // 2. Delete empty directories deepest-first after live re-verification
@@ -631,9 +624,9 @@ public final class HealthSessionController {
                 if protectedRoots.contains(normDir) { continue }
                 do {
                     let parentDir = normalizeDir(dirOf(normDir))
+                    mutatedDirs.insert(parentDir)
                     guard try await backend.removeDirectoryIfEmpty(normDir, removingSystemFiles: true) else { continue }
                     mutatedDirs.insert(normDir)
-                    mutatedDirs.insert(parentDir)
                     deletedDirs.insert(dirItem.path)
                     deletedDirs.insert(normDir)
                     dirsRemovedCount += 1

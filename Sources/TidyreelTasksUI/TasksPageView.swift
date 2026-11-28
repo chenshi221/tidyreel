@@ -17,7 +17,8 @@ private struct DeleteConfirmContext: Identifiable {
 private struct PermanentDeleteContext: Identifiable {
     let id = UUID()
     let taskId: TaskId
-    let deleteCount: Int
+    let paths: Set<String>
+    var deleteCount: Int { paths.count }
 }
 
 public struct TasksPageView: View {
@@ -150,7 +151,7 @@ public struct TasksPageView: View {
                 confirmLabel: l10n.delete,
                 isDestructive: true
             ) {
-                executeRunConfident(ctx.taskId)
+                executeRunConfident(ctx)
             }
             .environment(\.palette, palette)
             .environment(\.l10n, l10n)
@@ -250,11 +251,11 @@ public struct TasksPageView: View {
                 let review = try await store.taskManager.review(id)
                 let deletes = review.preview.ops.filter {
                     $0.selected && $0.kind == .delete && $0.warning == nil
-                }.count
-                if deletes > 0 {
+                }.map(\.src)
+                if !deletes.isEmpty {
                     busyTracker.release(id)
                     shouldRelease = false
-                    permanentDeleteContext = PermanentDeleteContext(taskId: id, deleteCount: deletes)
+                    permanentDeleteContext = PermanentDeleteContext(taskId: id, paths: Set(deletes))
                     return
                 }
                 try await store.taskManager.run(id, onlyConfident: true)
@@ -267,12 +268,13 @@ public struct TasksPageView: View {
         }
     }
 
-    private func executeRunConfident(_ id: TaskId) {
+    private func executeRunConfident(_ context: PermanentDeleteContext) {
+        let id = context.taskId
         guard busyTracker.tryAcquire(id) else { return }
         Task { @MainActor in
             defer { busyTracker.release(id) }
             do {
-                try await store.taskManager.run(id, onlyConfident: true)
+                try await store.taskManager.run(id, onlyConfident: true, confirmedDeletePaths: context.paths)
                 store.showToast(
                     l10n.tr("已开始整理有把握的项目", "Started organizing confident matches")
                 )

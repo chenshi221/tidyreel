@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import TidyreelModels
 
@@ -23,6 +24,7 @@ public actor TmdbClient {
     }
 
     private let transport: any HTTPTransport
+    private let cacheNamespace: String
     private let baseUrl: String
     private let apiKey: String
     private let isBearer: Bool
@@ -67,6 +69,9 @@ public actor TmdbClient {
             trimmedBase.removeLast()
         }
         let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Older keys carry no provider provenance and must never be used as a fallback.
+        let scope = "\(trimmedBase.utf8.count):\(trimmedBase)\(trimmedKey)"
+        self.cacheNamespace = "tmdb:v2:" + Data(SHA256.hash(data: Data(scope.utf8))).base64EncodedString()
         self.baseUrl = trimmedBase
         self.apiKey = trimmedKey
         self.isBearer = trimmedKey.hasPrefix("eyJ") || trimmedKey.count > 40
@@ -105,7 +110,7 @@ public actor TmdbClient {
     /// GET `path` with `query`; identical calls are served from memory, then `cacheStore`.
     /// `path` should have any dynamic path segments already percent-encoded.
     public func get(_ path: String, query: [String: String] = [:]) async throws -> [String: JSONValue] {
-        let key = Self.makeCacheKey(path: path, query: query)
+        let key = makeCacheKey(path: path, query: query)
         if let hit = memoryCache.get(key) {
             switch hit {
             case .positive(let data):
@@ -230,7 +235,7 @@ public actor TmdbClient {
         )
     }
 
-    static func makeCacheKey(path: String, query: [String: String]) -> String {
+    nonisolated func makeCacheKey(path: String, query: [String: String]) -> String {
         let sorted = query
             .sorted { $0.key < $1.key }
             .map { pair -> String in
@@ -239,7 +244,7 @@ public actor TmdbClient {
                 return "\(k)=\(v)"
             }
             .joined(separator: "&")
-        return "\(path)?\(sorted)"
+        return "\(cacheNamespace):\(path)?\(sorted)"
     }
 
     private func currentTime() -> Date {

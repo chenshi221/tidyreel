@@ -65,6 +65,7 @@ public struct DuplicateMediaCopy: Equatable, Hashable, Sendable, Identifiable {
     public var parsedResolution: String?
     public var parsedExtraInfo: String?
     public var isDiscDir: Bool
+    public var deleteIdentity: String?
     public var qualityRank: Int
 
     public init(
@@ -75,6 +76,7 @@ public struct DuplicateMediaCopy: Equatable, Hashable, Sendable, Identifiable {
         parsedResolution: String? = nil,
         parsedExtraInfo: String? = nil,
         isDiscDir: Bool = false,
+        deleteIdentity: String? = nil,
         qualityRank: Int
     ) {
         self.path = path
@@ -84,6 +86,7 @@ public struct DuplicateMediaCopy: Equatable, Hashable, Sendable, Identifiable {
         self.parsedResolution = parsedResolution
         self.parsedExtraInfo = parsedExtraInfo
         self.isDiscDir = isDiscDir
+        self.deleteIdentity = deleteIdentity
         self.qualityRank = qualityRank
     }
 
@@ -213,8 +216,10 @@ public struct CleanupIssue: Equatable, Hashable, Sendable, Identifiable {
     public var kind: CleanupKind
     public var size: Int64
     public var reason: String
+    public var deleteIdentity: String?
 
-    public init(path: String, name: String, kind: CleanupKind, size: Int64 = 0, reason: String) {
+    public init(path: String, name: String, kind: CleanupKind, size: Int64 = 0, reason: String, deleteIdentity: String? = nil) {
+        self.deleteIdentity = deleteIdentity
         self.path = path
         self.name = name
         self.kind = kind

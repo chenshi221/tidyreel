@@ -405,6 +405,11 @@ public actor CachedBackend: RangeReadableBackend {
         try await inner.move(srcDir: srcDir, dstDir: dstDir, names: names)
     }
 
+    public func removeScannedFile(_ path: String, identity: String?) async throws {
+        defer { invalidate(path) }
+        try await inner.removeScannedFile(path, identity: identity)
+    }
+
     public func removeDirectoryIfEmpty(_ dir: String, removingSystemFiles: Bool) async throws -> Bool {
         let norm = Self.normKey(dir)
         defer { invalidateBatch(dirsOnly: [posixDirname(norm)], subtrees: [norm]) }

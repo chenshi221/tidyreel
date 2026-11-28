@@ -112,6 +112,7 @@ public struct AppL10n: Equatable, Sendable {
 }
 
 private let exactCoreMessages: [String: String] = [
+    "删除计划已变更，请重新核对并确认": "The files selected for deletion have changed. Review and confirm them again.",
     "正在等待开始": "Waiting to start",
     "正在导入文件": "Importing files",
     "正在识别": "Matching metadata",

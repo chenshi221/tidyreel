@@ -434,6 +434,30 @@ struct AlistAndWebDAVTests {
         #expect(entries[1].isDir == false && entries[1].size == 99)
     }
 
+    @Test("WebDAV deletes only with the strong ETag captured by a successful PROPFIND")
+    func deleteWithScannedETag() async throws {
+        let xml = """
+        <d:multistatus xmlns:d="DAV:"><d:response><d:href>/dav/ad.txt</d:href><d:propstat>
+        <d:prop><d:resourcetype/><d:getetag>"original"</d:getetag></d:prop>
+        <d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>
+        """
+        let transport = ClosureHTTPTransport { req, _ in
+            if req.httpMethod == "PROPFIND" {
+                return (Data(xml.utf8), makeHTTPResponse(url: req.url!, status: 207))
+            }
+            #expect(req.httpMethod == "DELETE")
+            #expect(req.value(forHTTPHeaderField: "If-Match") == "\"original\"")
+            return (Data(), makeHTTPResponse(url: req.url!, status: 412))
+        }
+        let backend = WebDAVBackend(config: webdavCfg(), credentials: Credentials(), transport: transport)
+        let identity = try #require(try await backend.list("/").first?.deleteIdentity)
+        #expect(identity == "\"original\"")
+        for invalid in [nil, "*", "W/\"weak\"", "\"a\", \"b\""] as [String?] {
+            await expectStorageError(.other) { try await backend.removeScannedFile("/ad.txt", identity: invalid) }
+        }
+        await expectStorageError(.other) { try await backend.removeScannedFile("/ad.txt", identity: identity) }
+    }
+
     @Test("WebDAVBackend readRange, cross-origin redirect auth stripping, 307 PUT redirect, and traversal checks")
     func webdavReadRangeRedirectsAndValidation() async throws {
         final class DavRangeBox: @unchecked Sendable {
